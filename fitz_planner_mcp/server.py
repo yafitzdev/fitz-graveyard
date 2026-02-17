@@ -34,7 +34,7 @@ mcp = FastMCP("fitz-planner-mcp")
 
 # Load configuration
 _config = load_config()
-logger.info(f"Loaded configuration: model={_config.model}")
+logger.info(f"Loaded configuration: model={_config.ollama.model}")
 
 # Lifecycle manager (will be initialized by __main__.py)
 _lifecycle: ServerLifecycle | None = None

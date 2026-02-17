@@ -93,7 +93,7 @@ async def create_plan(
         job_id=job_id,
         status="queued",
         eta="Not yet implemented - planning engine coming in Phase 4",
-        model=config.model,
+        model=config.ollama.model,
     )
 
     return response.model_dump()
