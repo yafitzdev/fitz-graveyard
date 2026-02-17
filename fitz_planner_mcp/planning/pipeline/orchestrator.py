@@ -8,6 +8,7 @@ and crash recovery.
 
 import logging
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -98,6 +99,7 @@ class PlanningPipeline:
         job_id: str,
         job_description: str,
         resume: bool = False,
+        progress_callback: Callable[[float, str], None] | None = None,
     ) -> PipelineResult:
         """
         Execute the planning pipeline.
@@ -107,6 +109,7 @@ class PlanningPipeline:
             job_id: Job identifier (for checkpointing)
             job_description: User's planning request
             resume: If True, resume from checkpoint; if False, start fresh
+            progress_callback: Optional callback(progress, phase) for updates
 
         Returns:
             PipelineResult with all stage outputs or error
@@ -142,6 +145,11 @@ class PlanningPipeline:
         for stage in remaining_stages:
             logger.info(f"Executing stage: {stage.name}")
 
+            # Notify progress (start of stage)
+            if progress_callback:
+                progress = stage.progress_range[0]
+                progress_callback(progress, stage.name)
+
             # Run stage
             result = await stage.execute(client, job_description, prior_outputs)
 
@@ -161,6 +169,11 @@ class PlanningPipeline:
 
             # Add to prior outputs for next stage
             prior_outputs[stage.name] = result.output
+
+            # Notify progress (end of stage)
+            if progress_callback:
+                progress = stage.progress_range[1]
+                progress_callback(progress, f"{stage.name}_complete")
 
             logger.info(f"Stage '{stage.name}' completed successfully")
 
