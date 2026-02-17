@@ -9,8 +9,8 @@ import logging
 
 from fastmcp.exceptions import ToolError
 
-from fitz_planner_mcp.models.jobs import InMemoryJobStore
 from fitz_planner_mcp.models.responses import PlanContentResponse
+from fitz_planner_mcp.models.store import JobStore
 from fitz_planner_mcp.validation.sanitize import sanitize_job_id
 
 logger = logging.getLogger(__name__)
@@ -18,8 +18,8 @@ logger = logging.getLogger(__name__)
 VALID_FORMATS = {"full", "summary", "roadmap_only"}
 
 
-def get_plan(
-    job_id: str, format: str, store: InMemoryJobStore
+async def get_plan(
+    job_id: str, format: str, store: JobStore
 ) -> dict:
     """
     Retrieve a completed plan.
@@ -52,7 +52,7 @@ def get_plan(
         raise ToolError(f"Invalid job ID: {e}")
 
     # Look up job
-    record = store.get(sanitized_id)
+    record = await store.get(sanitized_id)
     if not record:
         raise ToolError(
             f"Job '{sanitized_id}' not found. Use list_plans to see available jobs."

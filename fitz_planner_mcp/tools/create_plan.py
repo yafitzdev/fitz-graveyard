@@ -12,23 +12,23 @@ from fastmcp.exceptions import ToolError
 
 from fitz_planner_mcp.config.schema import FitzPlannerConfig
 from fitz_planner_mcp.models.jobs import (
-    InMemoryJobStore,
     JobRecord,
     JobState,
     generate_job_id,
 )
 from fitz_planner_mcp.models.responses import CreatePlanResponse
+from fitz_planner_mcp.models.store import JobStore
 from fitz_planner_mcp.validation.sanitize import sanitize_description
 
 logger = logging.getLogger(__name__)
 
 
-def create_plan(
+async def create_plan(
     description: str,
     timeline: str | None,
     context: str | None,
     integration_points: list[str] | None,
-    store: InMemoryJobStore,
+    store: JobStore,
     config: FitzPlannerConfig,
 ) -> dict:
     """
@@ -78,7 +78,7 @@ def create_plan(
 
     # Add to store
     try:
-        store.add(record)
+        await store.add(record)
     except ValueError as e:
         # This should never happen with UUIDs, but handle gracefully
         logger.error(f"Job ID collision: {e}")

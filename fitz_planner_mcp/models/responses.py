@@ -25,7 +25,7 @@ class PlanStatusResponse(BaseModel):
     """Response from check_status tool."""
 
     job_id: str = Field(description="Job identifier")
-    state: str = Field(description="Current job state (queued/running/complete/failed)")
+    state: str = Field(description="Current job state (queued/running/complete/failed/interrupted)")
     progress: float = Field(
         ge=0.0, le=1.0, description="Completion progress as fraction (0.0-1.0)"
     )
@@ -35,6 +35,9 @@ class PlanStatusResponse(BaseModel):
     eta: str | None = Field(default=None, description="Estimated time remaining")
     message: str | None = Field(
         default=None, description="Human-readable status message"
+    )
+    error: str | None = Field(
+        default=None, description="Error message if job failed or interrupted"
     )
 
 
@@ -71,3 +74,14 @@ class ListPlansResponse(BaseModel):
         default_factory=list, description="List of all plans"
     )
     total: int = Field(description="Total number of plans")
+
+
+class RetryJobResponse(BaseModel):
+    """Response from retry_job tool."""
+
+    job_id: str = Field(description="Job identifier that was retried")
+    status: str = Field(description="New status after retry (always 're-queued')")
+    message: str = Field(
+        description="Human-readable confirmation message",
+        default="Job re-queued for processing. Use check_status to monitor.",
+    )

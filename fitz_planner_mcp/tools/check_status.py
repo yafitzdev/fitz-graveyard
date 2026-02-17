@@ -9,14 +9,14 @@ import logging
 
 from fastmcp.exceptions import ToolError
 
-from fitz_planner_mcp.models.jobs import InMemoryJobStore
 from fitz_planner_mcp.models.responses import PlanStatusResponse
+from fitz_planner_mcp.models.store import JobStore
 from fitz_planner_mcp.validation.sanitize import sanitize_job_id
 
 logger = logging.getLogger(__name__)
 
 
-def check_status(job_id: str, store: InMemoryJobStore) -> dict:
+async def check_status(job_id: str, store: JobStore) -> dict:
     """
     Check the status of a planning job.
 
@@ -41,7 +41,7 @@ def check_status(job_id: str, store: InMemoryJobStore) -> dict:
         raise ToolError(f"Invalid job ID: {e}")
 
     # Look up job
-    record = store.get(sanitized_id)
+    record = await store.get(sanitized_id)
     if not record:
         raise ToolError(
             f"Job '{sanitized_id}' not found. Use list_plans to see available jobs."
@@ -55,8 +55,10 @@ def check_status(job_id: str, store: InMemoryJobStore) -> dict:
         message = f"Job is running{phase_info}. Progress: {record.progress * 100:.1f}%"
     elif record.state.value == "complete":
         message = f"Job complete. Quality score: {record.quality_score or 'N/A'}"
+    elif record.state.value == "interrupted":
+        message = f"Job was interrupted (server restart). Error: {record.error or 'Unknown'}. Use retry_job to re-queue."
     else:  # failed
-        message = f"Job failed: {record.error or 'Unknown error'}"
+        message = f"Job failed: {record.error or 'Unknown error'}. Use retry_job to re-queue."
 
     # Build response
     response = PlanStatusResponse(
@@ -66,6 +68,7 @@ def check_status(job_id: str, store: InMemoryJobStore) -> dict:
         current_phase=record.current_phase,
         eta=None,  # Stub for Phase 4
         message=message,
+        error=record.error,
     )
 
     return response.model_dump()

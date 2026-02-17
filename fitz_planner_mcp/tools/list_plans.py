@@ -7,13 +7,13 @@ Lists all planning jobs with status and quality scores.
 
 import logging
 
-from fitz_planner_mcp.models.jobs import InMemoryJobStore
 from fitz_planner_mcp.models.responses import ListPlansResponse, PlanSummary
+from fitz_planner_mcp.models.store import JobStore
 
 logger = logging.getLogger(__name__)
 
 
-def list_plans(store: InMemoryJobStore) -> dict:
+async def list_plans(store: JobStore) -> dict:
     """
     List all planning jobs.
 
@@ -26,7 +26,7 @@ def list_plans(store: InMemoryJobStore) -> dict:
         ListPlansResponse as dict
     """
     # Get all jobs (sorted by creation time, newest first)
-    records = store.list_all()
+    records = await store.list_all()
 
     # Convert to summaries
     summaries = []
