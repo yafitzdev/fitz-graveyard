@@ -9,6 +9,8 @@ import asyncio
 import logging
 import traceback
 
+from fitz_planner_mcp.llm.client import OllamaClient
+from fitz_planner_mcp.llm.memory import MemoryMonitor
 from fitz_planner_mcp.models.jobs import JobState
 from fitz_planner_mcp.models.store import JobStore
 
@@ -26,19 +28,32 @@ class BackgroundWorker:
         - Handles exceptions and marks jobs as FAILED
     """
 
-    def __init__(self, store: JobStore, poll_interval: float = 1.0) -> None:
+    def __init__(
+        self,
+        store: JobStore,
+        poll_interval: float = 1.0,
+        ollama_client: OllamaClient | None = None,
+        memory_threshold: float = 80.0,
+    ) -> None:
         """
         Initialize background worker.
 
         Args:
             store: Job store implementation (SQLite or in-memory)
             poll_interval: Seconds between queue checks (default: 1.0)
+            ollama_client: Optional OllamaClient for real plan generation
+            memory_threshold: RAM usage % threshold for memory monitoring (default: 80.0)
         """
         self._store = store
         self._poll_interval = poll_interval
+        self._ollama_client = ollama_client
+        self._memory_threshold = memory_threshold
         self._current_job_id: str | None = None
         self._task: asyncio.Task | None = None
-        logger.info(f"Initialized BackgroundWorker (poll_interval={poll_interval}s)")
+        logger.info(
+            f"Initialized BackgroundWorker (poll_interval={poll_interval}s, "
+            f"ollama={'configured' if ollama_client else 'None'})"
+        )
 
     @property
     def current_job_id(self) -> str | None:
@@ -158,26 +173,78 @@ class BackgroundWorker:
 
     async def _process_job(self, job) -> None:
         """
-        Process a single job (stub for Phase 4).
+        Process a planning job using OllamaClient.
 
-        This is where the planning engine will be integrated.
-        For now, logs the job and simulates minimal processing.
+        Runs health check, generates plan content with memory monitoring,
+        and handles fallback to smaller model on OOM.
 
         Args:
             job: JobRecord to process
+
+        Raises:
+            ConnectionError: If Ollama health check fails
+            MemoryError: If RAM threshold exceeded during generation
         """
-        logger.info(
-            f"Processing job {job.job_id} (planning engine not yet implemented)"
+        if self._ollama_client is None:
+            logger.warning(
+                f"No Ollama client configured, completing job {job.job_id} with stub"
+            )
+            await self._store.update(job.job_id, progress=0.5, current_phase="pending_engine")
+            await asyncio.sleep(0.1)
+            return
+
+        # Step 1: Health check
+        await self._store.update(job.job_id, progress=0.05, current_phase="health_check")
+        healthy = await self._ollama_client.health_check()
+        if not healthy:
+            raise ConnectionError(
+                "Ollama health check failed: server not available or model not found"
+            )
+
+        # Step 2: Build prompt from job metadata
+        await self._store.update(job.job_id, progress=0.1, current_phase="generating")
+        messages = self._build_messages(job)
+
+        # Step 3: Generate with memory monitoring and fallback
+        monitor = MemoryMonitor(threshold_percent=self._memory_threshold)
+        result, model_used = await self._ollama_client.generate_with_monitoring(
+            messages=messages,
+            monitor=monitor,
         )
 
-        # Simulate some work
+        # Step 4: Store result (Phase 4 will write to file)
         await self._store.update(
             job.job_id,
-            progress=0.5,
-            current_phase="pending_engine",
+            progress=0.95,
+            current_phase="finalizing",
+            file_path=None,  # Phase 4 will write to file
         )
 
-        # Minimal delay so tests can observe state changes
-        await asyncio.sleep(0.1)
+        logger.info(f"Job {job.job_id} generated {len(result)} chars using {model_used}")
 
-        logger.info(f"Job {job.job_id} processing complete (stub)")
+    def _build_messages(self, job) -> list[dict]:
+        """
+        Build chat messages from job metadata.
+
+        This is a PLACEHOLDER prompt - Phase 4 will replace with full multi-stage pipeline.
+
+        Args:
+            job: JobRecord with description, timeline, context, integration_points
+
+        Returns:
+            List of chat messages in format [{"role": "user", "content": "..."}]
+        """
+        prompt_parts = [f"Create an architectural plan for: {job.description}"]
+
+        if job.timeline:
+            prompt_parts.append(f"\nTimeline: {job.timeline}")
+
+        if job.context:
+            prompt_parts.append(f"\nContext: {job.context}")
+
+        if job.integration_points:
+            prompt_parts.append(f"\nIntegration points: {', '.join(job.integration_points)}")
+
+        prompt = "".join(prompt_parts)
+
+        return [{"role": "user", "content": prompt}]

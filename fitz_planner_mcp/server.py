@@ -55,11 +55,14 @@ async def get_store() -> JobStore:
     return _lifecycle.store
 
 
-async def initialize_lifecycle() -> None:
+async def initialize_lifecycle(config = None) -> None:
     """
     Initialize the server lifecycle (DB + crash recovery + worker + signals).
 
     Must be called before any tool calls. Called by __main__.py on startup.
+
+    Args:
+        config: FitzPlannerConfig instance (defaults to module-level _config if None)
     """
     global _lifecycle
 
@@ -69,8 +72,9 @@ async def initialize_lifecycle() -> None:
 
     logger.info(f"Initializing lifecycle with db_path={db_path}")
 
-    # Create and start lifecycle
-    _lifecycle = ServerLifecycle(str(db_path))
+    # Create and start lifecycle with config
+    actual_config = config or _config
+    _lifecycle = ServerLifecycle(str(db_path), config=actual_config)
     await _lifecycle.startup()
 
     logger.info("Lifecycle initialized: SQLite + worker + signals ready")

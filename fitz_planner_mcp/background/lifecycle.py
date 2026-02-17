@@ -9,6 +9,8 @@ import logging
 
 from fitz_planner_mcp.background.signals import setup_signal_handlers
 from fitz_planner_mcp.background.worker import BackgroundWorker
+from fitz_planner_mcp.config.schema import FitzPlannerConfig
+from fitz_planner_mcp.llm.client import OllamaClient
 from fitz_planner_mcp.models.sqlite_store import SQLiteJobStore
 
 logger = logging.getLogger(__name__)
@@ -25,15 +27,32 @@ class ServerLifecycle:
         - Graceful shutdown
     """
 
-    def __init__(self, db_path: str) -> None:
+    def __init__(self, db_path: str, config: FitzPlannerConfig | None = None) -> None:
         """
         Initialize server lifecycle manager.
 
         Args:
             db_path: Path to SQLite database file
+            config: Optional FitzPlannerConfig for OllamaClient creation
         """
         self._store = SQLiteJobStore(db_path)
-        self._worker = BackgroundWorker(self._store)
+
+        # Create OllamaClient if config provided
+        self._ollama_client: OllamaClient | None = None
+        if config:
+            self._ollama_client = OllamaClient(
+                base_url=config.ollama.base_url,
+                model=config.ollama.model,
+                fallback_model=config.ollama.fallback_model,
+                timeout=config.ollama.timeout,
+            )
+
+        # Create worker with Ollama client and memory threshold
+        self._worker = BackgroundWorker(
+            self._store,
+            ollama_client=self._ollama_client,
+            memory_threshold=config.ollama.memory_threshold if config else 80.0,
+        )
         logger.info(f"Created ServerLifecycle with db_path={db_path}")
 
     @property
@@ -45,6 +64,11 @@ class ServerLifecycle:
     def worker(self) -> BackgroundWorker:
         """Get the background worker (for inspection/testing)."""
         return self._worker
+
+    @property
+    def ollama_client(self) -> OllamaClient | None:
+        """Get the Ollama client (for inspection/testing)."""
+        return self._ollama_client
 
     async def startup(self) -> None:
         """
