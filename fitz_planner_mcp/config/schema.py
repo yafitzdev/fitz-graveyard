@@ -18,6 +18,23 @@ class OllamaConfig(BaseModel):
     base_url: str = Field(
         default="http://localhost:11434", description="Ollama API base URL"
     )
+    model: str = Field(
+        default="qwen2.5-coder-next:80b-instruct",
+        description="Ollama model to use for planning",
+    )
+    fallback_model: str | None = Field(
+        default="qwen2.5-coder-next:32b-instruct",
+        description="Fallback model on OOM errors (None to disable)",
+    )
+    timeout: int = Field(
+        default=300, description="Request timeout in seconds (generous for model loading)"
+    )
+    memory_threshold: float = Field(
+        default=80.0,
+        ge=0.0,
+        le=100.0,
+        description="RAM usage % threshold to abort generation",
+    )
 
 
 class KragConfig(BaseModel):
@@ -71,10 +88,6 @@ class FitzPlannerConfig(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    model: str = Field(
-        default="qwen2.5-coder-next:80b-instruct",
-        description="Ollama model to use for planning",
-    )
     ollama: OllamaConfig = Field(default_factory=OllamaConfig)
     krag: KragConfig = Field(default_factory=KragConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
