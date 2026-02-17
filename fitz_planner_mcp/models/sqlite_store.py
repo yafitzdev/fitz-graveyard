@@ -103,8 +103,8 @@ class SQLiteJobStore(JobStore):
                     INSERT INTO jobs (
                         id, description, timeline, context, integration_points,
                         state, progress, current_phase, quality_score, file_path,
-                        error, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        error, pipeline_state, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         record.job_id,
@@ -118,6 +118,7 @@ class SQLiteJobStore(JobStore):
                         record.quality_score,
                         record.file_path,
                         record.error,
+                        record.pipeline_state,
                         created_at_iso,
                         updated_at_iso,
                     ),
@@ -187,6 +188,7 @@ class SQLiteJobStore(JobStore):
             "quality_score",
             "file_path",
             "error",
+            "pipeline_state",
             "updated_at",
         }
 
@@ -296,6 +298,7 @@ class SQLiteJobStore(JobStore):
             created_at=datetime.fromisoformat(row["created_at"]),
             file_path=row["file_path"],
             error=row["error"],
+            pipeline_state=row["pipeline_state"],
             updated_at=datetime.fromisoformat(row["updated_at"])
             if row["updated_at"]
             else None,

@@ -46,6 +46,7 @@ class JobRecord:
     created_at: datetime
     file_path: str | None = None
     error: str | None = None  # Error message if state=FAILED
+    pipeline_state: str | None = None  # JSON checkpoint data
     updated_at: datetime | None = None
 
 
