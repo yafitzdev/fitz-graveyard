@@ -6,12 +6,62 @@ Each stage defines its prompt template, output parsing logic, and
 execution logic. Stages are executed sequentially by the PlanningPipeline.
 """
 
+import json
 import logging
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+def extract_json(raw_output: str) -> dict[str, Any]:
+    """
+    Extract JSON from LLM output, handling common formatting variations.
+
+    Tries multiple extraction strategies:
+    1. Direct JSON parse (if output is pure JSON)
+    2. Code fence extraction (```json ... ```)
+    3. Bare code block extraction ({...} or [...])
+
+    Args:
+        raw_output: Raw text from LLM
+
+    Returns:
+        Parsed JSON dictionary
+
+    Raises:
+        ValueError: If no valid JSON found
+    """
+    # Strategy 1: Direct parse
+    try:
+        return json.loads(raw_output.strip())
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 2: Code fence (```json ... ```)
+    fence_match = re.search(
+        r"```(?:json)?\s*\n(.*?)\n```", raw_output, re.DOTALL | re.IGNORECASE
+    )
+    if fence_match:
+        try:
+            return json.loads(fence_match.group(1).strip())
+        except json.JSONDecodeError:
+            pass
+
+    # Strategy 3: Bare code block ({...} or [...])
+    # Find first { or [ and last matching } or ]
+    json_match = re.search(r"(\{.*\}|\[.*\])", raw_output, re.DOTALL)
+    if json_match:
+        try:
+            return json.loads(json_match.group(1))
+        except json.JSONDecodeError:
+            pass
+
+    raise ValueError(
+        f"Could not extract valid JSON from output. First 200 chars: {raw_output[:200]}"
+    )
 
 
 @dataclass
