@@ -46,18 +46,18 @@ class ArchitectureStage(PipelineStage):
         prompt_template = load_prompt("architecture")
 
         # Include context if available
-        context_str = ""
+        context_str = job_description  # Default to job description
         if "context" in prior_outputs:
             context = prior_outputs["context"]
             context_str = f"""
+Project: {job_description}
+
 Project Description: {context.get('project_description', '')}
 Key Requirements: {', '.join(context.get('key_requirements', []))}
 Constraints: {', '.join(context.get('constraints', []))}
 """
 
-        prompt = prompt_template.format(
-            description=job_description, context=context_str.strip()
-        )
+        prompt = prompt_template.format(context=context_str.strip())
 
         return [{"role": "user", "content": prompt}]
 
@@ -100,7 +100,29 @@ Constraints: {', '.join(context.get('constraints', []))}
 
             # Stage 2: Format into JSON
             format_template = load_prompt("architecture_format")
-            format_prompt = format_template.format(reasoning=reasoning_output)
+
+            # Create schema example
+            schema_example = """{
+  "approaches": [
+    {
+      "name": "string",
+      "description": "string",
+      "pros": ["string"],
+      "cons": ["string"],
+      "complexity": "low|medium|high",
+      "best_for": ["string"]
+    }
+  ],
+  "recommended": "string (must match an approach name)",
+  "reasoning": "string",
+  "key_tradeoffs": {"tradeoff_name": "description"},
+  "technology_considerations": ["string"]
+}"""
+
+            format_prompt = format_template.format(
+                reasoning=reasoning_output,
+                schema=schema_example
+            )
 
             messages_format = [{"role": "user", "content": format_prompt}]
 
