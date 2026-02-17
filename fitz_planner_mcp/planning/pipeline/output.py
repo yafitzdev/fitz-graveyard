@@ -69,9 +69,9 @@ class PlanRenderer:
         sections.append("")
         sections.append(f"**Description:**\n{plan.context.project_description}")
         sections.append("")
-        if plan.context.requirements:
+        if plan.context.key_requirements:
             sections.append("**Requirements:**")
-            for req in plan.context.requirements:
+            for req in plan.context.key_requirements:
                 sections.append(f"- {req}")
             sections.append("")
         if plan.context.constraints:

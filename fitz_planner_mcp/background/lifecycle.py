@@ -50,6 +50,7 @@ class ServerLifecycle:
         # Create worker with Ollama client and memory threshold
         self._worker = BackgroundWorker(
             self._store,
+            config=config,
             ollama_client=self._ollama_client,
             memory_threshold=config.ollama.memory_threshold if config else 80.0,
         )
