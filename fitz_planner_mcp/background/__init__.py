@@ -8,9 +8,8 @@ Exports:
     - ServerLifecycle: Startup recovery and shutdown coordination
 """
 
+from fitz_planner_mcp.background.lifecycle import ServerLifecycle
 from fitz_planner_mcp.background.signals import setup_signal_handlers
 from fitz_planner_mcp.background.worker import BackgroundWorker
 
-__all__ = ["BackgroundWorker", "setup_signal_handlers"]
-
-# ServerLifecycle will be added in Task 2
+__all__ = ["BackgroundWorker", "setup_signal_handlers", "ServerLifecycle"]

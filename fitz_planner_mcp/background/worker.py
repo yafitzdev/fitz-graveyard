@@ -125,6 +125,14 @@ class BackgroundWorker:
                 except asyncio.CancelledError:
                     # Shutdown during processing - mark as interrupted
                     logger.warning(f"Job {job.job_id} interrupted by shutdown")
+                    try:
+                        await self._store.update(
+                            job.job_id,
+                            state=JobState.INTERRUPTED,
+                            error="Server shutdown during processing",
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to mark job as interrupted: {e}")
                     raise  # Re-raise to exit loop
 
                 except Exception as e:
@@ -144,20 +152,7 @@ class BackgroundWorker:
                     self._current_job_id = None
 
         except asyncio.CancelledError:
-            # Graceful shutdown - mark running job as interrupted
-            if self._current_job_id:
-                logger.warning(
-                    f"Marking job {self._current_job_id} as interrupted (shutdown during processing)"
-                )
-                try:
-                    await self._store.update(
-                        self._current_job_id,
-                        state=JobState.INTERRUPTED,
-                        error="Server shutdown during processing",
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to mark job as interrupted: {e}")
-
+            # Graceful shutdown - job already marked as interrupted in inner handler
             logger.info("Worker loop cancelled")
             raise
 
