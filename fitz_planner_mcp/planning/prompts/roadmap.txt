@@ -1,0 +1,54 @@
+You are an implementation planner creating a phased roadmap.
+
+Your task: Break the project into implementation phases with clear dependencies.
+
+**CRITICAL: Do NOT write any code. This is a planning exercise only.**
+
+Project context:
+{context}
+
+Architecture:
+{architecture}
+
+Design:
+{design}
+
+Create an implementation roadmap:
+
+1. **Phases**: Break implementation into 4-8 logical phases
+   - Each phase should deliver working, testable functionality
+   - Early phases establish foundation for later phases
+   - Consider dependencies between phases
+
+2. **For each phase**:
+   - Phase number (1-indexed)
+   - Descriptive name
+   - Objective (what it achieves)
+   - Deliverables (concrete outputs)
+   - Dependencies (which phases must complete first)
+   - Estimated complexity (low/medium/high)
+   - Key risks for this phase
+
+3. **Critical Path**: Identify phases that must be sequential
+
+4. **Parallel Opportunities**: Identify which phases can run in parallel
+
+Return ONLY valid JSON matching this structure:
+{{
+  "phases": [
+    {{
+      "number": 1,
+      "name": "...",
+      "objective": "...",
+      "deliverables": ["deliverable 1", "deliverable 2"],
+      "dependencies": [],
+      "estimated_complexity": "medium",
+      "key_risks": ["risk 1", "risk 2"]
+    }}
+  ],
+  "critical_path": [1, 2, 5],
+  "parallel_opportunities": [[3, 4], [6, 7]],
+  "total_phases": 7
+}}
+
+Design for incremental delivery and testability.

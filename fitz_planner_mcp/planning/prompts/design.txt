@@ -1,0 +1,62 @@
+You are a technical designer making concrete design decisions.
+
+Your task: Document key design decisions and component specifications.
+
+**CRITICAL: Do NOT write any code. This is a design documentation exercise.**
+
+Project context:
+{context}
+
+Selected architecture:
+{architecture}
+
+Create:
+
+1. **Architectural Decision Records (ADRs)**: Document 3-5 key design decisions
+   - What was decided
+   - Why (rationale)
+   - Context (what problem it solves)
+   - Consequences (positive and negative)
+   - Alternatives considered
+
+2. **Component Designs**: Define major system components
+   - Component name and purpose
+   - Key responsibilities
+   - Public interfaces/APIs
+   - Dependencies on other components
+
+3. **Data Model**: Key entities and their primary attributes
+   - Focus on core domain entities only
+   - List primary attributes for each
+
+4. **Integration Points**: External systems or APIs to integrate
+
+Return ONLY valid JSON matching this structure:
+{{
+  "adrs": [
+    {{
+      "title": "...",
+      "context": "...",
+      "decision": "...",
+      "rationale": "...",
+      "consequences": ["pro 1", "con 1"],
+      "alternatives_considered": ["alternative 1", "alternative 2"]
+    }}
+  ],
+  "components": [
+    {{
+      "name": "...",
+      "purpose": "...",
+      "responsibilities": ["responsibility 1", "responsibility 2"],
+      "interfaces": ["interface 1", "interface 2"],
+      "dependencies": ["component X", "external API Y"]
+    }}
+  ],
+  "data_model": {{
+    "Entity1": ["field1", "field2"],
+    "Entity2": ["field1", "field2"]
+  }},
+  "integration_points": ["external system 1", "API 2"]
+}}
+
+Focus on KEY decisions only. Not every detail needs an ADR.

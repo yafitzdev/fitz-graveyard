@@ -1,0 +1,16 @@
+Convert the architecture reasoning below into structured JSON format.
+
+Architecture reasoning:
+{reasoning}
+
+Return ONLY valid JSON matching this exact structure:
+{schema}
+
+Extract:
+- All architectural approaches mentioned (with name, description, pros, cons, complexity, best_for)
+- The recommended approach name (must match one of the approaches)
+- The reasoning for the recommendation
+- Key tradeoffs identified
+- Technology considerations
+
+Ensure the "recommended" field matches exactly one of the approach names in the "approaches" list.
