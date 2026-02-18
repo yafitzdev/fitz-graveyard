@@ -5,3 +5,4 @@ __pycache__/
 dist/
 build/
 .venv/
+docs/qwen3-coder-next-assessment/
