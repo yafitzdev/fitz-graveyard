@@ -21,7 +21,7 @@ from fitz_planner_mcp.planning.confidence.scorer import ConfidenceScorer
 from fitz_planner_mcp.planning.pipeline.checkpoint import CheckpointManager
 from fitz_planner_mcp.planning.pipeline.orchestrator import PlanningPipeline
 from fitz_planner_mcp.planning.pipeline.output import PlanRenderer
-from fitz_planner_mcp.planning.pipeline.stages import DEFAULT_STAGES
+from fitz_planner_mcp.planning.pipeline.stages import DEFAULT_STAGES, create_stages
 from fitz_planner_mcp.planning.schemas.plan_output import PlanOutput
 
 logger = logging.getLogger(__name__)
@@ -82,8 +82,9 @@ class BackgroundWorker:
                 logger.warning("Store does not support checkpointing (no db_path)")
                 return
 
-            # Create pipeline with stages
-            self._pipeline = PlanningPipeline(DEFAULT_STAGES, self._checkpoint_mgr)
+            # Create pipeline with stages (pass config and cwd for KRAG)
+            stages = create_stages(config=self._config, source_dir=str(Path.cwd()))
+            self._pipeline = PlanningPipeline(stages, self._checkpoint_mgr)
 
             # Create confidence scorer and flagger
             self._scorer = ConfidenceScorer(ollama_client)
