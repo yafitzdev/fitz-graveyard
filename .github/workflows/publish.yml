@@ -70,6 +70,6 @@ jobs:
         # 1. Create 'pypi' environment in GitHub repo settings
         # 2. Configure trusted publisher on PyPI project settings:
         #    - Owner: <github-username>
-        #    - Repository: fitz-planner-mcp
+        #    - Repository: fitz-graveyard
         #    - Workflow: publish.yml
         #    - Environment: pypi

@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from fitz_planner_mcp.planning.pipeline.stages import (
+from fitz_graveyard.planning.pipeline.stages import (
     DEFAULT_STAGES,
     ArchitectureStage,
     ContextStage,

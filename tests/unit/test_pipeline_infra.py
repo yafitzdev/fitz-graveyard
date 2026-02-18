@@ -15,14 +15,14 @@ import aiosqlite
 import pytest
 import pytest_asyncio
 
-from fitz_planner_mcp.models.schema import SCHEMA_VERSION, init_db
-from fitz_planner_mcp.planning.pipeline import (
+from fitz_graveyard.models.schema import SCHEMA_VERSION, init_db
+from fitz_graveyard.planning.pipeline import (
     CheckpointManager,
     PipelineStage,
     PlanningPipeline,
 )
-from fitz_planner_mcp.planning.pipeline.orchestrator import PipelineResult, get_git_sha
-from fitz_planner_mcp.planning.pipeline.stages.base import StageResult
+from fitz_graveyard.planning.pipeline.orchestrator import PipelineResult, get_git_sha
+from fitz_graveyard.planning.pipeline.stages.base import StageResult
 
 
 # Mock LLM client for testing

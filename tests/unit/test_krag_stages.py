@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from fitz_planner_mcp.config.schema import FitzPlannerConfig, KragConfig
-from fitz_planner_mcp.planning.pipeline.stages import (
+from fitz_graveyard.config.schema import FitzPlannerConfig, KragConfig
+from fitz_graveyard.planning.pipeline.stages import (
     ArchitectureStage,
     ContextStage,
     DesignStage,
@@ -49,7 +49,7 @@ class TestContextStageKragIntegration:
         stage = ContextStage(config=config, source_dir="./")
         prior_outputs = {}
 
-        with patch("fitz_planner_mcp.planning.pipeline.stages.context.KragClient") as MockKrag:
+        with patch("fitz_graveyard.planning.pipeline.stages.context.KragClient") as MockKrag:
             messages = stage.build_prompt("Build a blog platform", prior_outputs)
 
             # KragClient.from_config should be called
@@ -66,7 +66,7 @@ class TestContextStageKragIntegration:
         stage = ContextStage(config=config, source_dir="./test")
         prior_outputs = {}
 
-        with patch("fitz_planner_mcp.planning.pipeline.stages.context.KragClient") as MockKrag:
+        with patch("fitz_graveyard.planning.pipeline.stages.context.KragClient") as MockKrag:
             # Mock the from_config class method
             mock_client = MagicMock()
             mock_client.multi_query.return_value = "## Codebase Context\n\nTest context"
@@ -94,7 +94,7 @@ class TestContextStageKragIntegration:
         stage = ContextStage(config=config, source_dir="./test")
         prior_outputs = {}
 
-        with patch("fitz_planner_mcp.planning.pipeline.stages.context.KragClient") as MockKrag:
+        with patch("fitz_graveyard.planning.pipeline.stages.context.KragClient") as MockKrag:
             mock_client = MagicMock()
             mock_client.multi_query.return_value = "## Codebase Context\n\n### Architecture\nDjango MVC pattern"
             MockKrag.from_config.return_value = mock_client
@@ -238,7 +238,7 @@ class TestKragContextInPrompts:
         stage = ContextStage(config=config, source_dir="./")
         prior_outputs = {}
 
-        with patch("fitz_planner_mcp.planning.pipeline.stages.context.KragClient") as MockKrag:
+        with patch("fitz_graveyard.planning.pipeline.stages.context.KragClient") as MockKrag:
             mock_client = MagicMock()
             # Return substantial context
             mock_client.multi_query.return_value = """## Codebase Context
@@ -280,7 +280,7 @@ class TestEmptyKragContext:
         stage = ContextStage(config=config, source_dir="./")
         prior_outputs = {}
 
-        with patch("fitz_planner_mcp.planning.pipeline.stages.context.KragClient") as MockKrag:
+        with patch("fitz_graveyard.planning.pipeline.stages.context.KragClient") as MockKrag:
             mock_client = MagicMock()
             mock_client.multi_query.return_value = ""  # Empty context
             MockKrag.from_config.return_value = mock_client
@@ -329,7 +329,7 @@ class TestCreateStagesFactory:
 
     def test_create_stages_equivalent_to_default_stages(self):
         """create_stages() without args produces equivalent stages to DEFAULT_STAGES."""
-        from fitz_planner_mcp.planning.pipeline.stages import DEFAULT_STAGES
+        from fitz_graveyard.planning.pipeline.stages import DEFAULT_STAGES
 
         stages = create_stages()
 
@@ -357,7 +357,7 @@ class TestKragClientSharing:
 
         prior_outputs = {}
 
-        with patch("fitz_planner_mcp.planning.pipeline.stages.context.KragClient") as MockKrag:
+        with patch("fitz_graveyard.planning.pipeline.stages.context.KragClient") as MockKrag:
             mock_client = MagicMock()
             mock_client.multi_query.return_value = "## Codebase Context\n\nTest"
             MockKrag.from_config.return_value = mock_client

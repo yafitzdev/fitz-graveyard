@@ -1,9 +1,9 @@
-# fitz-planner-mcp
+# fitz-graveyard
 
-[![PyPI version](https://img.shields.io/pypi/v/fitz-planner-mcp.svg)](https://pypi.org/project/fitz-planner-mcp/)
-[![Python versions](https://img.shields.io/pypi/pyversions/fitz-planner-mcp.svg)](https://pypi.org/project/fitz-planner-mcp/)
+[![PyPI version](https://img.shields.io/pypi/v/fitz-graveyard.svg)](https://pypi.org/project/fitz-graveyard/)
+[![Python versions](https://img.shields.io/pypi/pyversions/fitz-graveyard.svg)](https://pypi.org/project/fitz-graveyard/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://github.com/yafitzdev/fitz-planner-mcp/workflows/tests/badge.svg)](https://github.com/yafitzdev/fitz-planner-mcp/actions)
+[![Tests](https://github.com/yafitzdev/fitz-graveyard/workflows/tests/badge.svg)](https://github.com/yafitzdev/fitz-graveyard/actions)
 
 MCP server for overnight AI architectural planning using local LLMs.
 
@@ -28,13 +28,13 @@ MCP server for overnight AI architectural planning using local LLMs.
 ## Installation
 
 ```bash
-pip install fitz-planner-mcp
+pip install fitz-graveyard
 ```
 
 For API review feature:
 
 ```bash
-pip install "fitz-planner-mcp[api-review]"
+pip install "fitz-graveyard[api-review]"
 ```
 
 ## Usage - MCP Server (Claude Code)
@@ -45,7 +45,7 @@ Add to your `claude_desktop_config.json`:
 {
   "mcpServers": {
     "fitz-planner": {
-      "command": "fitz-planner-mcp"
+      "command": "fitz-graveyard"
     }
   }
 }
@@ -69,9 +69,9 @@ Restart Claude Desktop, then use planning tools directly in conversations.
 
 Default configuration location:
 
-- **Windows**: `%APPDATA%\fitz-planner-mcp\config.yaml`
-- **macOS**: `~/Library/Application Support/fitz-planner-mcp/config.yaml`
-- **Linux**: `~/.config/fitz-planner-mcp/config.yaml`
+- **Windows**: `%APPDATA%\fitz-graveyard\config.yaml`
+- **macOS**: `~/Library/Application Support/fitz-graveyard/config.yaml`
+- **Linux**: `~/.config/fitz-graveyard/config.yaml`
 
 Key settings (YAML):
 
@@ -95,8 +95,8 @@ api_review:
 ## Development
 
 ```bash
-git clone https://github.com/yafitzdev/fitz-planner-mcp.git
-cd fitz-planner-mcp
+git clone https://github.com/yafitzdev/fitz-graveyard.git
+cd fitz-graveyard
 pip install -e ".[dev]"
 pytest
 ```
@@ -104,7 +104,7 @@ pytest
 ## Architecture
 
 ```
-fitz_planner_mcp/
+fitz_graveyard/
 ├── server.py           # MCP server entry point
 ├── engine/             # Planning orchestration
 │   ├── stages/         # Five-stage pipeline

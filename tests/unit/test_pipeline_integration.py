@@ -17,14 +17,14 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 import pytest_asyncio
 
-from fitz_planner_mcp.models.sqlite_store import SQLiteJobStore
-from fitz_planner_mcp.planning.confidence.flagging import SectionFlagger
-from fitz_planner_mcp.planning.confidence.scorer import ConfidenceScorer
-from fitz_planner_mcp.planning.pipeline.checkpoint import CheckpointManager
-from fitz_planner_mcp.planning.pipeline.orchestrator import PlanningPipeline
-from fitz_planner_mcp.planning.pipeline.output import PlanRenderer
-from fitz_planner_mcp.planning.pipeline.stages import DEFAULT_STAGES
-from fitz_planner_mcp.planning.schemas.plan_output import PlanOutput
+from fitz_graveyard.models.sqlite_store import SQLiteJobStore
+from fitz_graveyard.planning.confidence.flagging import SectionFlagger
+from fitz_graveyard.planning.confidence.scorer import ConfidenceScorer
+from fitz_graveyard.planning.pipeline.checkpoint import CheckpointManager
+from fitz_graveyard.planning.pipeline.orchestrator import PlanningPipeline
+from fitz_graveyard.planning.pipeline.output import PlanRenderer
+from fitz_graveyard.planning.pipeline.stages import DEFAULT_STAGES
+from fitz_graveyard.planning.schemas.plan_output import PlanOutput
 
 
 @pytest_asyncio.fixture
@@ -41,7 +41,7 @@ async def store(tmp_path: Path) -> SQLiteJobStore:
 async def test_full_pipeline_execution(store: SQLiteJobStore):
     """Test full pipeline execution with mock LLM."""
     # Add a test job to the store
-    from fitz_planner_mcp.models.jobs import JobRecord, JobState
+    from fitz_graveyard.models.jobs import JobRecord, JobState
     from datetime import datetime, timezone
 
     job = JobRecord(
@@ -120,7 +120,7 @@ async def test_full_pipeline_execution(store: SQLiteJobStore):
 async def test_pipeline_with_confidence_scoring(store: SQLiteJobStore):
     """Test pipeline integration with confidence scoring."""
     # Add a test job to the store
-    from fitz_planner_mcp.models.jobs import JobRecord, JobState
+    from fitz_graveyard.models.jobs import JobRecord, JobState
     from datetime import datetime, timezone
 
     job = JobRecord(
@@ -178,11 +178,11 @@ async def test_pipeline_with_confidence_scoring(store: SQLiteJobStore):
 async def test_plan_output_creation_and_rendering():
     """Test PlanOutput creation and markdown rendering."""
     # Import schemas
-    from fitz_planner_mcp.planning.schemas.context import ContextOutput
-    from fitz_planner_mcp.planning.schemas.architecture import ArchitectureOutput, Approach
-    from fitz_planner_mcp.planning.schemas.design import DesignOutput, ADR, ComponentDesign
-    from fitz_planner_mcp.planning.schemas.roadmap import RoadmapOutput, Phase
-    from fitz_planner_mcp.planning.schemas.risk import RiskOutput, Risk
+    from fitz_graveyard.planning.schemas.context import ContextOutput
+    from fitz_graveyard.planning.schemas.architecture import ArchitectureOutput, Approach
+    from fitz_graveyard.planning.schemas.design import DesignOutput, ADR, ComponentDesign
+    from fitz_graveyard.planning.schemas.roadmap import RoadmapOutput, Phase
+    from fitz_graveyard.planning.schemas.risk import RiskOutput, Risk
 
     # Create PlanOutput with all required fields using actual schema models
     plan_output = PlanOutput(
@@ -337,7 +337,7 @@ async def test_overall_quality_score():
 async def test_checkpoint_recovery_with_pipeline(store: SQLiteJobStore):
     """Test checkpoint recovery integration with pipeline."""
     # Add a test job to the store
-    from fitz_planner_mcp.models.jobs import JobRecord, JobState
+    from fitz_graveyard.models.jobs import JobRecord, JobState
     from datetime import datetime, timezone
 
     job = JobRecord(

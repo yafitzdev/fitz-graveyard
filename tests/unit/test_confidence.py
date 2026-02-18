@@ -3,8 +3,8 @@
 
 import pytest
 
-from fitz_planner_mcp.config.schema import ConfidenceConfig
-from fitz_planner_mcp.planning.confidence import ConfidenceScorer, SectionFlagger
+from fitz_graveyard.config.schema import ConfidenceConfig
+from fitz_graveyard.planning.confidence import ConfidenceScorer, SectionFlagger
 
 
 class TestConfidenceScorerHeuristics:

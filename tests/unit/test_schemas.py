@@ -4,7 +4,7 @@
 import pytest
 from datetime import datetime
 
-from fitz_planner_mcp.planning.schemas import (
+from fitz_graveyard.planning.schemas import (
     ContextOutput,
     ArchitectureOutput,
     Approach,
@@ -17,7 +17,7 @@ from fitz_planner_mcp.planning.schemas import (
     Risk,
     PlanOutput,
 )
-from fitz_planner_mcp.planning.prompts import load_prompt
+from fitz_graveyard.planning.prompts import load_prompt
 
 
 class TestContextOutput:

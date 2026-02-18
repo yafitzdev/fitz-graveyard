@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from fitz_planner_mcp.llm import MemoryMonitor
+from fitz_graveyard.llm import MemoryMonitor
 
 
 class TestMemoryMonitorCheckOnce:

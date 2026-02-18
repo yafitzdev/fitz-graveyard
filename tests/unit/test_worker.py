@@ -16,10 +16,10 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-from fitz_planner_mcp.background.lifecycle import ServerLifecycle
-from fitz_planner_mcp.background.worker import BackgroundWorker
-from fitz_planner_mcp.models.jobs import JobRecord, JobState
-from fitz_planner_mcp.models.sqlite_store import SQLiteJobStore
+from fitz_graveyard.background.lifecycle import ServerLifecycle
+from fitz_graveyard.background.worker import BackgroundWorker
+from fitz_graveyard.models.jobs import JobRecord, JobState
+from fitz_graveyard.models.sqlite_store import SQLiteJobStore
 
 
 @pytest_asyncio.fixture

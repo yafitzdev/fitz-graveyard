@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from fitz_planner_mcp.api_review.client import AnthropicReviewClient
-from fitz_planner_mcp.api_review.schemas import ReviewRequest, ReviewResult
+from fitz_graveyard.api_review.client import AnthropicReviewClient
+from fitz_graveyard.api_review.schemas import ReviewRequest, ReviewResult
 
 
 @pytest.fixture
@@ -216,7 +216,7 @@ class TestConfigIntegration:
 
     def test_anthropic_config_defaults(self):
         """Test AnthropicConfig default values."""
-        from fitz_planner_mcp.config.schema import AnthropicConfig
+        from fitz_graveyard.config.schema import AnthropicConfig
 
         config = AnthropicConfig()
         assert config.api_key is None
@@ -225,7 +225,7 @@ class TestConfigIntegration:
 
     def test_anthropic_config_in_root(self):
         """Test AnthropicConfig nested in FitzPlannerConfig."""
-        from fitz_planner_mcp.config.schema import FitzPlannerConfig
+        from fitz_graveyard.config.schema import FitzPlannerConfig
 
         config = FitzPlannerConfig()
         assert hasattr(config, "anthropic")
@@ -234,7 +234,7 @@ class TestConfigIntegration:
 
     def test_anthropic_config_custom_values(self):
         """Test setting custom values in AnthropicConfig."""
-        from fitz_planner_mcp.config.schema import AnthropicConfig
+        from fitz_graveyard.config.schema import AnthropicConfig
 
         config = AnthropicConfig(
             api_key="sk-test-key", model="custom-model", max_review_tokens=4096
@@ -245,7 +245,7 @@ class TestConfigIntegration:
 
     def test_anthropic_config_extra_ignored(self):
         """Test that extra fields are ignored (forward compatibility)."""
-        from fitz_planner_mcp.config.schema import AnthropicConfig
+        from fitz_graveyard.config.schema import AnthropicConfig
 
         config = AnthropicConfig(api_key="test", extra_field="ignored")
         assert config.api_key == "test"

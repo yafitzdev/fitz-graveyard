@@ -10,8 +10,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from fitz_planner_mcp.config.schema import KragConfig
-from fitz_planner_mcp.planning.krag import KragClient, format_krag_answer, format_krag_results
+from fitz_graveyard.config.schema import KragConfig
+from fitz_graveyard.planning.krag import KragClient, format_krag_answer, format_krag_results
 
 
 class TestKragClientDisabled:
@@ -38,7 +38,7 @@ class TestKragClientDisabled:
 class TestKragClientImportError:
     """Tests for ImportError fallback behavior."""
 
-    @patch("fitz_planner_mcp.planning.krag.client.logger")
+    @patch("fitz_graveyard.planning.krag.client.logger")
     def test_import_error_fallback(self, mock_logger):
         """When fitz-ai not installed, query() returns empty string and logs debug."""
         client = KragClient(enabled=True)
@@ -112,7 +112,7 @@ class TestKragClientSuccess:
 
         assert result == ""
 
-    @patch("fitz_planner_mcp.planning.krag.client.logger")
+    @patch("fitz_graveyard.planning.krag.client.logger")
     def test_query_exception_returns_empty(self, mock_logger):
         """When fitz.ask() raises Exception, returns empty string with warning log."""
         client = KragClient(enabled=True)

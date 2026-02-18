@@ -10,14 +10,14 @@ import pytest_asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fitz_planner_mcp.config.loader import load_config
-from fitz_planner_mcp.models.jobs import JobRecord, JobState, generate_job_id
-from fitz_planner_mcp.models.sqlite_store import SQLiteJobStore
-from fitz_planner_mcp.tools.check_status import check_status
-from fitz_planner_mcp.tools.create_plan import create_plan
-from fitz_planner_mcp.tools.get_plan import get_plan
-from fitz_planner_mcp.tools.list_plans import list_plans
-from fitz_planner_mcp.tools.retry_job import retry_job
+from fitz_graveyard.config.loader import load_config
+from fitz_graveyard.models.jobs import JobRecord, JobState, generate_job_id
+from fitz_graveyard.models.sqlite_store import SQLiteJobStore
+from fitz_graveyard.tools.check_status import check_status
+from fitz_graveyard.tools.create_plan import create_plan
+from fitz_graveyard.tools.get_plan import get_plan
+from fitz_graveyard.tools.list_plans import list_plans
+from fitz_graveyard.tools.retry_job import retry_job
 from fastmcp.exceptions import ToolError
 
 

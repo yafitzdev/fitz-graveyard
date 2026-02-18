@@ -1,10 +1,10 @@
-# fitz-planner-mcp/pyproject.toml
+# fitz-graveyard/pyproject.toml
 [build-system]
 requires = ["setuptools>=65.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "fitz-planner-mcp"
+name = "fitz-graveyard"
 version = "0.1.0"
 description = "MCP server for local-first AI planning with fitz-ai integration"
 readme = "README.md"
@@ -49,14 +49,14 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yafitzdev/fitz-planner-mcp"
-Repository = "https://github.com/yafitzdev/fitz-planner-mcp"
-Issues = "https://github.com/yafitzdev/fitz-planner-mcp/issues"
-Documentation = "https://github.com/yafitzdev/fitz-planner-mcp#readme"
+Homepage = "https://github.com/yafitzdev/fitz-graveyard"
+Repository = "https://github.com/yafitzdev/fitz-graveyard"
+Issues = "https://github.com/yafitzdev/fitz-graveyard/issues"
+Documentation = "https://github.com/yafitzdev/fitz-graveyard#readme"
 
 [project.scripts]
-fitz-planner-mcp = "fitz_planner_mcp.__main__:main"
+fitz-graveyard = "fitz_graveyard.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["fitz_planner_mcp*"]
+include = ["fitz_graveyard*"]
