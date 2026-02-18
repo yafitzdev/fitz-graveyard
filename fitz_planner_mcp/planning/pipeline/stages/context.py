@@ -35,7 +35,8 @@ class ContextStage(PipelineStage):
     ) -> list[dict]:
         """Build context understanding prompt."""
         prompt_template = load_prompt("context")
-        prompt = prompt_template.format(description=job_description)
+        # krag_context will be populated in Phase 5-02; empty for now
+        prompt = prompt_template.format(description=job_description, krag_context="")
 
         return [{"role": "user", "content": prompt}]
 

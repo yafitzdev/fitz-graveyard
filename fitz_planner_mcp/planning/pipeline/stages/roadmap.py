@@ -59,11 +59,13 @@ Components: {', '.join(components)}
 ADR Count: {len(design.get('adrs', []))}
 """
 
+        # krag_context will be populated in Phase 5-02; empty for now
         prompt = prompt_template.format(
             description=job_description,
             context=context_str.strip(),
             architecture=architecture_str.strip(),
             design=design_str.strip(),
+            krag_context="",
         )
 
         return [{"role": "user", "content": prompt}]

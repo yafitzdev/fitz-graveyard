@@ -57,7 +57,8 @@ Key Requirements: {', '.join(context.get('key_requirements', []))}
 Constraints: {', '.join(context.get('constraints', []))}
 """
 
-        prompt = prompt_template.format(context=context_str.strip())
+        # krag_context will be populated in Phase 5-02; empty for now
+        prompt = prompt_template.format(context=context_str.strip(), krag_context="")
 
         return [{"role": "user", "content": prompt}]
 
