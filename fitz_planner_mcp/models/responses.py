@@ -15,6 +15,9 @@ class CreatePlanResponse(BaseModel):
     status: str = Field(description="Job status (always 'queued' for new jobs)")
     eta: str = Field(description="Estimated time to completion")
     model: str = Field(description="LLM model that will be used")
+    api_review: bool = Field(
+        default=False, description="Whether API review is enabled for this job"
+    )
     next_steps: str = Field(
         description="Instructions for monitoring job progress",
         default="Use check_status with job_id to monitor progress",
@@ -25,7 +28,7 @@ class PlanStatusResponse(BaseModel):
     """Response from check_status tool."""
 
     job_id: str = Field(description="Job identifier")
-    state: str = Field(description="Current job state (queued/running/complete/failed/interrupted)")
+    state: str = Field(description="Current job state (queued/running/awaiting_review/complete/failed/interrupted)")
     progress: float = Field(
         ge=0.0, le=1.0, description="Completion progress as fraction (0.0-1.0)"
     )
@@ -38,6 +41,9 @@ class PlanStatusResponse(BaseModel):
     )
     error: str | None = Field(
         default=None, description="Error message if job failed or interrupted"
+    )
+    cost_estimate: dict | None = Field(
+        default=None, description="Cost estimate details when in awaiting_review state"
     )
 
 
@@ -84,4 +90,30 @@ class RetryJobResponse(BaseModel):
     message: str = Field(
         description="Human-readable confirmation message",
         default="Job re-queued for processing. Use check_status to monitor.",
+    )
+
+
+class ConfirmReviewResponse(BaseModel):
+    """Response from confirm_review tool."""
+
+    job_id: str = Field(description="Job identifier")
+    status: str = Field(
+        default="review_started", description="Status after confirmation"
+    )
+    message: str = Field(
+        default="API review started. Use check_status to monitor.",
+        description="Human-readable confirmation message",
+    )
+
+
+class CancelReviewResponse(BaseModel):
+    """Response from cancel_review tool."""
+
+    job_id: str = Field(description="Job identifier")
+    status: str = Field(
+        default="review_skipped", description="Status after cancellation"
+    )
+    message: str = Field(
+        default="API review cancelled. Plan finalized without API review.",
+        description="Human-readable confirmation message",
     )

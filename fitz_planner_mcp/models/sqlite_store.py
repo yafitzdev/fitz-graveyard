@@ -103,8 +103,9 @@ class SQLiteJobStore(JobStore):
                     INSERT INTO jobs (
                         id, description, timeline, context, integration_points,
                         state, progress, current_phase, quality_score, file_path,
-                        error, pipeline_state, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        error, pipeline_state, created_at, updated_at,
+                        api_review, cost_estimate_json, review_result_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         record.job_id,
@@ -121,6 +122,9 @@ class SQLiteJobStore(JobStore):
                         record.pipeline_state,
                         created_at_iso,
                         updated_at_iso,
+                        1 if record.api_review else 0,
+                        record.cost_estimate_json,
+                        record.review_result_json,
                     ),
                 )
 
@@ -190,6 +194,9 @@ class SQLiteJobStore(JobStore):
             "error",
             "pipeline_state",
             "updated_at",
+            "api_review",
+            "cost_estimate_json",
+            "review_result_json",
         }
 
         invalid = set(kwargs.keys()) - valid_fields
@@ -219,6 +226,8 @@ class SQLiteJobStore(JobStore):
                         value = json.dumps(value)
                     elif key in ("created_at", "updated_at") and isinstance(value, datetime):
                         value = value.isoformat()
+                    elif key == "api_review" and isinstance(value, bool):
+                        value = 1 if value else 0
 
                     set_parts.append(f"{key} = ?")
                     values.append(value)
@@ -302,4 +311,7 @@ class SQLiteJobStore(JobStore):
             updated_at=datetime.fromisoformat(row["updated_at"])
             if row["updated_at"]
             else None,
+            api_review=bool(row.get("api_review", 0)),
+            cost_estimate_json=row.get("cost_estimate_json"),
+            review_result_json=row.get("review_result_json"),
         )

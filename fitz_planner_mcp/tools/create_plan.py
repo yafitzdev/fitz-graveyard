@@ -28,6 +28,7 @@ async def create_plan(
     timeline: str | None,
     context: str | None,
     integration_points: list[str] | None,
+    api_review: bool,
     store: JobStore,
     config: FitzPlannerConfig,
 ) -> dict:
@@ -41,6 +42,7 @@ async def create_plan(
         timeline: Optional timeline constraints (e.g., "2 weeks", "Q1 2026")
         context: Optional additional context or constraints
         integration_points: Optional list of systems/APIs to integrate with
+        api_review: Whether to enable API review for this job (default: False)
         store: Job storage instance
         config: Configuration instance
 
@@ -74,6 +76,7 @@ async def create_plan(
         quality_score=None,
         created_at=datetime.now(timezone.utc),
         file_path=None,
+        api_review=api_review,
     )
 
     # Add to store
@@ -85,8 +88,17 @@ async def create_plan(
         raise ToolError(f"Internal error creating job: {e}")
 
     logger.info(
-        f"Created planning job {job_id} for: {cleaned_description[:80]}..."
+        f"Created planning job {job_id} for: {cleaned_description[:80]}... (api_review={api_review})"
     )
+
+    # Build next_steps message based on api_review
+    if api_review:
+        next_steps = (
+            "Job will pause for cost confirmation before API review. "
+            "Use check_status to see estimate, then confirm_review or cancel_review."
+        )
+    else:
+        next_steps = "Use check_status with job_id to monitor progress"
 
     # Build response
     response = CreatePlanResponse(
@@ -94,6 +106,8 @@ async def create_plan(
         status="queued",
         eta="Not yet implemented - planning engine coming in Phase 4",
         model=config.ollama.model,
+        api_review=api_review,
+        next_steps=next_steps,
     )
 
     return response.model_dump()

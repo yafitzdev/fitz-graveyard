@@ -21,6 +21,7 @@ class JobState(Enum):
 
     QUEUED = "queued"
     RUNNING = "running"
+    AWAITING_REVIEW = "awaiting_review"
     COMPLETE = "complete"
     FAILED = "failed"
     INTERRUPTED = "interrupted"
@@ -48,6 +49,9 @@ class JobRecord:
     error: str | None = None  # Error message if state=FAILED
     pipeline_state: str | None = None  # JSON checkpoint data
     updated_at: datetime | None = None
+    api_review: bool = False  # Whether user opted into API review
+    cost_estimate_json: str | None = None  # Serialized CostEstimate JSON (set by worker)
+    review_result_json: str | None = None  # Serialized list of ReviewResult JSON (set after review)
 
 
 class InMemoryJobStore(JobStore):

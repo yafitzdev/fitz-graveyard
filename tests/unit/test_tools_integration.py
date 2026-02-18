@@ -45,6 +45,7 @@ async def test_create_plan_persists(store, config):
         timeline="1 week",
         context="Testing context",
         integration_points=["api1", "api2"],
+        api_review=False,
         store=store,
         config=config,
     )
@@ -74,6 +75,7 @@ async def test_check_status_queued(store, config):
         timeline=None,
         context=None,
         integration_points=None,
+        api_review=False,
         store=store,
         config=config,
     )
@@ -129,6 +131,7 @@ async def test_list_plans_with_multiple(store, config):
             timeline=None,
             context=None,
             integration_points=None,
+            api_review=False,
             store=store,
             config=config,
         )
@@ -252,6 +255,7 @@ async def test_retry_queued_job_fails(store, config):
         timeline=None,
         context=None,
         integration_points=None,
+        api_review=False,
         store=store,
         config=config,
     )

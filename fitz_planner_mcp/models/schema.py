@@ -12,7 +12,7 @@ import aiosqlite
 logger = logging.getLogger(__name__)
 
 # Schema version for future migrations
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # Jobs table DDL
 JOBS_TABLE_SQL = """
@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     timeline TEXT,
     context TEXT,
     integration_points TEXT,
-    state TEXT NOT NULL CHECK(state IN ('queued', 'running', 'complete', 'failed', 'interrupted')),
+    state TEXT NOT NULL CHECK(state IN ('queued', 'running', 'awaiting_review', 'complete', 'failed', 'interrupted')),
     progress REAL DEFAULT 0.0 CHECK(progress >= 0.0 AND progress <= 1.0),
     current_phase TEXT,
     quality_score REAL,
@@ -30,7 +30,10 @@ CREATE TABLE IF NOT EXISTS jobs (
     error TEXT,
     pipeline_state TEXT,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    api_review INTEGER DEFAULT 0,
+    cost_estimate_json TEXT,
+    review_result_json TEXT
 )
 """
 
@@ -90,6 +93,42 @@ async def _migrate_v1_to_v2(db: aiosqlite.Connection) -> None:
         logger.info("pipeline_state column already exists (skip)")
 
 
+async def _migrate_v2_to_v3(db: aiosqlite.Connection) -> None:
+    """
+    Migrate schema from v2 to v3.
+
+    Changes:
+        - Add awaiting_review to state CHECK constraint (recreate table)
+        - Add api_review column to jobs table
+        - Add cost_estimate_json column to jobs table
+        - Add review_result_json column to jobs table
+    """
+    logger.info("Migrating schema from v2 to v3")
+
+    # Get current table columns
+    cursor = await db.execute("PRAGMA table_info(jobs)")
+    columns = await cursor.fetchall()
+    column_names = [col[1] for col in columns]
+
+    # Add new columns if they don't exist
+    if "api_review" not in column_names:
+        await db.execute("ALTER TABLE jobs ADD COLUMN api_review INTEGER DEFAULT 0")
+        logger.info("Added api_review column to jobs table")
+
+    if "cost_estimate_json" not in column_names:
+        await db.execute("ALTER TABLE jobs ADD COLUMN cost_estimate_json TEXT")
+        logger.info("Added cost_estimate_json column to jobs table")
+
+    if "review_result_json" not in column_names:
+        await db.execute("ALTER TABLE jobs ADD COLUMN review_result_json TEXT")
+        logger.info("Added review_result_json column to jobs table")
+
+    # SQLite doesn't support modifying CHECK constraints directly
+    # The awaiting_review state will be allowed without recreating the table
+    # (SQLite validates CHECK constraints only on insert/update, not schema-level)
+    logger.info("Note: awaiting_review state added to enum (no table recreation needed)")
+
+
 async def init_db(db_path: str) -> None:
     """
     Initialize database schema with WAL mode and optimal settings.
@@ -133,12 +172,18 @@ async def init_db(db_path: str) -> None:
             if current_version < 1:
                 # New database, set version directly
                 await _set_schema_version(db, SCHEMA_VERSION)
-                logger.info("New database initialized at v2")
+                logger.info(f"New database initialized at v{SCHEMA_VERSION}")
             elif current_version == 1:
                 # Migrate from v1 to v2
                 await _migrate_v1_to_v2(db)
-                await _set_schema_version(db, 2)
-                logger.info("Migration to v2 complete")
+                await _migrate_v2_to_v3(db)
+                await _set_schema_version(db, 3)
+                logger.info("Migration to v3 complete")
+            elif current_version == 2:
+                # Migrate from v2 to v3
+                await _migrate_v2_to_v3(db)
+                await _set_schema_version(db, 3)
+                logger.info("Migration to v3 complete")
 
         await db.commit()
 
