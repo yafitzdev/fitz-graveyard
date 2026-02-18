@@ -69,9 +69,15 @@ async def test_worker_uses_pipeline(store: SQLiteJobStore, tmp_path: Path):
         "design": {
             "adrs": [],
             "components": [],
-            "data_model": {},  # Note: data_model is dict, not string
+            "data_model": {},
+            "integration_points": [],
         },
-        "roadmap": {"phases": [], "critical_path": []},
+        "roadmap": {
+            "phases": [],
+            "critical_path": [],
+            "parallel_opportunities": [],
+            "total_phases": 0,
+        },
         "risk": {"risks": []},
     }
 
@@ -140,11 +146,11 @@ async def test_worker_progress_updates(store: SQLiteJobStore, tmp_path: Path):
     async def mock_execute(client, job_id, job_description, resume, progress_callback):
         # Simulate stage progress updates
         if progress_callback:
-            progress_callback(0.1, "context")
+            await progress_callback(0.1, "context")
             await asyncio.sleep(0.05)
-            progress_callback(0.25, "context_complete")
+            await progress_callback(0.25, "context_complete")
             await asyncio.sleep(0.05)
-            progress_callback(0.45, "architecture_complete")
+            await progress_callback(0.45, "architecture_complete")
 
         # Return result
         result = MagicMock()
@@ -153,8 +159,8 @@ async def test_worker_progress_updates(store: SQLiteJobStore, tmp_path: Path):
         result.outputs = {
             "context": {"project_description": "Test", "key_requirements": [], "constraints": [], "existing_context": "", "stakeholders": [], "scope_boundaries": {}},
             "architecture": {"approaches": [], "recommended": "Test", "reasoning": "Test", "key_tradeoffs": {}, "technology_considerations": []},
-            "design": {"adrs": [], "components": [], "data_model": {}},
-            "roadmap": {"phases": [], "critical_path": []},
+            "design": {"adrs": [], "components": [], "data_model": {}, "integration_points": []},
+            "roadmap": {"phases": [], "critical_path": [], "parallel_opportunities": [], "total_phases": 0},
             "risk": {"risks": []},
         }
         return result

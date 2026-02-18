@@ -101,7 +101,7 @@ class PlanRenderer:
             sections.append("")
 
         sections.append(f"### Recommended: {plan.architecture.recommended}")
-        sections.append(f"\n{plan.architecture.rationale}")
+        sections.append(f"\n{plan.architecture.reasoning}")
         sections.append("")
 
         # Design
@@ -114,7 +114,7 @@ class PlanRenderer:
                 sections.append(f"- Decision: {adr.decision}")
                 sections.append(f"- Rationale: {adr.rationale}")
                 sections.append(
-                    f"- Alternatives: {', '.join(adr.alternatives) if adr.alternatives else 'None listed'}"
+                    f"- Alternatives: {', '.join(adr.alternatives_considered) if adr.alternatives_considered else 'None listed'}"
                 )
                 sections.append("")
 
@@ -122,7 +122,8 @@ class PlanRenderer:
             sections.append("### Components")
             for comp in plan.design.components:
                 sections.append(f"**{comp.name}**")
-                sections.append(f"- Responsibility: {comp.responsibility}")
+                sections.append(f"- Purpose: {comp.purpose}")
+                sections.append(f"- Responsibilities: {', '.join(comp.responsibilities) if comp.responsibilities else 'None listed'}")
                 sections.append(
                     f"- Interfaces: {', '.join(comp.interfaces) if comp.interfaces else 'None listed'}"
                 )
@@ -130,26 +131,27 @@ class PlanRenderer:
 
         if plan.design.data_model:
             sections.append("### Data Model")
-            sections.append(plan.design.data_model)
-            sections.append("")
+            for entity, attrs in plan.design.data_model.items():
+                sections.append(f"**{entity}**")
+                for attr in attrs:
+                    sections.append(f"- {attr}")
+                sections.append("")
 
         # Roadmap
         sections.append("## Roadmap")
         sections.append("")
         for i, phase in enumerate(plan.roadmap.phases, start=1):
-            sections.append(f"### Phase {i}: {phase.name}")
-            sections.append(f"**Goal:** {phase.goal}")
+            sections.append(f"### Phase {phase.number}: {phase.name}")
+            sections.append(f"**Objective:** {phase.objective}")
             sections.append("")
-            if phase.tasks:
-                sections.append("**Tasks:**")
-                for task in phase.tasks:
-                    sections.append(f"- {task}")
+            if phase.deliverables:
+                sections.append("**Deliverables:**")
+                for deliverable in phase.deliverables:
+                    sections.append(f"- {deliverable}")
                 sections.append("")
             if phase.dependencies:
-                sections.append(f"**Dependencies:** {', '.join(phase.dependencies)}")
+                sections.append(f"**Dependencies:** Phases {', '.join(str(d) for d in phase.dependencies)}")
                 sections.append("")
-            sections.append(f"**Duration:** {phase.duration}")
-            sections.append("")
 
         if plan.roadmap.critical_path:
             sections.append("### Critical Path")
@@ -161,14 +163,14 @@ class PlanRenderer:
         sections.append("## Risk Analysis")
         sections.append("")
         for risk in plan.risk.risks:
-            sections.append(f"### {risk.title}")
+            sections.append(f"### {risk.category.title()} Risk")
             sections.append(f"**Description:** {risk.description}")
             sections.append(f"**Impact:** {risk.impact} | **Likelihood:** {risk.likelihood}")
             sections.append(f"**Mitigation:** {risk.mitigation}")
             if risk.contingency:
                 sections.append(f"**Contingency:** {risk.contingency}")
             if risk.affected_phases:
-                sections.append(f"**Affected Phases:** {', '.join(risk.affected_phases)}")
+                sections.append(f"**Affected Phases:** {', '.join(str(p) for p in risk.affected_phases)}")
             sections.append("")
 
         return "\n".join(sections)

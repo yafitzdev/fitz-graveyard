@@ -40,16 +40,34 @@ async def store(tmp_path: Path) -> SQLiteJobStore:
 @pytest.mark.asyncio
 async def test_full_pipeline_execution(store: SQLiteJobStore):
     """Test full pipeline execution with mock LLM."""
+    # Add a test job to the store
+    from fitz_planner_mcp.models.jobs import JobRecord, JobState
+    from datetime import datetime, timezone
+
+    job = JobRecord(
+        job_id="test_job",
+        description="Create REST API service",
+        timeline=None,
+        context=None,
+        integration_points=[],
+        state=JobState.QUEUED,
+        progress=0.0,
+        current_phase=None,
+        quality_score=None,
+        created_at=datetime.now(timezone.utc),
+    )
+    await store.add(job)
+
     # Create mock LLM client
     mock_client = AsyncMock()
 
     # Mock responses for each stage
     mock_responses = {
-        "context": '{"project_description": "API service", "requirements": ["REST"], "constraints": [], "stakeholders": []}',
+        "context": '{"project_description": "API service", "key_requirements": [], "constraints": [], "existing_context": "", "stakeholders": [], "scope_boundaries": {}}',
         "architecture_reasoning": "We should use microservices because...",
-        "architecture_format": '{"approaches": [{"name": "Monolith", "description": "Single app", "pros": ["Simple"], "cons": ["Scale"]}], "recommended": "Monolith", "rationale": "Best for now"}',
-        "design": '{"adrs": [], "components": [], "data_model": ""}',
-        "roadmap": '{"phases": [], "critical_path": []}',
+        "architecture_format": '{"approaches": [{"name": "Monolith", "description": "Single app", "pros": ["Simple"], "cons": ["Scale"]}], "recommended": "Monolith", "reasoning": "Best for now"}',
+        "design": '{"adrs": [], "components": [], "data_model": {}, "integration_points": []}',
+        "roadmap": '{"phases": [], "critical_path": [], "parallel_opportunities": [], "total_phases": 0}',
         "risk": '{"risks": []}',
     }
 
@@ -71,7 +89,7 @@ async def test_full_pipeline_execution(store: SQLiteJobStore):
     mock_client.generate_chat = mock_generate_chat
 
     # Create pipeline
-    checkpoint_mgr = CheckpointManager(store)
+    checkpoint_mgr = CheckpointManager(store._db_path)
     pipeline = PlanningPipeline(DEFAULT_STAGES, checkpoint_mgr)
 
     # Execute pipeline
@@ -101,20 +119,38 @@ async def test_full_pipeline_execution(store: SQLiteJobStore):
 @pytest.mark.asyncio
 async def test_pipeline_with_confidence_scoring(store: SQLiteJobStore):
     """Test pipeline integration with confidence scoring."""
+    # Add a test job to the store
+    from fitz_planner_mcp.models.jobs import JobRecord, JobState
+    from datetime import datetime, timezone
+
+    job = JobRecord(
+        job_id="test_job",
+        description="Test project",
+        timeline=None,
+        context=None,
+        integration_points=[],
+        state=JobState.QUEUED,
+        progress=0.0,
+        current_phase=None,
+        quality_score=None,
+        created_at=datetime.now(timezone.utc),
+    )
+    await store.add(job)
+
     # Create mock LLM client
     mock_client = AsyncMock()
 
     # Simple mock response
     async def mock_generate_chat(messages):
         result = MagicMock()
-        result.content = '{"project_description": "Test", "requirements": [], "constraints": [], "stakeholders": []}'
+        result.content = '{"project_description": "Test", "key_requirements": [], "constraints": [], "existing_context": "", "stakeholders": [], "scope_boundaries": {}}'
         return result
 
     mock_client.generate_chat = mock_generate_chat
     mock_client.generate = AsyncMock(return_value="yes")  # For scorer
 
     # Create pipeline
-    checkpoint_mgr = CheckpointManager(store)
+    checkpoint_mgr = CheckpointManager(store._db_path)
     pipeline = PlanningPipeline(DEFAULT_STAGES[:1], checkpoint_mgr)  # Just context stage
 
     # Execute pipeline
@@ -144,7 +180,7 @@ async def test_plan_output_creation_and_rendering():
     # Import schemas
     from fitz_planner_mcp.planning.schemas.context import ContextOutput
     from fitz_planner_mcp.planning.schemas.architecture import ArchitectureOutput, Approach
-    from fitz_planner_mcp.planning.schemas.design import DesignOutput, ADR, Component
+    from fitz_planner_mcp.planning.schemas.design import DesignOutput, ADR, ComponentDesign
     from fitz_planner_mcp.planning.schemas.roadmap import RoadmapOutput, Phase
     from fitz_planner_mcp.planning.schemas.risk import RiskOutput, Risk
 
@@ -185,11 +221,12 @@ async def test_plan_output_creation_and_rendering():
                 )
             ],
             components=[
-                Component(
+                ComponentDesign(
                     name="AuthService",
                     purpose="Authentication",
-                    responsibility="Handle authentication",
+                    responsibilities=["Handle authentication"],
                     interfaces=["POST /login"],
+                    dependencies=[],
                 )
             ],
             data_model={"User": ["id", "email"], "Session": ["id", "user_id"]},
@@ -299,6 +336,24 @@ async def test_overall_quality_score():
 @pytest.mark.asyncio
 async def test_checkpoint_recovery_with_pipeline(store: SQLiteJobStore):
     """Test checkpoint recovery integration with pipeline."""
+    # Add a test job to the store
+    from fitz_planner_mcp.models.jobs import JobRecord, JobState
+    from datetime import datetime, timezone
+
+    job = JobRecord(
+        job_id="test_job",
+        description="Test project",
+        timeline=None,
+        context=None,
+        integration_points=[],
+        state=JobState.QUEUED,
+        progress=0.0,
+        current_phase=None,
+        quality_score=None,
+        created_at=datetime.now(timezone.utc),
+    )
+    await store.add(job)
+
     # Create mock LLM client
     mock_client = AsyncMock()
 
@@ -311,7 +366,7 @@ async def test_checkpoint_recovery_with_pipeline(store: SQLiteJobStore):
     mock_client.generate_chat = mock_generate_chat
 
     # Create pipeline
-    checkpoint_mgr = CheckpointManager(store)
+    checkpoint_mgr = CheckpointManager(store._db_path)
     pipeline = PlanningPipeline(DEFAULT_STAGES[:1], checkpoint_mgr)
 
     # Execute pipeline (first time)

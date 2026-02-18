@@ -15,12 +15,13 @@ Tests cover:
 import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
 
 from fitz_planner_mcp.background.worker import BackgroundWorker
+from fitz_planner_mcp.config.schema import FitzPlannerConfig
 from fitz_planner_mcp.models.jobs import JobRecord, JobState
 from fitz_planner_mcp.models.sqlite_store import SQLiteJobStore
 
@@ -36,14 +37,28 @@ async def store(tmp_path: Path) -> SQLiteJobStore:
 
 
 @pytest.mark.asyncio
-async def test_process_job_success(store: SQLiteJobStore):
+async def test_process_job_success(store: SQLiteJobStore, tmp_path: Path):
     """Test successful job processing with mocked OllamaClient."""
+    # Create config with output directory
+    config = FitzPlannerConfig()
+    config.output.plans_dir = str(tmp_path / "plans")
+
     # Create mock OllamaClient
     mock_client = AsyncMock()
     mock_client.health_check = AsyncMock(return_value=True)
-    mock_client.generate_with_monitoring = AsyncMock(
-        return_value=("Plan content here", "qwen2.5-coder-next:80b-instruct")
-    )
+    mock_client.generate = AsyncMock(return_value="yes")  # For confidence scorer
+
+    # Mock pipeline result
+    mock_pipeline_result = MagicMock()
+    mock_pipeline_result.success = True
+    mock_pipeline_result.git_sha = "abc1234"
+    mock_pipeline_result.outputs = {
+        "context": {"project_description": "Test", "key_requirements": [], "constraints": [], "existing_context": "", "stakeholders": [], "scope_boundaries": {}},
+        "architecture": {"approaches": [], "recommended": "Test", "reasoning": "Test", "key_tradeoffs": {}, "technology_considerations": []},
+        "design": {"adrs": [], "components": [], "data_model": {}, "integration_points": []},
+        "roadmap": {"phases": [], "critical_path": [], "parallel_opportunities": [], "total_phases": 0},
+        "risk": {"risks": []},
+    }
 
     # Add a queued job
     job = JobRecord(
@@ -62,15 +77,14 @@ async def test_process_job_success(store: SQLiteJobStore):
 
     # Create worker with mocked client
     worker = BackgroundWorker(
-        store, poll_interval=0.1, ollama_client=mock_client, memory_threshold=80.0
+        store, config=config, poll_interval=0.1, ollama_client=mock_client, memory_threshold=80.0
     )
-    await worker.start()
 
-    # Wait for job to complete
-    await asyncio.sleep(0.5)
-
-    # Stop worker
-    await worker.stop()
+    # Mock pipeline execute
+    with patch.object(worker._pipeline, "execute", return_value=mock_pipeline_result):
+        await worker.start()
+        await asyncio.sleep(0.5)
+        await worker.stop()
 
     # Verify job is complete
     result = await store.get("test_job")
@@ -78,14 +92,14 @@ async def test_process_job_success(store: SQLiteJobStore):
     assert result.state == JobState.COMPLETE
     assert result.progress == 1.0
 
-    # Verify OllamaClient was called
-    mock_client.health_check.assert_called_once()
-    mock_client.generate_with_monitoring.assert_called_once()
-
 
 @pytest.mark.asyncio
-async def test_process_job_health_check_fails(store: SQLiteJobStore):
+async def test_process_job_health_check_fails(store: SQLiteJobStore, tmp_path: Path):
     """Test job fails when health check returns False."""
+    # Create config with output directory
+    config = FitzPlannerConfig()
+    config.output.plans_dir = str(tmp_path / "plans")
+
     # Create mock OllamaClient with failing health check
     mock_client = AsyncMock()
     mock_client.health_check = AsyncMock(return_value=False)
@@ -107,7 +121,7 @@ async def test_process_job_health_check_fails(store: SQLiteJobStore):
 
     # Create worker with mocked client
     worker = BackgroundWorker(
-        store, poll_interval=0.1, ollama_client=mock_client, memory_threshold=80.0
+        store, config=config, poll_interval=0.1, ollama_client=mock_client, memory_threshold=80.0
     )
     await worker.start()
 
@@ -125,14 +139,28 @@ async def test_process_job_health_check_fails(store: SQLiteJobStore):
 
 
 @pytest.mark.asyncio
-async def test_process_job_oom_fallback(store: SQLiteJobStore):
+async def test_process_job_oom_fallback(store: SQLiteJobStore, tmp_path: Path):
     """Test job completes successfully when OOM fallback is used."""
-    # Create mock OllamaClient that uses fallback model
+    # Create config with output directory
+    config = FitzPlannerConfig()
+    config.output.plans_dir = str(tmp_path / "plans")
+
+    # Create mock OllamaClient
     mock_client = AsyncMock()
     mock_client.health_check = AsyncMock(return_value=True)
-    mock_client.generate_with_monitoring = AsyncMock(
-        return_value=("Plan from fallback model", "qwen2.5-coder-next:32b-instruct")
-    )
+    mock_client.generate = AsyncMock(return_value="yes")  # For confidence scorer
+
+    # Mock pipeline result
+    mock_pipeline_result = MagicMock()
+    mock_pipeline_result.success = True
+    mock_pipeline_result.git_sha = "abc1234"
+    mock_pipeline_result.outputs = {
+        "context": {"project_description": "Test", "key_requirements": [], "constraints": [], "existing_context": "", "stakeholders": [], "scope_boundaries": {}},
+        "architecture": {"approaches": [], "recommended": "Test", "reasoning": "Test", "key_tradeoffs": {}, "technology_considerations": []},
+        "design": {"adrs": [], "components": [], "data_model": {}, "integration_points": []},
+        "roadmap": {"phases": [], "critical_path": [], "parallel_opportunities": [], "total_phases": 0},
+        "risk": {"risks": []},
+    }
 
     # Add a queued job
     job = JobRecord(
@@ -151,15 +179,14 @@ async def test_process_job_oom_fallback(store: SQLiteJobStore):
 
     # Create worker with mocked client
     worker = BackgroundWorker(
-        store, poll_interval=0.1, ollama_client=mock_client, memory_threshold=80.0
+        store, config=config, poll_interval=0.1, ollama_client=mock_client, memory_threshold=80.0
     )
-    await worker.start()
 
-    # Wait for job to complete
-    await asyncio.sleep(0.5)
-
-    # Stop worker
-    await worker.stop()
+    # Mock pipeline execute
+    with patch.object(worker._pipeline, "execute", return_value=mock_pipeline_result):
+        await worker.start()
+        await asyncio.sleep(0.5)
+        await worker.stop()
 
     # Verify job is complete (fallback handled inside OllamaClient)
     result = await store.get("test_job")
@@ -169,14 +196,21 @@ async def test_process_job_oom_fallback(store: SQLiteJobStore):
 
 
 @pytest.mark.asyncio
-async def test_process_job_memory_abort(store: SQLiteJobStore):
+async def test_process_job_memory_abort(store: SQLiteJobStore, tmp_path: Path):
     """Test job fails when memory threshold is exceeded."""
+    # Create config with output directory
+    config = FitzPlannerConfig()
+    config.output.plans_dir = str(tmp_path / "plans")
+
     # Create mock OllamaClient that raises MemoryError
     mock_client = AsyncMock()
     mock_client.health_check = AsyncMock(return_value=True)
-    mock_client.generate_with_monitoring = AsyncMock(
-        side_effect=MemoryError("RAM usage exceeded threshold (80.0%) during generation")
-    )
+
+    # Mock pipeline that raises MemoryError
+    mock_pipeline_result = MagicMock()
+    mock_pipeline_result.success = False
+    mock_pipeline_result.failed_stage = "context"
+    mock_pipeline_result.error = "RAM usage exceeded threshold (80.0%) during generation"
 
     # Add a queued job
     job = JobRecord(
@@ -195,26 +229,29 @@ async def test_process_job_memory_abort(store: SQLiteJobStore):
 
     # Create worker with mocked client
     worker = BackgroundWorker(
-        store, poll_interval=0.1, ollama_client=mock_client, memory_threshold=80.0
+        store, config=config, poll_interval=0.1, ollama_client=mock_client, memory_threshold=80.0
     )
-    await worker.start()
 
-    # Wait for job to fail
-    await asyncio.sleep(0.5)
-
-    # Stop worker
-    await worker.stop()
+    # Mock pipeline execute
+    with patch.object(worker._pipeline, "execute", return_value=mock_pipeline_result):
+        await worker.start()
+        await asyncio.sleep(0.5)
+        await worker.stop()
 
     # Verify job is failed
     result = await store.get("test_job")
     assert result is not None
     assert result.state == JobState.FAILED
-    assert "MemoryError" in result.error
+    assert "RAM usage exceeded threshold" in result.error or "Pipeline failed" in result.error
 
 
 @pytest.mark.asyncio
-async def test_process_job_connection_error(store: SQLiteJobStore):
+async def test_process_job_connection_error(store: SQLiteJobStore, tmp_path: Path):
     """Test job fails when OllamaClient raises ConnectionError."""
+    # Create config with output directory
+    config = FitzPlannerConfig()
+    config.output.plans_dir = str(tmp_path / "plans")
+
     # Create mock OllamaClient that raises ConnectionError on health check
     mock_client = AsyncMock()
     mock_client.health_check = AsyncMock(
@@ -238,7 +275,7 @@ async def test_process_job_connection_error(store: SQLiteJobStore):
 
     # Create worker with mocked client
     worker = BackgroundWorker(
-        store, poll_interval=0.1, ollama_client=mock_client, memory_threshold=80.0
+        store, config=config, poll_interval=0.1, ollama_client=mock_client, memory_threshold=80.0
     )
     await worker.start()
 

@@ -99,7 +99,7 @@ class PlanningPipeline:
         job_id: str,
         job_description: str,
         resume: bool = False,
-        progress_callback: Callable[[float, str], None] | None = None,
+        progress_callback: Callable[[float, str], None] | Callable[[float, str], Any] | None = None,
     ) -> PipelineResult:
         """
         Execute the planning pipeline.
@@ -148,7 +148,9 @@ class PlanningPipeline:
             # Notify progress (start of stage)
             if progress_callback:
                 progress = stage.progress_range[0]
-                progress_callback(progress, stage.name)
+                result_or_coro = progress_callback(progress, stage.name)
+                if hasattr(result_or_coro, '__await__'):
+                    await result_or_coro
 
             # Run stage
             result = await stage.execute(client, job_description, prior_outputs)
@@ -173,7 +175,9 @@ class PlanningPipeline:
             # Notify progress (end of stage)
             if progress_callback:
                 progress = stage.progress_range[1]
-                progress_callback(progress, f"{stage.name}_complete")
+                result_or_coro = progress_callback(progress, f"{stage.name}_complete")
+                if hasattr(result_or_coro, '__await__'):
+                    await result_or_coro
 
             logger.info(f"Stage '{stage.name}' completed successfully")
 
