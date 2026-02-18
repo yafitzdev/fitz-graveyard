@@ -32,6 +32,8 @@ dependencies = [
     "tenacity>=9.0.0",
     "psutil>=6.1.0",
     "fitz-ai",
+    "anthropic>=0.40",
+    "CurrencyConverter>=0.17",
 ]
 
 [project.optional-dependencies]
