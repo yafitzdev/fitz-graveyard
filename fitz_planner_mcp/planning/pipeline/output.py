@@ -180,6 +180,46 @@ class PlanRenderer:
                 sections.append(f"**Affected Phases:** {', '.join(str(p) for p in risk.affected_phases)}")
             sections.append("")
 
+        # API Review (if requested)
+        if plan.api_review_requested:
+            sections.append("## API Review")
+            sections.append("")
+
+            # Check if review was performed (has cost data)
+            if plan.api_review_cost and plan.api_review_cost.get("sections_reviewed", 0) > 0:
+                # Review was performed - show cost summary
+                cost = plan.api_review_cost
+                sections.append("### Cost Summary")
+                sections.append(f"- Sections reviewed: {cost.get('sections_reviewed', 0)}")
+                sections.append(f"- Input tokens: {cost.get('actual_input_tokens', 0):,}")
+                sections.append(f"- Output tokens: {cost.get('actual_output_tokens', 0):,}")
+                sections.append(f"- Cost: ${cost.get('actual_cost_usd', 0.0):.4f} USD (€{cost.get('actual_cost_eur', 0.0):.4f} EUR)")
+
+                # Show model from estimate if available
+                if cost.get('estimate') and cost['estimate'].get('model'):
+                    sections.append(f"- Model: {cost['estimate']['model']}")
+                sections.append("")
+
+                # Show per-section feedback
+                if plan.api_review_feedback:
+                    sections.append("### Section Feedback")
+                    sections.append("")
+                    for section_name, feedback in plan.api_review_feedback.items():
+                        # Get confidence score for section if available
+                        score = plan.section_scores.get(section_name, 0.0)
+                        sections.append(f"#### {section_name.title()} (score: {score:.2f})")
+                        sections.append(feedback)
+                        sections.append("")
+            elif plan.api_review_cost and plan.api_review_cost.get("sections_reviewed", 0) == 0:
+                # API review requested but no sections flagged
+                sections.append("All sections above confidence threshold. No API review required.")
+                sections.append("Estimated cost: $0.00 USD (€0.00 EUR)")
+                sections.append("")
+            else:
+                # API review requested but not yet performed (shouldn't happen in final output)
+                sections.append("API review pending.")
+                sections.append("")
+
         return "\n".join(sections)
 
     def _render_frontmatter(self, plan: PlanOutput) -> str:
@@ -193,6 +233,14 @@ class PlanRenderer:
             lines.append("section_scores:")
             for section, score in plan.section_scores.items():
                 lines.append(f"  {section}: {score}")
+
+        # API Review metadata
+        lines.append(f"api_review_requested: {str(plan.api_review_requested).lower()}")
+        if plan.api_review_cost:
+            cost_usd = plan.api_review_cost.get("actual_cost_usd", 0.0)
+            cost_eur = plan.api_review_cost.get("actual_cost_eur", 0.0)
+            lines.append(f"api_review_cost_usd: {cost_usd:.4f}")
+            lines.append(f"api_review_cost_eur: {cost_eur:.4f}")
 
         lines.append("---")
         lines.append("")

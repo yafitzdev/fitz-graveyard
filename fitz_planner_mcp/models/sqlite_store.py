@@ -292,6 +292,13 @@ class SQLiteJobStore(JobStore):
         Returns:
             JobRecord instance
         """
+        # Helper to safely get column value with default
+        def safe_get(name: str, default=None):
+            try:
+                return row[name]
+            except (KeyError, IndexError):
+                return default
+
         return JobRecord(
             job_id=row["id"],
             description=row["description"],
@@ -311,7 +318,7 @@ class SQLiteJobStore(JobStore):
             updated_at=datetime.fromisoformat(row["updated_at"])
             if row["updated_at"]
             else None,
-            api_review=bool(row.get("api_review", 0)),
-            cost_estimate_json=row.get("cost_estimate_json"),
-            review_result_json=row.get("review_result_json"),
+            api_review=bool(safe_get("api_review", 0)),
+            cost_estimate_json=safe_get("cost_estimate_json"),
+            review_result_json=safe_get("review_result_json"),
         )

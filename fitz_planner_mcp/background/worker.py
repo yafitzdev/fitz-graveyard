@@ -23,6 +23,8 @@ from fitz_planner_mcp.planning.pipeline.orchestrator import PlanningPipeline
 from fitz_planner_mcp.planning.pipeline.output import PlanRenderer
 from fitz_planner_mcp.planning.pipeline.stages import DEFAULT_STAGES, create_stages
 from fitz_planner_mcp.planning.schemas.plan_output import PlanOutput
+from fitz_planner_mcp.api_review.schemas import ReviewRequest, CostBreakdown
+from fitz_planner_mcp.api_review.client import AnthropicReviewClient
 
 logger = logging.getLogger(__name__)
 
@@ -220,7 +222,11 @@ class BackgroundWorker:
         Process a planning job using PlanningPipeline.
 
         Runs health check, executes multi-stage pipeline, scores outputs,
-        renders markdown, and writes to file.
+        handles API review if requested, renders markdown, and writes to file.
+
+        Two-pass flow for API review:
+        - Pass 1: Run pipeline, score, flag sections, estimate cost, pause at AWAITING_REVIEW
+        - Pass 2: Resume from stored pipeline state, execute API review, incorporate feedback, complete
 
         Args:
             job: JobRecord to process
@@ -237,45 +243,205 @@ class BackgroundWorker:
             await asyncio.sleep(0.1)
             return
 
-        # Step 1: Health check
-        await self._store.update(job.job_id, progress=0.05, current_phase="health_check")
-        healthy = await self._ollama_client.health_check()
-        if not healthy:
-            raise ConnectionError(
-                "Ollama health check failed: server not available or model not found"
+        # Detect if this is the second pass (API review confirmed)
+        is_review_confirmed = job.current_phase == "api_review_confirmed"
+
+        # Step 1: Health check (skip on second pass)
+        if not is_review_confirmed:
+            await self._store.update(job.job_id, progress=0.05, current_phase="health_check")
+            healthy = await self._ollama_client.health_check()
+            if not healthy:
+                raise ConnectionError(
+                    "Ollama health check failed: server not available or model not found"
+                )
+
+        # Step 2: Execute pipeline with progress callback (skip on second pass)
+        if not is_review_confirmed:
+            async def progress_callback(progress: float, phase: str) -> None:
+                await self._store.update(job.job_id, progress=progress, current_phase=phase)
+
+            result = await self._pipeline.execute(
+                client=self._ollama_client,
+                job_id=job.job_id,
+                job_description=job.description,
+                resume=False,
+                progress_callback=progress_callback,
             )
 
-        # Step 2: Execute pipeline with progress callback
-        async def progress_callback(progress: float, phase: str) -> None:
-            await self._store.update(job.job_id, progress=progress, current_phase=phase)
+            if not result.success:
+                raise RuntimeError(
+                    f"Pipeline failed at stage '{result.failed_stage}': {result.error}"
+                )
+        else:
+            # Second pass: load pipeline state from job.pipeline_state
+            import json
+            from fitz_planner_mcp.planning.pipeline.orchestrator import PipelineResult
 
-        result = await self._pipeline.execute(
-            client=self._ollama_client,
-            job_id=job.job_id,
-            job_description=job.description,
-            resume=False,
-            progress_callback=progress_callback,
-        )
+            if not job.pipeline_state:
+                raise RuntimeError("API review confirmed but no pipeline state stored")
 
-        if not result.success:
-            raise RuntimeError(
-                f"Pipeline failed at stage '{result.failed_stage}': {result.error}"
+            # Reconstruct PipelineResult from stored JSON
+            state_data = json.loads(job.pipeline_state)
+            result = PipelineResult(**state_data)
+            logger.info(f"Loaded pipeline state for API review continuation (job {job.job_id})")
+
+        # Step 3: Score sections with confidence scorer (skip on second pass - use stored scores)
+        if not is_review_confirmed:
+            await self._store.update(job.job_id, progress=0.96, current_phase="scoring")
+            section_scores = {}
+            if self._scorer:
+                for stage_name, stage_output in result.outputs.items():
+                    # Score based on stage output (simplified: score description if available)
+                    content = str(stage_output)
+                    score = await self._scorer.score_section(stage_name, content)
+                    section_scores[stage_name] = score
+
+            # Compute overall quality score
+            overall_score = 0.0
+            if self._flagger and section_scores:
+                overall_score = self._flagger.compute_overall_score(section_scores)
+
+            # Step 3a: Check for API review and flag sections
+            flagged_sections = []
+            if job.api_review and self._flagger:
+                for section_name, score in section_scores.items():
+                    is_flagged, reason = self._flagger.flag_section(section_name, score)
+                    if is_flagged:
+                        flagged_sections.append(ReviewRequest(
+                            section_name=section_name,
+                            section_type=section_name,
+                            content=str(result.outputs[section_name]),
+                            confidence_score=score,
+                            flag_reason=reason,
+                        ))
+
+            # Step 3b: If flagged sections exist, estimate cost and pause at AWAITING_REVIEW
+            if flagged_sections and job.api_review:
+                # Check if Anthropic API key is configured
+                if self._config.anthropic.api_key is None:
+                    logger.warning(
+                        f"API review requested for job {job.job_id} but no Anthropic API key configured. "
+                        "Skipping review and completing normally."
+                    )
+                    # Fall through to normal completion
+                else:
+                    # Create review client and estimate cost
+                    review_client = AnthropicReviewClient(
+                        api_key=self._config.anthropic.api_key,
+                        model=self._config.anthropic.model
+                    )
+                    cost_calculator = review_client.get_cost_calculator()
+                    cost_estimate = await cost_calculator.estimate_review_cost(
+                        flagged_sections,
+                        model=self._config.anthropic.model
+                    )
+
+                    # Store cost estimate and pipeline state
+                    import json
+                    await self._store.update(
+                        job.job_id,
+                        cost_estimate_json=cost_estimate.model_dump_json(),
+                        pipeline_state=json.dumps(result.model_dump()),
+                        state=JobState.AWAITING_REVIEW,
+                        progress=0.96,
+                        current_phase="awaiting_review_confirmation",
+                    )
+
+                    logger.info(
+                        f"Job {job.job_id} paused at AWAITING_REVIEW. "
+                        f"{len(flagged_sections)} sections flagged. "
+                        f"Estimated cost: ${cost_estimate.cost_usd:.4f} USD"
+                    )
+                    return  # EARLY RETURN - wait for user confirmation
+
+            # Step 3c: If api_review=True but NO flagged sections, continue normally
+            if job.api_review and not flagged_sections:
+                logger.info(f"Job {job.job_id}: All sections above confidence threshold, no API review needed")
+                # Create zero-cost breakdown
+                api_review_cost = CostBreakdown(
+                    estimate=None,
+                    actual_input_tokens=0,
+                    actual_output_tokens=0,
+                    actual_cost_usd=0.0,
+                    actual_cost_eur=0.0,
+                    sections_reviewed=0,
+                    sections_failed=0,
+                )
+                api_review_cost_dict = api_review_cost.model_dump()
+                api_review_feedback = {}
+            else:
+                # No API review requested or not configured
+                api_review_cost_dict = None
+                api_review_feedback = None
+
+        else:
+            # Second pass: execute API review
+            import json
+            from fitz_planner_mcp.api_review.schemas import CostEstimate
+
+            await self._store.update(job.job_id, progress=0.96, current_phase="executing_review")
+
+            # Load flagged sections from cost estimate
+            cost_estimate = CostEstimate.model_validate_json(job.cost_estimate_json)
+
+            # Reconstruct flagged sections from stored pipeline state
+            section_scores = {}
+            flagged_sections = []
+            if self._scorer and self._flagger:
+                for stage_name, stage_output in result.outputs.items():
+                    content = str(stage_output)
+                    score = await self._scorer.score_section(stage_name, content)
+                    section_scores[stage_name] = score
+
+                    is_flagged, reason = self._flagger.flag_section(stage_name, score)
+                    if is_flagged:
+                        flagged_sections.append(ReviewRequest(
+                            section_name=stage_name,
+                            section_type=stage_name,
+                            content=content,
+                            confidence_score=score,
+                            flag_reason=reason,
+                        ))
+
+            # Execute actual review
+            review_client = AnthropicReviewClient(
+                api_key=self._config.anthropic.api_key,
+                model=self._config.anthropic.model
+            )
+            review_results = await review_client.review_sections(flagged_sections)
+
+            # Calculate actual cost
+            cost_calculator = review_client.get_cost_calculator()
+            actual_cost = cost_calculator.calculate_actual_cost(
+                review_results,
+                model=self._config.anthropic.model
+            )
+            actual_cost.estimate = cost_estimate  # Attach original estimate
+            api_review_cost_dict = actual_cost.model_dump()
+
+            # Extract feedback for successful reviews
+            api_review_feedback = {
+                result.section_name: result.feedback
+                for result in review_results
+                if result.success and result.feedback
+            }
+
+            # Store review result
+            await self._store.update(
+                job.job_id,
+                review_result_json=json.dumps([r.model_dump() for r in review_results])
             )
 
-        # Step 3: Score sections with confidence scorer
-        await self._store.update(job.job_id, progress=0.96, current_phase="scoring")
-        section_scores = {}
-        if self._scorer:
-            for stage_name, stage_output in result.outputs.items():
-                # Score based on stage output (simplified: score description if available)
-                content = str(stage_output)
-                score = await self._scorer.score_section(stage_name, content)
-                section_scores[stage_name] = score
+            # Compute overall quality score from section scores
+            overall_score = 0.0
+            if self._flagger and section_scores:
+                overall_score = self._flagger.compute_overall_score(section_scores)
 
-        # Compute overall quality score
-        overall_score = 0.0
-        if self._flagger and section_scores:
-            overall_score = self._flagger.compute_overall_score(section_scores)
+            logger.info(
+                f"Job {job.job_id}: API review complete. "
+                f"{actual_cost.sections_reviewed}/{len(flagged_sections)} sections reviewed successfully. "
+                f"Actual cost: ${actual_cost.actual_cost_usd:.4f} USD"
+            )
 
         # Step 4: Create PlanOutput with all stage outputs
         # Pipeline outputs are dicts from model_dump(), need to reconstruct Pydantic models
@@ -297,6 +463,9 @@ class BackgroundWorker:
             overall_quality_score=overall_score,
             git_sha=result.git_sha or "",
             generated_at=datetime.now(),
+            api_review_requested=job.api_review,
+            api_review_cost=api_review_cost_dict,
+            api_review_feedback=api_review_feedback,
         )
 
         # Step 5: Render to markdown

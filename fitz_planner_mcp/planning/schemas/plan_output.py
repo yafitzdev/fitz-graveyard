@@ -66,3 +66,19 @@ class PlanOutput(BaseModel):
         default_factory=datetime.utcnow,
         description="Timestamp when plan was generated",
     )
+
+    # API Review metadata
+    api_review_requested: bool = Field(
+        default=False,
+        description="Whether API review was requested for this plan",
+    )
+
+    api_review_cost: dict | None = Field(
+        default=None,
+        description="Cost breakdown from API review (CostBreakdown as dict), if review was performed",
+    )
+
+    api_review_feedback: dict[str, str] | None = Field(
+        default=None,
+        description="API review feedback per section (section_name -> feedback text)",
+    )
