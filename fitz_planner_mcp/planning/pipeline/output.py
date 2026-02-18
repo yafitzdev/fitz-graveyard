@@ -44,12 +44,13 @@ class PlanRenderer:
         ...
     """
 
-    def render(self, plan: PlanOutput) -> str:
+    def render(self, plan: PlanOutput, head_advanced: bool = False) -> str:
         """
         Render PlanOutput to markdown string.
 
         Args:
             plan: Validated PlanOutput with all stage outputs
+            head_advanced: If True, HEAD changed during generation
 
         Returns:
             Formatted markdown string
@@ -58,6 +59,12 @@ class PlanRenderer:
 
         # Frontmatter
         sections.append(self._render_frontmatter(plan))
+
+        # Freshness warning
+        if head_advanced:
+            sections.append("> **WARNING**: Repository HEAD advanced during plan generation.")
+            sections.append("> This plan may not reflect the latest codebase state.")
+            sections.append("")
 
         # Title
         project_name = plan.context.project_description.split("\n")[0][:80]

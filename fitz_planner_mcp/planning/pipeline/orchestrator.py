@@ -36,6 +36,7 @@ class PipelineResult:
     failed_stage: str | None = None
     error: str | None = None
     git_sha: str | None = None
+    head_advanced: bool = False
 
 
 def get_git_sha() -> str | None:
@@ -114,6 +115,9 @@ class PlanningPipeline:
         Returns:
             PipelineResult with all stage outputs or error
         """
+        # Capture git SHA at start for freshness detection
+        start_sha = get_git_sha()
+
         # Load checkpoint (if resuming)
         if resume:
             prior_outputs = await self._checkpoint_mgr.load_checkpoint(job_id)
@@ -181,9 +185,23 @@ class PlanningPipeline:
 
             logger.info(f"Stage '{stage.name}' completed successfully")
 
-        # All stages completed
+        # All stages completed — check if HEAD advanced during execution
+        end_sha = get_git_sha()
+        head_advanced = (
+            start_sha is not None
+            and end_sha is not None
+            and start_sha != end_sha
+        )
+        if head_advanced:
+            logger.warning(
+                f"HEAD advanced during pipeline execution: {start_sha[:8]} → {end_sha[:8]}"
+            )
+
         return PipelineResult(
-            success=True, outputs=prior_outputs, git_sha=get_git_sha()
+            success=True,
+            outputs=prior_outputs,
+            git_sha=start_sha,
+            head_advanced=head_advanced,
         )
 
     def get_progress(self, completed_stages: set[str]) -> float:

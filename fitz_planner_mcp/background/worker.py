@@ -300,7 +300,7 @@ class BackgroundWorker:
 
         # Step 5: Render to markdown
         if self._renderer:
-            markdown = self._renderer.render(plan_output)
+            markdown = self._renderer.render(plan_output, head_advanced=result.head_advanced)
         else:
             markdown = "# Plan output\n\n(Renderer not configured)"
 
