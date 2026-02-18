@@ -83,6 +83,27 @@ class ConfidenceConfig(BaseModel):
     )
 
 
+class AnthropicConfig(BaseModel):
+    """Anthropic API configuration for optional API review."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    api_key: str | None = Field(
+        default=None,
+        description="Anthropic API key (None = API review unavailable)",
+    )
+    model: str = Field(
+        default="claude-sonnet-4-5-20250929",
+        description="Model to use for API review",
+    )
+    max_review_tokens: int = Field(
+        default=2048,
+        ge=1,
+        le=8192,
+        description="Maximum tokens for review responses",
+    )
+
+
 class FitzPlannerConfig(BaseModel):
     """Root configuration for fitz-planner-mcp."""
 
@@ -92,3 +113,4 @@ class FitzPlannerConfig(BaseModel):
     krag: KragConfig = Field(default_factory=KragConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
     confidence: ConfidenceConfig = Field(default_factory=ConfidenceConfig)
+    anthropic: AnthropicConfig = Field(default_factory=AnthropicConfig)

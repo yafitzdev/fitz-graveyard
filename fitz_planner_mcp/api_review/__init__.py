@@ -8,10 +8,12 @@ Provides:
 - Token usage tracking and USD/EUR cost breakdown
 """
 
+from .client import AnthropicReviewClient
 from .cost_calculator import CostCalculator
 from .schemas import CostBreakdown, CostEstimate, ReviewRequest, ReviewResult, build_review_prompt
 
 __all__ = [
+    "AnthropicReviewClient",
     "CostCalculator",
     "CostEstimate",
     "ReviewResult",
