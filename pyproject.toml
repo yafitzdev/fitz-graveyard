@@ -10,9 +10,11 @@ description = "MCP server for local-first AI planning with fitz-ai integration"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
+license-files = ["LICENSE"]
 authors = [
     { name = "Yan Fitzer", email = "yan@example.com" }
 ]
+keywords = ["mcp", "planning", "ai", "krag", "model-context-protocol", "ollama", "local-llm"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -21,6 +23,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
     "fastmcp>=2.0",
@@ -32,15 +35,25 @@ dependencies = [
     "tenacity>=9.0.0",
     "psutil>=6.1.0",
     "fitz-ai",
-    "anthropic>=0.40",
-    "CurrencyConverter>=0.17",
 ]
 
 [project.optional-dependencies]
+api-review = [
+    "anthropic>=0.40",
+    "CurrencyConverter>=0.17",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23.0",
+    "build>=1.0",
+    "twine>=5.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/yafitzdev/fitz-planner-mcp"
+Repository = "https://github.com/yafitzdev/fitz-planner-mcp"
+Issues = "https://github.com/yafitzdev/fitz-planner-mcp/issues"
+Documentation = "https://github.com/yafitzdev/fitz-planner-mcp#readme"
 
 [project.scripts]
 fitz-planner-mcp = "fitz_planner_mcp.__main__:main"
