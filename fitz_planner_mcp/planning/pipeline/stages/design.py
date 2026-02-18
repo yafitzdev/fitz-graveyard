@@ -33,7 +33,7 @@ class DesignStage(PipelineStage):
     def build_prompt(
         self, job_description: str, prior_outputs: dict[str, Any]
     ) -> list[dict]:
-        """Build design decisions prompt with prior stage outputs."""
+        """Build design decisions prompt with prior stage outputs and KRAG context."""
         prompt_template = load_prompt("design")
 
         # Include context and architecture
@@ -54,12 +54,18 @@ Reasoning: {arch.get('reasoning', '')}
 Key Tradeoffs: {json.dumps(arch.get('key_tradeoffs', {}), indent=2)}
 """
 
-        # krag_context will be populated in Phase 5-02; empty for now
+        # Query KRAG for component interfaces and data models
+        krag_queries = [
+            "What are the main classes, data models, and their relationships?",
+            "What component interfaces and contracts exist?",
+        ]
+        krag_context = self._get_krag_context(krag_queries, prior_outputs)
+
         prompt = prompt_template.format(
             description=job_description,
             context=context_str.strip(),
             architecture=architecture_str.strip(),
-            krag_context="",
+            krag_context=krag_context,
         )
 
         return [{"role": "user", "content": prompt}]

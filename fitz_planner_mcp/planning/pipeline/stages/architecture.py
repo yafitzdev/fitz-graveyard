@@ -41,7 +41,7 @@ class ArchitectureStage(PipelineStage):
     def build_prompt(
         self, job_description: str, prior_outputs: dict[str, Any]
     ) -> list[dict]:
-        """Build free-form architecture reasoning prompt."""
+        """Build free-form architecture reasoning prompt with KRAG context."""
         # First stage: free-form reasoning (no JSON)
         prompt_template = load_prompt("architecture")
 
@@ -57,8 +57,14 @@ Key Requirements: {', '.join(context.get('key_requirements', []))}
 Constraints: {', '.join(context.get('constraints', []))}
 """
 
-        # krag_context will be populated in Phase 5-02; empty for now
-        prompt = prompt_template.format(context=context_str.strip(), krag_context="")
+        # Query KRAG for design patterns and architectural decisions
+        krag_queries = [
+            "What design patterns and abstractions are used in this codebase?",
+            "What architectural decisions have been made and why?",
+        ]
+        krag_context = self._get_krag_context(krag_queries, prior_outputs)
+
+        prompt = prompt_template.format(context=context_str.strip(), krag_context=krag_context)
 
         return [{"role": "user", "content": prompt}]
 

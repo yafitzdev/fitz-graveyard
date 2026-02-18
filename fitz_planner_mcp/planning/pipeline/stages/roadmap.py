@@ -33,7 +33,7 @@ class RoadmapStage(PipelineStage):
     def build_prompt(
         self, job_description: str, prior_outputs: dict[str, Any]
     ) -> list[dict]:
-        """Build roadmap prompt with prior stage outputs."""
+        """Build roadmap prompt with prior stage outputs and KRAG context."""
         prompt_template = load_prompt("roadmap")
 
         # Include context, architecture, and design
@@ -59,13 +59,19 @@ Components: {', '.join(components)}
 ADR Count: {len(design.get('adrs', []))}
 """
 
-        # krag_context will be populated in Phase 5-02; empty for now
+        # Query KRAG for module dependencies and integration complexity
+        krag_queries = [
+            "What are the module dependencies and import relationships?",
+            "What incomplete features, TODOs, or planned work exists?",
+        ]
+        krag_context = self._get_krag_context(krag_queries, prior_outputs)
+
         prompt = prompt_template.format(
             description=job_description,
             context=context_str.strip(),
             architecture=architecture_str.strip(),
             design=design_str.strip(),
-            krag_context="",
+            krag_context=krag_context,
         )
 
         return [{"role": "user", "content": prompt}]

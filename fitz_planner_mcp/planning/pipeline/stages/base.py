@@ -13,6 +13,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
 
+from fitz_planner_mcp.planning.krag import KragClient
+
 logger = logging.getLogger(__name__)
 
 
@@ -155,6 +157,25 @@ class PipelineStage(ABC):
             ValueError: If output cannot be parsed
         """
         pass
+
+    def _get_krag_context(self, queries: list[str], prior_outputs: dict[str, Any]) -> str:
+        """
+        Get KRAG context for this stage using shared KragClient.
+
+        Retrieves KragClient from prior_outputs['_krag_client'] (created by ContextStage).
+        Returns formatted markdown or empty string if client not available.
+
+        Args:
+            queries: List of questions to ask the codebase
+            prior_outputs: Dictionary containing '_krag_client' from ContextStage
+
+        Returns:
+            Formatted markdown with codebase context, or empty string
+        """
+        krag_client = prior_outputs.get("_krag_client")
+        if krag_client is None:
+            return ""
+        return krag_client.multi_query(queries)
 
     async def execute(
         self,

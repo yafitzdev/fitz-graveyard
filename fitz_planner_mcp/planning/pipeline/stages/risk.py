@@ -33,7 +33,7 @@ class RiskStage(PipelineStage):
     def build_prompt(
         self, job_description: str, prior_outputs: dict[str, Any]
     ) -> list[dict]:
-        """Build risk analysis prompt with prior stage outputs."""
+        """Build risk analysis prompt with prior stage outputs and KRAG context."""
         prompt_template = load_prompt("risk")
 
         # Include all prior stages
@@ -68,14 +68,20 @@ Total Phases: {roadmap.get('total_phases', 0)}
 Critical Path: {roadmap.get('critical_path', [])}
 """
 
-        # krag_context will be populated in Phase 5-02; empty for now
+        # Query KRAG for security patterns and error handling
+        krag_queries = [
+            "What security patterns and error handling exist in the codebase?",
+            "What are the external dependencies and their versions?",
+        ]
+        krag_context = self._get_krag_context(krag_queries, prior_outputs)
+
         prompt = prompt_template.format(
             description=job_description,
             context=context_str.strip(),
             architecture=architecture_str.strip(),
             design=design_str.strip(),
             roadmap=roadmap_str.strip(),
-            krag_context="",
+            krag_context=krag_context,
         )
 
         return [{"role": "user", "content": prompt}]
