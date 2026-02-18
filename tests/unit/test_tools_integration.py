@@ -121,6 +121,40 @@ async def test_check_status_interrupted(store):
 
 
 @pytest.mark.asyncio
+async def test_check_status_awaiting_review(store):
+    """Test check_status for a job awaiting API review confirmation."""
+    # Create a job awaiting review with cost estimate
+    job_id = generate_job_id()
+    record = JobRecord(
+        job_id=job_id,
+        description="Test awaiting review job",
+        timeline=None,
+        context=None,
+        integration_points=[],
+        state=JobState.AWAITING_REVIEW,
+        progress=0.5,
+        current_phase="review_paused",
+        quality_score=None,
+        created_at=datetime.now(timezone.utc),
+        file_path=None,
+        api_review=True,
+        cost_estimate_json='{"total_cost_usd": 0.25, "breakdown": {"openai": 0.25}}',
+    )
+    await store.add(record)
+
+    # Check status
+    status = await check_status(job_id, store=store)
+
+    assert status["state"] == "awaiting_review"
+    assert "awaiting" in status["message"].lower()
+    assert "confirm_review" in status["message"].lower()
+    assert "cancel_review" in status["message"].lower()
+    assert "$0.2500" in status["message"]  # Cost should be in message
+    assert status["cost_estimate"] is not None
+    assert status["cost_estimate"]["total_cost_usd"] == 0.25
+
+
+@pytest.mark.asyncio
 async def test_list_plans_with_multiple(store, config):
     """Test list_plans returns all jobs."""
     # Create 3 jobs

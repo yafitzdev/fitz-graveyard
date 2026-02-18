@@ -21,7 +21,9 @@ from platformdirs import user_config_path
 from fitz_planner_mcp.background.lifecycle import ServerLifecycle
 from fitz_planner_mcp.config.loader import load_config
 from fitz_planner_mcp.models.store import JobStore
+from fitz_planner_mcp.tools.cancel_review import cancel_review as _cancel_review
 from fitz_planner_mcp.tools.check_status import check_status as _check_status
+from fitz_planner_mcp.tools.confirm_review import confirm_review as _confirm_review
 from fitz_planner_mcp.tools.create_plan import create_plan as _create_plan
 from fitz_planner_mcp.tools.get_plan import get_plan as _get_plan
 from fitz_planner_mcp.tools.list_plans import list_plans as _list_plans
@@ -86,11 +88,12 @@ async def create_plan(
     timeline: str | None = None,
     context: str | None = None,
     integration_points: list[str] | None = None,
+    api_review: bool = False,
 ) -> dict:
     """Create a new architectural planning job. Queues work for local LLM processing."""
     store = await get_store()
     return await _create_plan(
-        description, timeline, context, integration_points, store=store, config=_config
+        description, timeline, context, integration_points, api_review, store=store, config=_config
     )
 
 
@@ -122,4 +125,18 @@ async def retry_job(job_id: str) -> dict:
     return await _retry_job(job_id, store=store)
 
 
-logger.info("MCP server initialized with 5 tools")
+@mcp.tool()
+async def confirm_review(job_id: str) -> dict:
+    """Confirm API review for a job awaiting review. Re-queues job for review execution."""
+    store = await get_store()
+    return await _confirm_review(job_id, store=store)
+
+
+@mcp.tool()
+async def cancel_review(job_id: str) -> dict:
+    """Cancel API review for a job awaiting review. Finalizes plan without API review."""
+    store = await get_store()
+    return await _cancel_review(job_id, store=store)
+
+
+logger.info("MCP server initialized with 7 tools")
