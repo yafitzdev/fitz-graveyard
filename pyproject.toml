@@ -33,6 +33,7 @@ dependencies = [
     "ollama>=0.4.0",
     "tenacity>=9.0.0",
     "psutil>=6.1.0",
+    "typer>=0.9",
     "fitz-ai",
 ]
 
@@ -55,7 +56,7 @@ Issues = "https://github.com/yafitzdev/fitz-graveyard/issues"
 Documentation = "https://github.com/yafitzdev/fitz-graveyard#readme"
 
 [project.scripts]
-fitz-graveyard = "fitz_graveyard.__main__:main"
+fitz-graveyard = "fitz_graveyard.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["."]
