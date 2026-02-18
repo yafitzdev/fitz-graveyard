@@ -4,6 +4,8 @@ Your task: Extract and structure the essential context needed for planning.
 
 **CRITICAL: Do NOT write any code. This is a planning exercise only.**
 
+{krag_context}
+
 Given the user's project description:
 {description}
 

@@ -4,6 +4,8 @@ Your task: Identify key risks and develop mitigation strategies.
 
 **CRITICAL: Do NOT write any code. This is a risk analysis exercise.**
 
+{krag_context}
+
 Project context:
 {context}
 

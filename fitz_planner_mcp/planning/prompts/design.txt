@@ -4,6 +4,8 @@ Your task: Document key design decisions and component specifications.
 
 **CRITICAL: Do NOT write any code. This is a design documentation exercise.**
 
+{krag_context}
+
 Project context:
 {context}
 

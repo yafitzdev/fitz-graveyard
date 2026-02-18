@@ -31,6 +31,7 @@ dependencies = [
     "ollama>=0.4.0",
     "tenacity>=9.0.0",
     "psutil>=6.1.0",
+    "fitz-ai",
 ]
 
 [project.optional-dependencies]

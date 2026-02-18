@@ -4,6 +4,8 @@ Your task: Break the project into implementation phases with clear dependencies.
 
 **CRITICAL: Do NOT write any code. This is a planning exercise only.**
 
+{krag_context}
+
 Project context:
 {context}
 

@@ -4,6 +4,8 @@ Your task: Explore multiple architectural approaches and recommend the best one.
 
 **CRITICAL: Do NOT write any code. This is an architecture exploration exercise.**
 
+{krag_context}
+
 Project context:
 {context}
 
