@@ -2,7 +2,6 @@
 """Unit tests for all 5 pipeline stages."""
 
 import json
-from dataclasses import dataclass
 from unittest.mock import AsyncMock
 
 import pytest
@@ -16,13 +15,6 @@ from fitz_graveyard.planning.pipeline.stages import (
     RoadmapStage,
     extract_json,
 )
-
-
-@dataclass
-class MockLLMResponse:
-    """Mock LLM response for testing."""
-
-    content: str
 
 
 class TestJsonExtraction:
@@ -114,17 +106,15 @@ class TestContextStage:
     async def test_execute_success(self, stage):
         """Test successful execution with mock LLM."""
         mock_client = AsyncMock()
-        mock_client.generate_chat.return_value = MockLLMResponse(
-            content=json.dumps(
-                {
-                    "project_description": "Test project",
-                    "key_requirements": ["Req 1"],
-                    "constraints": [],
-                    "existing_context": "",
-                    "stakeholders": [],
-                    "scope_boundaries": {},
-                }
-            )
+        mock_client.generate.return_value = json.dumps(
+            {
+                "project_description": "Test project",
+                "key_requirements": ["Req 1"],
+                "constraints": [],
+                "existing_context": "",
+                "stakeholders": [],
+                "scope_boundaries": {},
+            }
         )
 
         result = await stage.execute(mock_client, "Build something", {})
@@ -132,7 +122,7 @@ class TestContextStage:
         assert result.success is True
         assert result.stage_name == "context"
         assert result.output["project_description"] == "Test project"
-        mock_client.generate_chat.assert_called_once()
+        mock_client.generate.assert_called_once()
 
 
 class TestArchitectureStage:
@@ -197,18 +187,16 @@ class TestArchitectureStage:
 
         # First call: free-form reasoning
         # Second call: JSON formatting
-        mock_client.generate_chat.side_effect = [
-            MockLLMResponse(content="I think a monolith is best because..."),
-            MockLLMResponse(
-                content=json.dumps(
-                    {
-                        "approaches": [],
-                        "recommended": "Monolith",
-                        "reasoning": "Best for MVP",
-                        "key_tradeoffs": {},
-                        "technology_considerations": [],
-                    }
-                )
+        mock_client.generate.side_effect = [
+            "I think a monolith is best because...",
+            json.dumps(
+                {
+                    "approaches": [],
+                    "recommended": "Monolith",
+                    "reasoning": "Best for MVP",
+                    "key_tradeoffs": {},
+                    "technology_considerations": [],
+                }
             ),
         ]
 
@@ -218,7 +206,7 @@ class TestArchitectureStage:
         assert result.stage_name == "architecture"
         assert result.output["recommended"] == "Monolith"
         # Two LLM calls (reasoning + formatting)
-        assert mock_client.generate_chat.call_count == 2
+        assert mock_client.generate.call_count == 2
 
 
 class TestDesignStage:
@@ -277,15 +265,13 @@ class TestDesignStage:
     async def test_execute_with_prior_outputs(self, stage):
         """Ensure prior outputs are incorporated."""
         mock_client = AsyncMock()
-        mock_client.generate_chat.return_value = MockLLMResponse(
-            content=json.dumps(
-                {
-                    "adrs": [],
-                    "components": [],
-                    "data_model": {},
-                    "integration_points": [],
-                }
-            )
+        mock_client.generate.return_value = json.dumps(
+            {
+                "adrs": [],
+                "components": [],
+                "data_model": {},
+                "integration_points": [],
+            }
         )
 
         prior = {"context": {"project_description": "Test"}}
@@ -293,7 +279,7 @@ class TestDesignStage:
 
         assert result.success is True
         # Verify prompt included prior outputs
-        call_args = mock_client.generate_chat.call_args
+        call_args = mock_client.generate.call_args
         messages = call_args.kwargs["messages"]
         assert "Test" in messages[0]["content"]
 
@@ -347,15 +333,13 @@ class TestRoadmapStage:
     @pytest.mark.asyncio
     async def test_execute(self, stage):
         mock_client = AsyncMock()
-        mock_client.generate_chat.return_value = MockLLMResponse(
-            content=json.dumps(
-                {
-                    "phases": [],
-                    "critical_path": [],
-                    "parallel_opportunities": [],
-                    "total_phases": 0,
-                }
-            )
+        mock_client.generate.return_value = json.dumps(
+            {
+                "phases": [],
+                "critical_path": [],
+                "parallel_opportunities": [],
+                "total_phases": 0,
+            }
         )
 
         result = await stage.execute(mock_client, "Build", {})
@@ -401,14 +385,12 @@ class TestRiskStage:
     @pytest.mark.asyncio
     async def test_execute(self, stage):
         mock_client = AsyncMock()
-        mock_client.generate_chat.return_value = MockLLMResponse(
-            content=json.dumps(
-                {
-                    "risks": [],
-                    "overall_risk_level": "low",
-                    "recommended_contingencies": [],
-                }
-            )
+        mock_client.generate.return_value = json.dumps(
+            {
+                "risks": [],
+                "overall_risk_level": "low",
+                "recommended_contingencies": [],
+            }
         )
 
         result = await stage.execute(mock_client, "Build", {})

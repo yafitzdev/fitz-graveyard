@@ -37,16 +37,28 @@ class OllamaConfig(BaseModel):
     )
 
 
-class KragConfig(BaseModel):
-    """KRAG (Knowledge-Retrieval Augmented Generation) configuration."""
+class AgentConfig(BaseModel):
+    """Local LLM agent configuration for codebase context gathering."""
 
     model_config = ConfigDict(extra="ignore")
 
     enabled: bool = Field(
-        default=True, description="Enable KRAG for enhanced planning quality"
+        default=True, description="Enable local agent for codebase context gathering"
     )
-    fitz_ai_config: str | None = Field(
-        default=None, description="Path to fitz-ai config file (uses defaults if None)"
+    agent_model: str | None = Field(
+        default=None, description="Model for agent tool calls (None = use ollama.model)"
+    )
+    max_iterations: int = Field(
+        default=20,
+        ge=1,
+        le=50,
+        description="Maximum tool-call iterations before stopping",
+    )
+    max_file_bytes: int = Field(
+        default=50_000, description="Maximum bytes to read per file"
+    )
+    source_dir: str | None = Field(
+        default=None, description="Default source directory (overridden by create_plan parameter)"
     )
 
 
@@ -104,13 +116,34 @@ class AnthropicConfig(BaseModel):
     )
 
 
+class LMStudioConfig(BaseModel):
+    """LM Studio server configuration."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    base_url: str = Field(
+        default="http://localhost:1234/v1", description="LM Studio API base URL"
+    )
+    model: str = Field(default="local-model", description="LM Studio model to use for planning")
+    fallback_model: str | None = Field(
+        default=None, description="Fallback model (None = no fallback)"
+    )
+    timeout: int = Field(
+        default=300, description="Request timeout in seconds"
+    )
+
+
 class FitzPlannerConfig(BaseModel):
     """Root configuration for fitz-graveyard."""
 
     model_config = ConfigDict(extra="ignore")
 
+    provider: Literal["ollama", "lm_studio"] = Field(
+        default="ollama", description="LLM provider to use"
+    )
     ollama: OllamaConfig = Field(default_factory=OllamaConfig)
-    krag: KragConfig = Field(default_factory=KragConfig)
+    lm_studio: LMStudioConfig = Field(default_factory=LMStudioConfig)
+    agent: AgentConfig = Field(default_factory=AgentConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
     confidence: ConfidenceConfig = Field(default_factory=ConfidenceConfig)
     anthropic: AnthropicConfig = Field(default_factory=AnthropicConfig)

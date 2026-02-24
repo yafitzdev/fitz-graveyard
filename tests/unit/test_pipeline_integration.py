@@ -73,20 +73,15 @@ async def test_full_pipeline_execution(store: SQLiteJobStore):
 
     call_count = [0]
 
-    async def mock_generate_chat(messages):
+    async def mock_generate(messages, model=None):
         # Return appropriate response based on call count
         call_count[0] += 1
         stage_responses = list(mock_responses.values())
         if call_count[0] <= len(stage_responses):
-            content = stage_responses[call_count[0] - 1]
-        else:
-            content = "{}"
+            return stage_responses[call_count[0] - 1]
+        return "{}"
 
-        result = MagicMock()
-        result.content = content
-        return result
-
-    mock_client.generate_chat = mock_generate_chat
+    mock_client.generate = mock_generate
 
     # Create pipeline
     checkpoint_mgr = CheckpointManager(store._db_path)
@@ -140,14 +135,10 @@ async def test_pipeline_with_confidence_scoring(store: SQLiteJobStore):
     # Create mock LLM client
     mock_client = AsyncMock()
 
-    # Simple mock response
-    async def mock_generate_chat(messages):
-        result = MagicMock()
-        result.content = '{"project_description": "Test", "key_requirements": [], "constraints": [], "existing_context": "", "stakeholders": [], "scope_boundaries": {}}'
-        return result
-
-    mock_client.generate_chat = mock_generate_chat
-    mock_client.generate = AsyncMock(return_value="yes")  # For scorer
+    # Simple mock response (generate returns str directly now)
+    mock_client.generate = AsyncMock(
+        return_value='{"project_description": "Test", "key_requirements": [], "constraints": [], "existing_context": "", "stakeholders": [], "scope_boundaries": {}}'
+    )
 
     # Create pipeline
     checkpoint_mgr = CheckpointManager(store._db_path)
@@ -357,13 +348,10 @@ async def test_checkpoint_recovery_with_pipeline(store: SQLiteJobStore):
     # Create mock LLM client
     mock_client = AsyncMock()
 
-    # Mock response
-    async def mock_generate_chat(messages):
-        result = MagicMock()
-        result.content = '{"project_description": "Test", "requirements": [], "constraints": [], "stakeholders": []}'
-        return result
-
-    mock_client.generate_chat = mock_generate_chat
+    # Mock response (generate returns str directly now)
+    mock_client.generate = AsyncMock(
+        return_value='{"project_description": "Test", "requirements": [], "constraints": [], "stakeholders": []}'
+    )
 
     # Create pipeline
     checkpoint_mgr = CheckpointManager(store._db_path)

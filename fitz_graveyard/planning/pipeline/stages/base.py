@@ -13,8 +13,6 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
 
-from fitz_graveyard.planning.krag import KragClient
-
 logger = logging.getLogger(__name__)
 
 
@@ -138,7 +136,6 @@ class PipelineStage(ABC):
 
         Returns:
             List of message dicts with "role" and "content" keys
-            (format expected by OllamaClient.generate_chat)
         """
         pass
 
@@ -158,24 +155,21 @@ class PipelineStage(ABC):
         """
         pass
 
-    def _get_krag_context(self, queries: list[str], prior_outputs: dict[str, Any]) -> str:
+    def _get_gathered_context(self, prior_outputs: dict[str, Any]) -> str:
         """
-        Get KRAG context for this stage using shared KragClient.
+        Get pre-gathered codebase context from AgentContextGatherer output.
 
-        Retrieves KragClient from prior_outputs['_krag_client'] (created by ContextStage).
-        Returns formatted markdown or empty string if client not available.
+        Retrieves the context string stored in prior_outputs['_gathered_context']
+        by the pipeline orchestrator before stage execution begins.
+        Returns empty string if not available (graceful fallback).
 
         Args:
-            queries: List of questions to ask the codebase
-            prior_outputs: Dictionary containing '_krag_client' from ContextStage
+            prior_outputs: Dictionary containing '_gathered_context' string
 
         Returns:
-            Formatted markdown with codebase context, or empty string
+            Context markdown string, or empty string if unavailable
         """
-        krag_client = prior_outputs.get("_krag_client")
-        if krag_client is None:
-            return ""
-        return krag_client.multi_query(queries)
+        return prior_outputs.get("_gathered_context", "")
 
     async def execute(
         self,
@@ -188,7 +182,7 @@ class PipelineStage(ABC):
 
         Default implementation:
         1. Build prompt from job + prior outputs
-        2. Call LLM via client.generate_chat()
+        2. Call LLM via client.generate()
         3. Parse output
         4. Return StageResult
 
@@ -209,8 +203,7 @@ class PipelineStage(ABC):
 
             # Call LLM
             logger.info(f"Stage '{self.name}': Calling LLM")
-            response = await client.generate_chat(messages=messages)
-            raw_output = response.content
+            raw_output = await client.generate(messages=messages)
 
             logger.info(
                 f"Stage '{self.name}': Received {len(raw_output)} chars from LLM"

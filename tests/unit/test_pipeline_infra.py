@@ -46,16 +46,15 @@ class MockLLMClient:
         self.responses = responses or {}
         self.call_count = 0
 
-    async def generate_chat(self, messages: list[dict]) -> MockLLMResponse:
+    async def generate(self, messages: list[dict], model: str | None = None) -> str:
         """
-        Mock generate_chat method.
+        Mock generate method.
 
         Returns predetermined response based on call count.
         """
         self.call_count += 1
         stage_key = f"stage_{self.call_count}"
-        content = self.responses.get(stage_key, f"Mock response {self.call_count}")
-        return MockLLMResponse(content=content)
+        return self.responses.get(stage_key, f"Mock response {self.call_count}")
 
 
 # Mock pipeline stages for testing

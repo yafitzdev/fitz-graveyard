@@ -57,12 +57,7 @@ Key Requirements: {', '.join(context.get('key_requirements', []))}
 Constraints: {', '.join(context.get('constraints', []))}
 """
 
-        # Query KRAG for design patterns and architectural decisions
-        krag_queries = [
-            "What design patterns and abstractions are used in this codebase?",
-            "What architectural decisions have been made and why?",
-        ]
-        krag_context = self._get_krag_context(krag_queries, prior_outputs)
+        krag_context = self._get_gathered_context(prior_outputs)
 
         prompt = prompt_template.format(context=context_str.strip(), krag_context=krag_context)
 
@@ -98,8 +93,7 @@ Constraints: {', '.join(context.get('constraints', []))}
                 f"Stage '{self.name}': Phase 1 - Free-form reasoning ({len(messages_reasoning)} messages)"
             )
 
-            response_reasoning = await client.generate_chat(messages=messages_reasoning)
-            reasoning_output = response_reasoning.content
+            reasoning_output = await client.generate(messages=messages_reasoning)
 
             logger.info(
                 f"Stage '{self.name}': Phase 1 complete ({len(reasoning_output)} chars)"
@@ -137,8 +131,7 @@ Constraints: {', '.join(context.get('constraints', []))}
                 f"Stage '{self.name}': Phase 2 - JSON formatting ({len(messages_format)} messages)"
             )
 
-            response_format = await client.generate_chat(messages=messages_format)
-            formatted_output = response_format.content
+            formatted_output = await client.generate(messages=messages_format)
 
             logger.info(
                 f"Stage '{self.name}': Phase 2 complete ({len(formatted_output)} chars)"

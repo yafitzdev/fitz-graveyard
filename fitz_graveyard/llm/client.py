@@ -10,6 +10,7 @@ import ollama
 from ollama import AsyncClient, ResponseError
 
 from .retry import ollama_retry
+from .types import AgentMessage, AgentToolCall
 
 if TYPE_CHECKING:
     from .memory import MemoryMonitor
@@ -143,6 +144,74 @@ class OllamaClient:
 
             # Non-OOM error - re-raise
             raise
+
+    async def generate_with_tools(
+        self,
+        messages: list[dict],
+        tools: list,
+        model: str | None = None,
+    ) -> AgentMessage:
+        """
+        Single non-streaming chat call with tool definitions.
+
+        Does NOT stream — tool call responses are atomic in Ollama.
+        Returns a normalized AgentMessage for provider-agnostic consumption.
+
+        Args:
+            messages: Chat messages list
+            tools:    Tool callables (ollama auto-generates schemas from docstrings)
+            model:    Model override (defaults to self.model)
+
+        Returns:
+            AgentMessage with .tool_calls or .content
+        """
+        model = model or self.model
+        logger.info(
+            f"generate_with_tools: model={model}, messages={len(messages)}, tools={len(tools)}"
+        )
+        response = await self.client.chat(
+            model=model,
+            messages=messages,
+            tools=tools,
+            stream=False,
+        )
+        logger.info(
+            f"generate_with_tools: done_reason={response.done_reason}, "
+            f"tool_calls={bool(response.message.tool_calls)}"
+        )
+
+        msg = response.message
+        tool_calls = None
+        if msg.tool_calls:
+            tool_calls = [
+                AgentToolCall(
+                    id="",
+                    name=tc.function.name,
+                    arguments=tc.function.arguments or {},
+                )
+                for tc in msg.tool_calls
+            ]
+
+        return AgentMessage(
+            content=msg.content,
+            tool_calls=tool_calls,
+            assistant_dict=msg,  # Ollama Message objects work directly in messages list
+        )
+
+    def tool_result_message(self, tool_call_id: str, content: str) -> dict:
+        """
+        Build a tool result message dict for appending to the messages list.
+
+        Ollama ignores tool_call_id — only content matters.
+
+        Args:
+            tool_call_id: Tool call id (ignored by Ollama)
+            content:      Tool result text
+
+        Returns:
+            Message dict with role="tool"
+        """
+        return {"role": "tool", "content": content}
 
     async def generate_with_monitoring(
         self, messages: list[dict], monitor: "MemoryMonitor"

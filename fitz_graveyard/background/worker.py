@@ -13,6 +13,7 @@ from pathlib import Path
 
 from fitz_graveyard.config.schema import FitzPlannerConfig
 from fitz_graveyard.llm.client import OllamaClient
+from fitz_graveyard.llm.lm_studio import LMStudioClient
 from fitz_graveyard.llm.memory import MemoryMonitor
 from fitz_graveyard.models.jobs import JobState
 from fitz_graveyard.models.store import JobStore
@@ -21,6 +22,7 @@ from fitz_graveyard.planning.confidence.scorer import ConfidenceScorer
 from fitz_graveyard.planning.pipeline.checkpoint import CheckpointManager
 from fitz_graveyard.planning.pipeline.orchestrator import PlanningPipeline
 from fitz_graveyard.planning.pipeline.output import PlanRenderer
+from fitz_graveyard.planning.agent import AgentContextGatherer
 from fitz_graveyard.planning.pipeline.stages import DEFAULT_STAGES, create_stages
 from fitz_graveyard.planning.schemas.plan_output import PlanOutput
 from fitz_graveyard.api_review.schemas import ReviewRequest, CostBreakdown
@@ -45,7 +47,7 @@ class BackgroundWorker:
         store: JobStore,
         config: FitzPlannerConfig | None = None,
         poll_interval: float = 1.0,
-        ollama_client: OllamaClient | None = None,
+        ollama_client: OllamaClient | LMStudioClient | None = None,
         memory_threshold: float = 80.0,
     ) -> None:
         """
@@ -84,8 +86,8 @@ class BackgroundWorker:
                 logger.warning("Store does not support checkpointing (no db_path)")
                 return
 
-            # Create pipeline with stages (pass config and cwd for KRAG)
-            stages = create_stages(config=self._config, source_dir=str(Path.cwd()))
+            # Create pipeline with stages
+            stages = create_stages()
             self._pipeline = PlanningPipeline(stages, self._checkpoint_mgr)
 
             # Create confidence scorer and flagger
@@ -252,7 +254,7 @@ class BackgroundWorker:
             healthy = await self._ollama_client.health_check()
             if not healthy:
                 raise ConnectionError(
-                    "Ollama health check failed: server not available or model not found"
+                    "LLM health check failed: server not available or model not found"
                 )
 
         # Step 2: Execute pipeline with progress callback (skip on second pass)
@@ -260,12 +262,32 @@ class BackgroundWorker:
             async def progress_callback(progress: float, phase: str) -> None:
                 await self._store.update(job.job_id, progress=progress, current_phase=phase)
 
+            # Build agent if source_dir is available
+            source_dir = (
+                job.source_dir
+                or self._config.agent.source_dir
+                or str(Path.cwd())
+            )
+            agent = None
+            if self._config.agent.enabled and source_dir:
+                if Path(source_dir).is_dir():
+                    agent = AgentContextGatherer(
+                        config=self._config.agent,
+                        source_dir=source_dir,
+                    )
+                else:
+                    logger.warning(
+                        f"source_dir '{source_dir}' is not a directory, "
+                        "skipping agent context gathering"
+                    )
+
             result = await self._pipeline.execute(
                 client=self._ollama_client,
                 job_id=job.job_id,
                 job_description=job.description,
                 resume=False,
                 progress_callback=progress_callback,
+                agent=agent,
             )
 
             if not result.success:

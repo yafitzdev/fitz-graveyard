@@ -11,6 +11,8 @@ from fitz_graveyard.background.signals import setup_signal_handlers
 from fitz_graveyard.background.worker import BackgroundWorker
 from fitz_graveyard.config.schema import FitzPlannerConfig
 from fitz_graveyard.llm.client import OllamaClient
+from fitz_graveyard.llm.factory import create_llm_client
+from fitz_graveyard.llm.lm_studio import LMStudioClient
 from fitz_graveyard.models.sqlite_store import SQLiteJobStore
 
 logger = logging.getLogger(__name__)
@@ -37,15 +39,10 @@ class ServerLifecycle:
         """
         self._store = SQLiteJobStore(db_path)
 
-        # Create OllamaClient if config provided
-        self._ollama_client: OllamaClient | None = None
+        # Create LLM client if config provided
+        self._ollama_client: OllamaClient | LMStudioClient | None = None
         if config:
-            self._ollama_client = OllamaClient(
-                base_url=config.ollama.base_url,
-                model=config.ollama.model,
-                fallback_model=config.ollama.fallback_model,
-                timeout=config.ollama.timeout,
-            )
+            self._ollama_client = create_llm_client(config)
 
         # Create worker with Ollama client and memory threshold
         self._worker = BackgroundWorker(
@@ -67,8 +64,8 @@ class ServerLifecycle:
         return self._worker
 
     @property
-    def ollama_client(self) -> OllamaClient | None:
-        """Get the Ollama client (for inspection/testing)."""
+    def ollama_client(self) -> OllamaClient | LMStudioClient | None:
+        """Get the LLM client (for inspection/testing)."""
         return self._ollama_client
 
     async def startup(self) -> None:
