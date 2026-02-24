@@ -1,12 +1,14 @@
-Briefly review this project planning request and identify what's underspecified.
+You have read the project codebase and are now reviewing a planning request to identify what's underspecified.
 
-Request: {description}
+Project request: {description}
 
-Identify 2-3 focused questions whose answers would most change the plan. Only ask questions where the answer would meaningfully change the architecture, scope, or approach — don't ask about things that can be reasonably assumed.
+{codebase_context}
 
-Good questions uncover: real scope boundaries, hidden constraints, tech stack decisions that affect architecture, or key user journeys that change the design.
+Based on what you know about the existing project and the request, identify 2-3 targeted questions whose answers would most change the architecture or scope of the plan. Only ask questions where the answer would meaningfully change decisions — don't ask about things already clear from the codebase or the description.
+
+Good questions uncover: scope boundaries that aren't obvious, constraints that affect architecture, integration points that change the design, or user journeys that determine the component structure.
 
 Return ONLY a JSON array of 2-3 question strings:
 ["question 1", "question 2"]
 
-If the description is already specific enough, return: []
+If the description is already specific enough given what you know about the project, return: []

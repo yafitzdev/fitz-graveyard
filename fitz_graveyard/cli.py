@@ -111,7 +111,28 @@ def _make_live_display(description: str, progress: float, elapsed: float):
     )
 
 
-async def _run_inline(job_id: str, store, config, description: str) -> None:
+async def _gather_context_for_clarification(client, config, description: str, source_dir: str, console) -> str:
+    """Run agent context gathering standalone for use in clarification flow."""
+    from rich.status import Status
+    from fitz_graveyard.planning.agent import AgentContextGatherer
+    from pathlib import Path
+
+    if not Path(source_dir).is_dir():
+        return ""
+
+    agent = AgentContextGatherer(config=config.agent, source_dir=source_dir)
+    with Status("[dim]Reading project...[/dim]", console=console, spinner="dots"):
+        gathered = await agent.gather(client=client, job_description=description)
+    return gathered
+
+
+async def _run_inline(
+    job_id: str,
+    store,
+    config,
+    description: str,
+    pre_gathered_context: str | None = None,
+) -> None:
     """Run a job inline with live rich progress display, then print the plan."""
     from rich.live import Live
     from rich.console import Console
@@ -130,7 +151,9 @@ async def _run_inline(job_id: str, store, config, description: str) -> None:
     console = Console(stderr=True)
     start = time.monotonic()
 
-    job_task = asyncio.create_task(worker.process_job_direct(job_id))
+    job_task = asyncio.create_task(
+        worker.process_job_direct(job_id, pre_gathered_context=pre_gathered_context)
+    )
 
     try:
         with Live(_make_live_display(description, 0.0, 0.0), console=console, refresh_per_second=4) as live:
@@ -196,28 +219,41 @@ def plan(
     api_review: bool = typer.Option(False, "--api-review", help="Enable API review"),
     source_dir: str = typer.Option(None, "--source-dir", help="Path to codebase for agent context"),
     detach: bool = typer.Option(False, "--detach", "-d", help="Queue only, don't run inline"),
-    no_clarify: bool = typer.Option(False, "--no-clarify", help="Skip clarification questions"),
+    clarify: bool = typer.Option(False, "--clarify", help="Ask clarifying questions before planning"),
 ):
     """Queue and run a planning job with live progress. Use --detach to queue only."""
     from fitz_graveyard.config.loader import load_config
     from fitz_graveyard.tools.create_plan import create_plan
 
     async def _plan():
+        import logging as _logging
+        from rich.console import Console as _Console
+
         store = await _get_store()
         config = load_config()
         enriched_description = description
+        pre_gathered_context: str | None = None
 
-        # Ask clarification questions if interactive and not detached
-        if not no_clarify and not detach and sys.stdin.isatty():
+        # Clarification flow: gather context first, then ask questions with that context
+        if clarify and not detach and sys.stdin.isatty():
             try:
                 from fitz_graveyard.planning.clarification import get_clarifying_questions
                 from fitz_graveyard.llm.factory import create_llm_client
 
+                console = _Console(stderr=True)
                 client = create_llm_client(config)
                 if await client.health_check():
-                    questions = await get_clarifying_questions(client, description)
+                    effective_source_dir = source_dir or config.agent.source_dir or "."
+                    if config.agent.enabled:
+                        pre_gathered_context = await _gather_context_for_clarification(
+                            client, config, description, effective_source_dir, console
+                        )
+
+                    questions = await get_clarifying_questions(
+                        client, description, codebase_context=pre_gathered_context or ""
+                    )
                     if questions:
-                        typer.echo("\nA few quick questions to sharpen the plan:\n")
+                        console.print("\n[bold]A few quick questions to sharpen the plan:[/bold]\n")
                         answers = []
                         for i, q in enumerate(questions, 1):
                             answer = typer.prompt(f"  {i}. {q}", default="")
@@ -226,13 +262,12 @@ def plan(
                         if answers:
                             enriched_description = (
                                 description
-                                + "\n\n## Additional Context\n\n"
+                                + "\n\n## Clarifications\n\n"
                                 + "\n\n".join(answers)
                             )
                         typer.echo()
             except Exception as e:
-                import logging
-                logging.getLogger(__name__).warning(f"Clarification skipped: {e}")
+                _logging.getLogger(__name__).warning(f"Clarification skipped: {e}")
 
         try:
             result = await create_plan(
@@ -257,7 +292,10 @@ def plan(
             return
 
         try:
-            await _run_inline(job_id, store, config, enriched_description)
+            await _run_inline(
+                job_id, store, config, enriched_description,
+                pre_gathered_context=pre_gathered_context,
+            )
         finally:
             await store.close()
 

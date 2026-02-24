@@ -66,6 +66,7 @@ class BackgroundWorker:
         self._ollama_client = ollama_client
         self._memory_threshold = memory_threshold
         self._current_job_id: str | None = None
+        self._pre_gathered_context: str | None = None
         self._task: asyncio.Task | None = None
 
         # Initialize pipeline components if config provided
@@ -288,6 +289,7 @@ class BackgroundWorker:
                 resume=False,
                 progress_callback=progress_callback,
                 agent=agent,
+                pre_gathered_context=self._pre_gathered_context,
             )
 
             if not result.success:
@@ -521,7 +523,9 @@ class BackgroundWorker:
             f"(quality={overall_score:.2f})"
         )
 
-    async def process_job_direct(self, job_id: str) -> None:
+    async def process_job_direct(
+        self, job_id: str, pre_gathered_context: str | None = None
+    ) -> None:
         """
         Process a single job directly (for inline CLI execution).
 
@@ -530,6 +534,7 @@ class BackgroundWorker:
 
         Args:
             job_id: Job to process
+            pre_gathered_context: Optional pre-gathered codebase context to skip agent re-run
 
         Raises:
             ValueError: If job not found
@@ -540,6 +545,7 @@ class BackgroundWorker:
             raise ValueError(f"Job {job_id} not found")
 
         self._current_job_id = job_id
+        self._pre_gathered_context = pre_gathered_context
         try:
             await self._store.update(
                 job_id, state=JobState.RUNNING, progress=0.0, current_phase="starting"
@@ -558,6 +564,7 @@ class BackgroundWorker:
             raise
         finally:
             self._current_job_id = None
+            self._pre_gathered_context = None
 
     def _build_messages(self, job) -> list[dict]:
         """

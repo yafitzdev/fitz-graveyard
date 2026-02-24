@@ -3,6 +3,7 @@
 Clarification question generation for planning jobs.
 
 Asks the LLM to identify what's underspecified before planning begins.
+Optionally uses pre-gathered codebase context for more targeted questions.
 """
 
 import logging
@@ -14,23 +15,30 @@ from fitz_graveyard.planning.prompts import load_prompt
 logger = logging.getLogger(__name__)
 
 
-async def get_clarifying_questions(client: Any, description: str) -> list[str]:
+async def get_clarifying_questions(
+    client: Any, description: str, codebase_context: str = ""
+) -> list[str]:
     """
     Generate clarifying questions for a planning description.
 
     Calls the LLM to identify 2-3 questions that would most sharpen the plan.
-    Returns empty list if description is already specific or if LLM call fails.
+    When codebase_context is provided, questions are grounded in what the project
+    actually looks like rather than guessing blindly.
 
     Args:
         client: OllamaClient or LMStudioClient instance
         description: Raw planning description from user
+        codebase_context: Pre-gathered codebase context from agent (optional)
 
     Returns:
         List of 2-3 question strings, or empty list
     """
     try:
         prompt_template = load_prompt("clarification")
-        prompt = prompt_template.format(description=description)
+        prompt = prompt_template.format(
+            description=description,
+            codebase_context=codebase_context,
+        )
 
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},

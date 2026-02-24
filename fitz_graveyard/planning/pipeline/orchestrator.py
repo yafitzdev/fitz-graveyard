@@ -105,6 +105,7 @@ class PlanningPipeline:
         resume: bool = False,
         progress_callback: Callable[[float, str], None] | Callable[[float, str], Any] | None = None,
         agent: "AgentContextGatherer | None" = None,
+        pre_gathered_context: str | None = None,
     ) -> PipelineResult:
         """
         Execute the planning pipeline.
@@ -115,6 +116,8 @@ class PlanningPipeline:
             job_description: User's planning request
             resume: If True, resume from checkpoint; if False, start fresh
             progress_callback: Optional callback(progress, phase) for updates
+            agent: Optional AgentContextGatherer for codebase exploration
+            pre_gathered_context: Pre-gathered codebase context (skips agent gathering)
 
         Returns:
             PipelineResult with all stage outputs or error
@@ -132,6 +135,13 @@ class PlanningPipeline:
             prior_outputs = {}
             await self._checkpoint_mgr.clear_checkpoint(job_id)
             logger.info(f"Starting fresh pipeline for job {job_id}")
+
+        # Inject pre-gathered context if provided (skips agent gathering)
+        if pre_gathered_context is not None and "_agent_context" not in prior_outputs:
+            prior_outputs["_agent_context"] = {"text": pre_gathered_context}
+            logger.info(
+                f"Using pre-gathered context for job {job_id} ({len(pre_gathered_context)} chars)"
+            )
 
         # Run agent context gathering (once, before all stages, with checkpoint)
         if agent is not None and "_agent_context" not in prior_outputs:
