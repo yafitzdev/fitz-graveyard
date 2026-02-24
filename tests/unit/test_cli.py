@@ -76,7 +76,7 @@ class TestPlan:
     @patch("fitz_graveyard.cli._get_store")
     @patch("fitz_graveyard.cli.load_config", create=True)
     def test_plan_queues_job(self, mock_config, mock_store):
-        """plan command calls create_plan and prints job ID."""
+        """plan --detach queues the job and prints job ID without running inline."""
         mock_store_instance = AsyncMock()
         mock_store_instance.close = AsyncMock()
         mock_store.return_value = mock_store_instance
@@ -84,7 +84,7 @@ class TestPlan:
         with patch("fitz_graveyard.tools.create_plan.sanitize_description", return_value="test desc"):
             with patch("fitz_graveyard.tools.create_plan.generate_job_id", return_value="test12345678"):
                 mock_store_instance.add = AsyncMock()
-                result = runner.invoke(app, ["plan", "test desc"])
+                result = runner.invoke(app, ["plan", "test desc", "--detach"])
 
         assert result.exit_code == 0
         assert "test12345678" in result.output

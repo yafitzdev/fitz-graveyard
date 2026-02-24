@@ -521,6 +521,44 @@ class BackgroundWorker:
             f"(quality={overall_score:.2f})"
         )
 
+    async def process_job_direct(self, job_id: str) -> None:
+        """
+        Process a single job directly (for inline CLI execution).
+
+        Unlike the polling loop, this method processes one specific job and returns.
+        Handles state transitions (RUNNING → COMPLETE/FAILED) directly.
+
+        Args:
+            job_id: Job to process
+
+        Raises:
+            ValueError: If job not found
+            Exception: Re-raises any processing error after marking job FAILED
+        """
+        job = await self._store.get(job_id)
+        if not job:
+            raise ValueError(f"Job {job_id} not found")
+
+        self._current_job_id = job_id
+        try:
+            await self._store.update(
+                job_id, state=JobState.RUNNING, progress=0.0, current_phase="starting"
+            )
+            await self._process_job(job)
+            # Check if job ended at AWAITING_REVIEW (pipeline paused for API review)
+            final_job = await self._store.get(job_id)
+            if final_job and final_job.state != JobState.AWAITING_REVIEW:
+                await self._store.update(job_id, state=JobState.COMPLETE, progress=1.0)
+        except Exception as e:
+            error_msg = f"{type(e).__name__}: {str(e)}"
+            try:
+                await self._store.update(job_id, state=JobState.FAILED, error=error_msg)
+            except Exception:
+                pass
+            raise
+        finally:
+            self._current_job_id = None
+
     def _build_messages(self, job) -> list[dict]:
         """
         Build chat messages from job metadata.

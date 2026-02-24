@@ -15,6 +15,13 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+SYSTEM_PROMPT = (
+    "You are a senior software architect and technical strategist with 15 years of experience "
+    "shipping production systems at scale. You think rigorously, challenge vague requirements, "
+    "call out hidden assumptions, and give specific actionable recommendations — not generic advice. "
+    "When something is unclear or underspecified, you state your assumptions explicitly."
+)
+
 
 def extract_json(raw_output: str) -> dict[str, Any]:
     """
@@ -154,6 +161,40 @@ class PipelineStage(ABC):
             ValueError: If output cannot be parsed
         """
         pass
+
+    def _make_messages(self, user_content: str) -> list[dict]:
+        """Build messages list with system prompt prepended."""
+        return [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ]
+
+    async def _two_pass(
+        self,
+        client: Any,
+        reasoning_messages: list[dict],
+        schema_json: str,
+    ) -> tuple[str, str]:
+        """
+        Two-pass execution: free-form reasoning then JSON formatting.
+
+        Returns (reasoning_text, json_output_text).
+        """
+        reasoning = await client.generate(messages=reasoning_messages)
+
+        format_messages = reasoning_messages + [
+            {"role": "assistant", "content": reasoning},
+            {
+                "role": "user",
+                "content": (
+                    "Based on your analysis above, extract the structured output.\n"
+                    "Return ONLY valid JSON matching this exact schema:\n\n"
+                    + schema_json
+                ),
+            },
+        ]
+        json_output = await client.generate(messages=format_messages)
+        return reasoning, json_output
 
     def _get_gathered_context(self, prior_outputs: dict[str, Any]) -> str:
         """

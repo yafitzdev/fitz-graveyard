@@ -61,24 +61,34 @@ async def test_full_pipeline_execution(store: SQLiteJobStore):
     # Create mock LLM client
     mock_client = AsyncMock()
 
-    # Mock responses for each stage
-    mock_responses = {
-        "context": '{"project_description": "API service", "key_requirements": [], "constraints": [], "existing_context": "", "stakeholders": [], "scope_boundaries": {}}',
-        "architecture_reasoning": "We should use microservices because...",
-        "architecture_format": '{"approaches": [{"name": "Monolith", "description": "Single app", "pros": ["Simple"], "cons": ["Scale"]}], "recommended": "Monolith", "reasoning": "Best for now"}',
-        "design": '{"adrs": [], "components": [], "data_model": {}, "integration_points": []}',
-        "roadmap": '{"phases": [], "critical_path": [], "parallel_opportunities": [], "total_phases": 0}',
-        "risk": '{"risks": []}',
-    }
+    # Each stage does two-pass (reasoning + JSON): 5 stages × 2 calls = 10 calls total.
+    # Odd calls return reasoning text; even calls return valid JSON for that stage.
+    _context_json = '{"project_description": "API service", "key_requirements": [], "constraints": [], "existing_context": "", "stakeholders": [], "scope_boundaries": {}}'
+    _arch_json = '{"approaches": [{"name": "Monolith", "description": "Single app", "pros": ["Simple"], "cons": ["Scale"], "complexity": "low", "best_for": ["MVPs"]}], "recommended": "Monolith", "reasoning": "Best for now", "key_tradeoffs": {}, "technology_considerations": []}'
+    _design_json = '{"adrs": [], "components": [], "data_model": {}, "integration_points": []}'
+    _roadmap_json = '{"phases": [], "critical_path": [], "parallel_opportunities": [], "total_phases": 0}'
+    _risk_json = '{"risks": [], "overall_risk_level": "low", "recommended_contingencies": []}'
+
+    stage_responses = [
+        "Reasoning about context...",   # context pass 1
+        _context_json,                  # context pass 2
+        "Reasoning about architecture...",  # architecture pass 1
+        _arch_json,                     # architecture pass 2
+        "Reasoning about design...",    # design pass 1
+        _design_json,                   # design pass 2
+        "Reasoning about roadmap...",   # roadmap pass 1
+        _roadmap_json,                  # roadmap pass 2
+        "Reasoning about risks...",     # risk pass 1
+        _risk_json,                     # risk pass 2
+    ]
 
     call_count = [0]
 
     async def mock_generate(messages, model=None):
-        # Return appropriate response based on call count
+        idx = call_count[0]
         call_count[0] += 1
-        stage_responses = list(mock_responses.values())
-        if call_count[0] <= len(stage_responses):
-            return stage_responses[call_count[0] - 1]
+        if idx < len(stage_responses):
+            return stage_responses[idx]
         return "{}"
 
     mock_client.generate = mock_generate

@@ -1,33 +1,16 @@
-You are a software architect exploring implementation approaches.
-
-Your task: Explore multiple architectural approaches and recommend the best one.
-
-**CRITICAL: Do NOT write any code. This is an architecture exploration exercise.**
+You are evaluating architectural approaches for this project. Take a strong, opinionated position.
 
 {krag_context}
 
 Project context:
 {context}
 
-Explore at least 3 different architectural approaches for this project.
+Explore exactly 3 architectural approaches. For each:
+- What does it look like in production? Name specific services, libraries, and patterns.
+- What is the most common failure mode for teams that take this approach?
+- What operational burden does it add?
+- What does it make easy that the other approaches make hard?
 
-For each approach, analyze:
-- What it entails (description)
-- Advantages (pros)
-- Disadvantages and risks (cons)
-- Relative complexity (low/medium/high)
-- Scenarios where it works best
+Then take a clear position: which approach is right for THIS project and why. Do not hedge. Specifically explain why the other two approaches would be wrong here — not just "more complex" but what specific failure mode or risk makes them the wrong choice given these requirements and constraints.
 
-Then recommend ONE approach and explain why it's the best fit for THIS project's requirements and constraints.
-
-Consider:
-- Alignment with key requirements
-- Fit with existing constraints
-- Long-term maintainability
-- Team skill requirements
-- Scalability needs
-- Deployment complexity
-
-Think through tradeoffs carefully. There are no perfect solutions, only informed choices.
-
-Do NOT format as JSON yet. Just reason through the options naturally.
+A senior engineer who has shipped production systems like this one would choose which approach, and why would the other two be mistakes?

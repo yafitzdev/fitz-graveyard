@@ -278,16 +278,16 @@ class TestPromptLoading:
     def test_load_context_prompt(self):
         """Test loading context stage prompt."""
         prompt = load_prompt("context")
-        assert "Do NOT write any code" in prompt
         assert "{description}" in prompt
-        assert "project_description" in prompt
+        assert "{krag_context}" in prompt
+        assert "requirements" in prompt.lower()
 
     def test_load_architecture_prompt(self):
         """Test loading architecture stage prompt."""
         prompt = load_prompt("architecture")
-        assert "Do NOT write any code" in prompt
         assert "{context}" in prompt
-        assert "architectural approaches" in prompt.lower()
+        assert "{krag_context}" in prompt
+        assert "approach" in prompt.lower()
 
     def test_load_architecture_format_prompt(self):
         """Test loading architecture formatting prompt."""
@@ -298,15 +298,13 @@ class TestPromptLoading:
     def test_load_design_prompt(self):
         """Test loading design stage prompt."""
         prompt = load_prompt("design")
-        assert "Do NOT write any code" in prompt
         assert "{context}" in prompt
         assert "{architecture}" in prompt
-        assert "ADR" in prompt
+        assert "data model" in prompt.lower()
 
     def test_load_roadmap_prompt(self):
         """Test loading roadmap stage prompt."""
         prompt = load_prompt("roadmap")
-        assert "Do NOT write any code" in prompt
         assert "{context}" in prompt
         assert "{architecture}" in prompt
         assert "{design}" in prompt
@@ -315,10 +313,9 @@ class TestPromptLoading:
     def test_load_risk_prompt(self):
         """Test loading risk stage prompt."""
         prompt = load_prompt("risk")
-        assert "Do NOT write any code" in prompt
         assert "{context}" in prompt
         assert "{roadmap}" in prompt
-        assert "mitigation" in prompt.lower()
+        assert "risk" in prompt.lower()
 
     def test_nonexistent_prompt_raises(self):
         """Test that loading nonexistent prompt raises FileNotFoundError."""

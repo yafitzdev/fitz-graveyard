@@ -1,0 +1,12 @@
+Briefly review this project planning request and identify what's underspecified.
+
+Request: {description}
+
+Identify 2-3 focused questions whose answers would most change the plan. Only ask questions where the answer would meaningfully change the architecture, scope, or approach — don't ask about things that can be reasonably assumed.
+
+Good questions uncover: real scope boundaries, hidden constraints, tech stack decisions that affect architecture, or key user journeys that change the design.
+
+Return ONLY a JSON array of 2-3 question strings:
+["question 1", "question 2"]
+
+If the description is already specific enough, return: []

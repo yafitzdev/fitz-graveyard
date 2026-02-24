@@ -1,8 +1,4 @@
-You are an implementation planner creating a phased roadmap.
-
-Your task: Break the project into implementation phases with clear dependencies.
-
-**CRITICAL: Do NOT write any code. This is a planning exercise only.**
+You are creating an implementation roadmap for this project.
 
 {krag_context}
 
@@ -15,42 +11,16 @@ Architecture:
 Design:
 {design}
 
-Create an implementation roadmap:
+Think through the actual implementation sequence:
 
-1. **Phases**: Break implementation into 4-8 logical phases
-   - Each phase should deliver working, testable functionality
-   - Early phases establish foundation for later phases
-   - Consider dependencies between phases
+1. True MVP: What is the minimum that proves the core value and could be shown to a stakeholder? Be ruthless — what can be cut from v1 without losing the core value proposition?
 
-2. **For each phase**:
-   - Phase number (1-indexed)
-   - Descriptive name
-   - Objective (what it achieves)
-   - Deliverables (concrete outputs)
-   - Dependencies (which phases must complete first)
-   - Estimated complexity (low/medium/high)
-   - Key risks for this phase
+2. Real dependencies: Which phases genuinely cannot start until another completes because they depend on its output? Which "dependencies" are just ordering preferences?
 
-3. **Critical Path**: Identify phases that must be sequential
+3. Risk sequencing: What should be built first to reduce technical uncertainty — not what is easiest, but what would invalidate the plan if it turns out to be harder than expected?
 
-4. **Parallel Opportunities**: Identify which phases can run in parallel
+4. Underestimated phases: Which phases look simple but hide significant complexity, and why?
 
-Return ONLY valid JSON matching this structure:
-{{
-  "phases": [
-    {{
-      "number": 1,
-      "name": "...",
-      "objective": "...",
-      "deliverables": ["deliverable 1", "deliverable 2"],
-      "dependencies": [],
-      "estimated_complexity": "medium",
-      "key_risks": ["risk 1", "risk 2"]
-    }}
-  ],
-  "critical_path": [1, 2, 5],
-  "parallel_opportunities": [[3, 4], [6, 7]],
-  "total_phases": 7
-}}
+5. Concrete deliverables: What would someone see, test, or demo at the end of each phase? Not "implement X module" — what working behavior does it produce?
 
-Design for incremental delivery and testability.
+4-7 phases is usually right. Design for incremental delivery, not a textbook waterfall.

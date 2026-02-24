@@ -82,9 +82,10 @@ class TestContextStage:
 
     def test_build_prompt(self, stage):
         messages = stage.build_prompt("Build a blog platform", {})
-        assert len(messages) == 1
-        assert messages[0]["role"] == "user"
-        assert "Build a blog platform" in messages[0]["content"]
+        assert len(messages) == 2
+        assert messages[0]["role"] == "system"
+        assert messages[1]["role"] == "user"
+        assert "Build a blog platform" in messages[1]["content"]
 
     def test_parse_output(self, stage):
         raw = json.dumps(
@@ -106,7 +107,7 @@ class TestContextStage:
     async def test_execute_success(self, stage):
         """Test successful execution with mock LLM."""
         mock_client = AsyncMock()
-        mock_client.generate.return_value = json.dumps(
+        structured_json = json.dumps(
             {
                 "project_description": "Test project",
                 "key_requirements": ["Req 1"],
@@ -116,13 +117,18 @@ class TestContextStage:
                 "scope_boundaries": {},
             }
         )
+        # Two-pass: first call returns reasoning, second returns JSON
+        mock_client.generate.side_effect = [
+            "Reasoning about the project...",
+            structured_json,
+        ]
 
         result = await stage.execute(mock_client, "Build something", {})
 
         assert result.success is True
         assert result.stage_name == "context"
         assert result.output["project_description"] == "Test project"
-        mock_client.generate.assert_called_once()
+        assert mock_client.generate.call_count == 2
 
 
 class TestArchitectureStage:
@@ -141,8 +147,9 @@ class TestArchitectureStage:
     def test_build_prompt_no_prior(self, stage):
         """Build prompt without prior context."""
         messages = stage.build_prompt("Build an API", {})
-        assert len(messages) == 1
-        assert "Build an API" in messages[0]["content"]
+        assert len(messages) == 2
+        assert messages[1]["role"] == "user"
+        assert "Build an API" in messages[1]["content"]
 
     def test_build_prompt_with_context(self, stage):
         """Build prompt with prior context output."""
@@ -154,8 +161,9 @@ class TestArchitectureStage:
             }
         }
         messages = stage.build_prompt("Build an API", prior)
-        assert "API platform" in messages[0]["content"]
-        assert "REST" in messages[0]["content"]
+        # User message is at index 1 (index 0 is system prompt)
+        assert "API platform" in messages[1]["content"]
+        assert "REST" in messages[1]["content"]
 
     def test_parse_output(self, stage):
         raw = json.dumps(
@@ -236,8 +244,9 @@ class TestDesignStage:
             },
         }
         messages = stage.build_prompt("Build blog", prior)
-        assert "Blog" in messages[0]["content"]
-        assert "Monolith" in messages[0]["content"]
+        # User message is at index 1 (index 0 is system prompt)
+        assert "Blog" in messages[1]["content"]
+        assert "Monolith" in messages[1]["content"]
 
     def test_parse_output(self, stage):
         raw = json.dumps(
@@ -265,7 +274,7 @@ class TestDesignStage:
     async def test_execute_with_prior_outputs(self, stage):
         """Ensure prior outputs are incorporated."""
         mock_client = AsyncMock()
-        mock_client.generate.return_value = json.dumps(
+        structured_json = json.dumps(
             {
                 "adrs": [],
                 "components": [],
@@ -273,15 +282,21 @@ class TestDesignStage:
                 "integration_points": [],
             }
         )
+        # Two-pass: reasoning then JSON
+        mock_client.generate.side_effect = [
+            "Reasoning about design...",
+            structured_json,
+        ]
 
         prior = {"context": {"project_description": "Test"}}
         result = await stage.execute(mock_client, "Build", prior)
 
         assert result.success is True
-        # Verify prompt included prior outputs
-        call_args = mock_client.generate.call_args
-        messages = call_args.kwargs["messages"]
-        assert "Test" in messages[0]["content"]
+        # Verify prompt included prior outputs (first call = reasoning messages)
+        first_call_args = mock_client.generate.call_args_list[0]
+        messages = first_call_args.kwargs["messages"]
+        # User message is at index 1 (index 0 is system prompt)
+        assert "Test" in messages[1]["content"]
 
 
 class TestRoadmapStage:

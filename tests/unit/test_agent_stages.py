@@ -60,15 +60,16 @@ class TestContextStageGatheredContext:
         stage = ContextStage()
         prior = {"_gathered_context": GATHERED_CONTEXT}
         messages = stage.build_prompt("add a feature", prior)
-        assert len(messages) == 1
-        assert GATHERED_CONTEXT in messages[0]["content"]
+        assert len(messages) == 2
+        # User message is at index 1 (index 0 is system prompt)
+        assert GATHERED_CONTEXT in messages[1]["content"]
 
     def test_prompt_works_without_gathered_context(self):
         stage = ContextStage()
         messages = stage.build_prompt("add a feature", {})
-        assert len(messages) == 1
+        assert len(messages) == 2
         # Should not contain a literal {krag_context} placeholder
-        assert "{krag_context}" not in messages[0]["content"]
+        assert "{krag_context}" not in messages[1]["content"]
 
 
 class TestArchitectureStageGatheredContext:
@@ -76,14 +77,15 @@ class TestArchitectureStageGatheredContext:
         stage = ArchitectureStage()
         prior = {"_gathered_context": GATHERED_CONTEXT}
         messages = stage.build_prompt("add a feature", prior)
-        assert len(messages) == 1
-        assert GATHERED_CONTEXT in messages[0]["content"]
+        assert len(messages) == 2
+        # User message is at index 1 (index 0 is system prompt)
+        assert GATHERED_CONTEXT in messages[1]["content"]
 
     def test_no_context_no_crash(self):
         stage = ArchitectureStage()
         messages = stage.build_prompt("add a feature", {})
-        assert len(messages) == 1
-        assert "{krag_context}" not in messages[0]["content"]
+        assert len(messages) == 2
+        assert "{krag_context}" not in messages[1]["content"]
 
 
 class TestDesignStageGatheredContext:
@@ -91,12 +93,13 @@ class TestDesignStageGatheredContext:
         stage = DesignStage()
         prior = {"_gathered_context": GATHERED_CONTEXT}
         messages = stage.build_prompt("add a feature", prior)
-        assert GATHERED_CONTEXT in messages[0]["content"]
+        # User message is at index 1 (index 0 is system prompt)
+        assert GATHERED_CONTEXT in messages[1]["content"]
 
     def test_no_context_no_crash(self):
         stage = DesignStage()
         messages = stage.build_prompt("add a feature", {})
-        assert "{krag_context}" not in messages[0]["content"]
+        assert "{krag_context}" not in messages[1]["content"]
 
 
 class TestRoadmapStageGatheredContext:
@@ -104,12 +107,13 @@ class TestRoadmapStageGatheredContext:
         stage = RoadmapStage()
         prior = {"_gathered_context": GATHERED_CONTEXT}
         messages = stage.build_prompt("add a feature", prior)
-        assert GATHERED_CONTEXT in messages[0]["content"]
+        # User message is at index 1 (index 0 is system prompt)
+        assert GATHERED_CONTEXT in messages[1]["content"]
 
     def test_no_context_no_crash(self):
         stage = RoadmapStage()
         messages = stage.build_prompt("add a feature", {})
-        assert "{krag_context}" not in messages[0]["content"]
+        assert "{krag_context}" not in messages[1]["content"]
 
 
 class TestRiskStageGatheredContext:
@@ -117,12 +121,13 @@ class TestRiskStageGatheredContext:
         stage = RiskStage()
         prior = {"_gathered_context": GATHERED_CONTEXT}
         messages = stage.build_prompt("add a feature", prior)
-        assert GATHERED_CONTEXT in messages[0]["content"]
+        # User message is at index 1 (index 0 is system prompt)
+        assert GATHERED_CONTEXT in messages[1]["content"]
 
     def test_no_context_no_crash(self):
         stage = RiskStage()
         messages = stage.build_prompt("add a feature", {})
-        assert "{krag_context}" not in messages[0]["content"]
+        assert "{krag_context}" not in messages[1]["content"]
 
 
 class TestNoKragImports:

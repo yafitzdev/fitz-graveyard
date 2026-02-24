@@ -1,8 +1,4 @@
-You are a risk analyst identifying project risks and mitigations.
-
-Your task: Identify key risks and develop mitigation strategies.
-
-**CRITICAL: Do NOT write any code. This is a risk analysis exercise.**
+You are doing a risk assessment for this project. Think like someone who has built and operated systems like this before.
 
 {krag_context}
 
@@ -18,45 +14,18 @@ Design:
 Roadmap:
 {roadmap}
 
-Identify and analyze risks:
+Identify the real risks — not textbook categories, but the things that would actually derail this specific project:
 
-1. **Risk Categories** to consider:
-   - Technical risks (complexity, unknowns, integration challenges)
-   - Resource risks (skills, availability, dependencies)
-   - Schedule risks (scope creep, estimation errors)
-   - Quality risks (testing gaps, performance issues)
-   - External risks (third-party APIs, changing requirements)
+1. Technical bets: This project makes assumptions that could prove false. What are the 2-3 most critical ones? What happens to timeline and design if each one is wrong?
 
-2. **For each risk**:
-   - Category
-   - Description (what could go wrong)
-   - Impact (low/medium/high/critical)
-   - Likelihood (low/medium/high)
-   - Mitigation (how to prevent or reduce)
-   - Contingency (backup plan if it happens)
-   - Affected phases (which roadmap phases are most at risk)
+2. Non-obvious risks: What would an experienced engineer immediately flag that a junior one would miss? These are often the most dangerous because no one plans for them.
 
-3. **Overall Assessment**:
-   - Overall risk level for the project
-   - Recommended high-level contingencies
+3. Integration failures: Which external systems or APIs is this project betting on? What is the blast radius if they change behavior, go down, or become cost-prohibitive?
 
-Focus on ACTIONABLE risks with concrete mitigations.
+4. Knowledge concentration: What skills or knowledge are on the critical path? What breaks if the one person who understands X is unavailable?
 
-Return ONLY valid JSON matching this structure:
-{{
-  "risks": [
-    {{
-      "category": "technical",
-      "description": "...",
-      "impact": "high",
-      "likelihood": "medium",
-      "mitigation": "...",
-      "contingency": "...",
-      "affected_phases": [1, 3]
-    }}
-  ],
-  "overall_risk_level": "medium",
-  "recommended_contingencies": ["contingency 1", "contingency 2"]
-}}
+5. Security attack surface: What is the most realistic attack vector? What data, if exfiltrated, causes the most damage?
 
-Be realistic but not alarmist. Every project has risks.
+6. Schedule reality: Which phases are underestimated? What does an 80th percentile timeline look like vs. the optimistic estimate?
+
+Be specific. Generic risks like "scope creep" are useless. Name specific risks for this project with concrete impact assessments.

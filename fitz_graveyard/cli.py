@@ -8,6 +8,7 @@ All commands delegate to the same functions that MCP wraps.
 
 import asyncio
 import sys
+import time
 
 import typer
 
@@ -48,6 +49,145 @@ def _state_color(state: str) -> str:
     return colors.get(state, typer.colors.WHITE)
 
 
+# Stage list for live progress display: (display_name, progress_threshold_for_complete)
+_DISPLAY_STAGES = [
+    ("Health check",      0.08),
+    ("Codebase analysis", 0.09),
+    ("Requirements",      0.25),
+    ("Architecture",      0.45),
+    ("Design",            0.65),
+    ("Roadmap",           0.80),
+    ("Risk analysis",     0.95),
+    ("Finalizing",        1.00),
+]
+
+
+def _make_live_display(description: str, progress: float, elapsed: float):
+    """Build a rich renderable for the live progress display."""
+    from rich.table import Table
+    from rich.text import Text
+
+    table = Table.grid(padding=(0, 2))
+    table.add_column(width=3)
+    table.add_column()
+    table.add_column(justify="right", style="dim")
+
+    # Determine previous threshold to detect "active" stage
+    prev_threshold = 0.0
+    for name, threshold in _DISPLAY_STAGES:
+        if progress >= threshold:
+            icon = Text("✓", style="green")
+            row_style = "dim"
+            duration = ""
+        elif progress >= prev_threshold:
+            icon = Text("⟳", style="yellow")
+            row_style = "bold"
+            duration = f"{elapsed:.0f}s"
+        else:
+            icon = Text("○", style="dim")
+            row_style = "dim"
+            duration = ""
+
+        table.add_row(icon, Text(name, style=row_style), Text(duration, style="dim"))
+        prev_threshold = threshold
+
+    # Progress bar
+    bar_width = 36
+    filled = int(progress * bar_width)
+    bar = "█" * filled + "░" * (bar_width - filled)
+    pct = f"{progress * 100:.0f}%"
+
+    from rich.panel import Panel
+    from rich.console import Group
+    from rich.text import Text as RichText
+
+    title = RichText(f" {description[:60]}{'…' if len(description) > 60 else ''} ", style="bold")
+    bar_text = RichText(f"\n  {bar}  {pct}\n", style="cyan")
+
+    return Panel(
+        Group(table, bar_text),
+        title=title,
+        border_style="bright_black",
+    )
+
+
+async def _run_inline(job_id: str, store, config, description: str) -> None:
+    """Run a job inline with live rich progress display, then print the plan."""
+    from rich.live import Live
+    from rich.console import Console
+
+    from fitz_graveyard.background.worker import BackgroundWorker
+    from fitz_graveyard.llm.factory import create_llm_client
+
+    client = create_llm_client(config)
+    worker = BackgroundWorker(
+        store,
+        config=config,
+        ollama_client=client,
+        memory_threshold=config.ollama.memory_threshold,
+    )
+
+    console = Console(stderr=True)
+    start = time.monotonic()
+
+    job_task = asyncio.create_task(worker.process_job_direct(job_id))
+
+    try:
+        with Live(_make_live_display(description, 0.0, 0.0), console=console, refresh_per_second=4) as live:
+            while not job_task.done():
+                job = await store.get(job_id)
+                if job:
+                    elapsed = time.monotonic() - start
+                    live.update(_make_live_display(description, job.progress or 0.0, elapsed))
+                await asyncio.sleep(0.3)
+
+            # Final update
+            job = await store.get(job_id)
+            if job:
+                elapsed = time.monotonic() - start
+                live.update(_make_live_display(description, job.progress or 0.0, elapsed))
+
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        job_task.cancel()
+        try:
+            await job_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        raise KeyboardInterrupt
+
+    # Check result
+    exc = job_task.exception()
+    if exc:
+        raise exc
+
+    # Print result
+    final_job = await store.get(job_id)
+    if not final_job:
+        return
+
+    state = final_job.state.value
+    quality = f"{final_job.quality_score:.2f}" if final_job.quality_score else "N/A"
+    elapsed = time.monotonic() - start
+
+    console.print()
+    if state == "complete":
+        console.print(f"[green]✓ Done[/green]  quality: {quality}  time: {elapsed:.0f}s")
+        if final_job.file_path:
+            console.print(f"[dim]Saved:[/dim] {final_job.file_path}")
+        console.print()
+        # Print the plan to stdout
+        if final_job.file_path:
+            from fitz_graveyard.tools.get_plan import get_plan
+            result = await get_plan(job_id, "full", store)
+            typer.echo(result["content"])
+    elif state == "awaiting_review":
+        console.print(f"[magenta]⏸ Awaiting review[/magenta]  Run 'fitz-graveyard confirm {job_id}' to proceed.")
+    else:
+        error = final_job.error or "unknown error"
+        console.print(f"[red]✗ Failed[/red]: {error}")
+        raise typer.Exit(1)
+
+
 @app.command()
 def plan(
     description: str = typer.Argument(..., help="What you want to build or accomplish"),
@@ -55,17 +195,48 @@ def plan(
     context: str = typer.Option(None, "--context", "-c", help="Additional context"),
     api_review: bool = typer.Option(False, "--api-review", help="Enable API review"),
     source_dir: str = typer.Option(None, "--source-dir", help="Path to codebase for agent context"),
+    detach: bool = typer.Option(False, "--detach", "-d", help="Queue only, don't run inline"),
+    no_clarify: bool = typer.Option(False, "--no-clarify", help="Skip clarification questions"),
 ):
-    """Queue a new planning job."""
+    """Queue and run a planning job with live progress. Use --detach to queue only."""
     from fitz_graveyard.config.loader import load_config
     from fitz_graveyard.tools.create_plan import create_plan
 
     async def _plan():
         store = await _get_store()
         config = load_config()
+        enriched_description = description
+
+        # Ask clarification questions if interactive and not detached
+        if not no_clarify and not detach and sys.stdin.isatty():
+            try:
+                from fitz_graveyard.planning.clarification import get_clarifying_questions
+                from fitz_graveyard.llm.factory import create_llm_client
+
+                client = create_llm_client(config)
+                if await client.health_check():
+                    questions = await get_clarifying_questions(client, description)
+                    if questions:
+                        typer.echo("\nA few quick questions to sharpen the plan:\n")
+                        answers = []
+                        for i, q in enumerate(questions, 1):
+                            answer = typer.prompt(f"  {i}. {q}", default="")
+                            if answer.strip():
+                                answers.append(f"Q: {q}\nA: {answer}")
+                        if answers:
+                            enriched_description = (
+                                description
+                                + "\n\n## Additional Context\n\n"
+                                + "\n\n".join(answers)
+                            )
+                        typer.echo()
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Clarification skipped: {e}")
+
         try:
             result = await create_plan(
-                description=description,
+                description=enriched_description,
                 timeline=timeline,
                 context=context,
                 integration_points=None,
@@ -74,13 +245,27 @@ def plan(
                 config=config,
                 source_dir=source_dir,
             )
+        except Exception:
+            await store.close()
+            raise
+
+        job_id = result["job_id"]
+
+        if detach:
+            await store.close()
+            typer.echo(f"Queued job {job_id}. Run 'fitz-graveyard run' to start processing.")
+            return
+
+        try:
+            await _run_inline(job_id, store, config, enriched_description)
         finally:
             await store.close()
-        return result
 
-    result = _run(_plan())
-    job_id = result["job_id"]
-    typer.echo(f"Queued job {job_id}. Run 'fitz-graveyard run' to start processing.")
+    try:
+        _run(_plan())
+    except KeyboardInterrupt:
+        typer.echo("\nCancelled.", err=True)
+        raise typer.Exit(130)
 
 
 @app.command("run")
