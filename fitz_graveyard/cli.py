@@ -54,6 +54,7 @@ def plan(
     timeline: str = typer.Option(None, "--timeline", "-t", help="Timeline constraints"),
     context: str = typer.Option(None, "--context", "-c", help="Additional context"),
     api_review: bool = typer.Option(False, "--api-review", help="Enable API review"),
+    source_dir: str = typer.Option(None, "--source-dir", help="Path to codebase for agent context"),
 ):
     """Queue a new planning job."""
     from fitz_graveyard.config.loader import load_config
@@ -71,6 +72,7 @@ def plan(
                 api_review=api_review,
                 store=store,
                 config=config,
+                source_dir=source_dir,
             )
         finally:
             await store.close()
@@ -84,31 +86,37 @@ def plan(
 @app.command("run")
 def run_worker():
     """Start the worker to process queued jobs. Ctrl+C to stop."""
+    import logging
+    import sys
+
     from fitz_graveyard.background.lifecycle import ServerLifecycle
     from fitz_graveyard.config.loader import load_config
-
-    config = load_config()
-
     from platformdirs import user_config_path
 
+    # Simple human-readable logging to stderr for CLI mode
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(logging.Formatter("%(asctime)s  %(levelname)-7s  %(message)s", datefmt="%H:%M:%S"))
+    root = logging.getLogger()
+    root.handlers.clear()
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
+
+    config = load_config()
     config_dir = user_config_path("fitz-graveyard", ensure_exists=True)
     db_path = str(config_dir / "jobs.db")
 
     async def _run_worker():
         lifecycle = ServerLifecycle(db_path, config=config)
         await lifecycle.startup()
-        typer.echo("Worker started. Processing queued jobs... (Ctrl+C to stop)")
+        typer.echo("Worker started. Processing queued jobs... (Ctrl+C to stop)\n")
         try:
-            # Block on the worker loop — it runs as an asyncio task,
-            # so we just wait forever until cancelled
             while True:
                 await asyncio.sleep(1)
         except (KeyboardInterrupt, asyncio.CancelledError):
             pass
         finally:
-            typer.echo("\nShutting down worker...")
+            typer.echo("\nShutting down...")
             await lifecycle.shutdown()
-            typer.echo("Worker stopped.")
 
     try:
         _run(_run_worker())

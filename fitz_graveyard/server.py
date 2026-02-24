@@ -89,11 +89,18 @@ async def create_plan(
     context: str | None = None,
     integration_points: list[str] | None = None,
     api_review: bool = False,
+    source_dir: str | None = None,
 ) -> dict:
-    """Create a new architectural planning job. Queues work for local LLM processing."""
+    """
+    Create a new architectural planning job. Queues work for local LLM processing.
+
+    source_dir: Optional path to the project codebase. The agent will explore
+    this directory before planning begins to gather rich context.
+    """
     store = await get_store()
     return await _create_plan(
-        description, timeline, context, integration_points, api_review, store=store, config=_config
+        description, timeline, context, integration_points, api_review,
+        store=store, config=_config, source_dir=source_dir,
     )
 
 

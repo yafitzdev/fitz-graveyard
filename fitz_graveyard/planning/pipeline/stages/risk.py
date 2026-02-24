@@ -68,12 +68,7 @@ Total Phases: {roadmap.get('total_phases', 0)}
 Critical Path: {roadmap.get('critical_path', [])}
 """
 
-        # Query KRAG for security patterns and error handling
-        krag_queries = [
-            "What security patterns and error handling exist in the codebase?",
-            "What are the external dependencies and their versions?",
-        ]
-        krag_context = self._get_krag_context(krag_queries, prior_outputs)
+        krag_context = self._get_gathered_context(prior_outputs)
 
         prompt = prompt_template.format(
             description=job_description,

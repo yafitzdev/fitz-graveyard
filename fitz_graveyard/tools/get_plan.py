@@ -65,22 +65,42 @@ async def get_plan(
             f"Wait for completion before retrieving plan."
         )
 
-    # Build stub content (actual plan generation comes in Phase 4)
-    content = f"""# Plan for: {record.description}
+    # Read plan from file
+    if not record.file_path:
+        raise ToolError(
+            f"Job '{sanitized_id}' has no plan file. The plan may not have been written yet."
+        )
 
-**Job ID:** {record.job_id}
-**Status:** Complete
-**Quality Score:** {record.quality_score or 'N/A'}
+    try:
+        with open(record.file_path, encoding="utf-8") as f:
+            raw_content = f.read()
+    except OSError as e:
+        raise ToolError(f"Could not read plan file '{record.file_path}': {e}")
 
-## Stub Content
-
-This is a placeholder response. Actual plan generation will be implemented in Phase 4.
-
-**Format requested:** {format}
-**Timeline:** {record.timeline or 'Not specified'}
-**Context:** {record.context or 'Not provided'}
-**Integration points:** {', '.join(record.integration_points) if record.integration_points else 'None'}
-"""
+    if format == "full":
+        content = raw_content
+    elif format == "summary":
+        # Return everything up to and including the Design section
+        lines = raw_content.splitlines(keepends=True)
+        result = []
+        in_roadmap = False
+        for line in lines:
+            if line.startswith("## Roadmap") or line.startswith("## Risk"):
+                in_roadmap = True
+            if in_roadmap:
+                continue
+            result.append(line)
+        content = "".join(result)
+    elif format == "roadmap_only":
+        lines = raw_content.splitlines(keepends=True)
+        result = []
+        in_roadmap = False
+        for line in lines:
+            if line.startswith("## Roadmap"):
+                in_roadmap = True
+            if in_roadmap:
+                result.append(line)
+        content = "".join(result) if result else raw_content
 
     # Build response
     response = PlanContentResponse(

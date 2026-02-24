@@ -18,7 +18,7 @@ from fitz_graveyard.models.jobs import (
 )
 from fitz_graveyard.models.responses import CreatePlanResponse
 from fitz_graveyard.models.store import JobStore
-from fitz_graveyard.validation.sanitize import sanitize_description
+from fitz_graveyard.validation.sanitize import sanitize_description, sanitize_project_path
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +31,7 @@ async def create_plan(
     api_review: bool,
     store: JobStore,
     config: FitzPlannerConfig,
+    source_dir: str | None = None,
 ) -> dict:
     """
     Create a new architectural planning job.
@@ -60,6 +61,14 @@ async def create_plan(
     except Exception as e:
         raise ToolError(f"Invalid description: {e}")
 
+    # Validate source_dir if provided
+    validated_source_dir: str | None = None
+    if source_dir:
+        try:
+            validated_source_dir = str(sanitize_project_path(source_dir))
+        except ToolError:
+            raise
+
     # Generate unique job ID
     job_id = generate_job_id()
 
@@ -77,6 +86,7 @@ async def create_plan(
         created_at=datetime.now(timezone.utc),
         file_path=None,
         api_review=api_review,
+        source_dir=validated_source_dir,
     )
 
     # Add to store

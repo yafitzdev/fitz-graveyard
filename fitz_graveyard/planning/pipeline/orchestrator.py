@@ -10,10 +10,13 @@ import logging
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fitz_graveyard.planning.pipeline.checkpoint import CheckpointManager
 from fitz_graveyard.planning.pipeline.stages.base import PipelineStage, StageResult
+
+if TYPE_CHECKING:
+    from fitz_graveyard.planning.agent import AgentContextGatherer
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +104,7 @@ class PlanningPipeline:
         job_description: str,
         resume: bool = False,
         progress_callback: Callable[[float, str], None] | Callable[[float, str], Any] | None = None,
+        agent: "AgentContextGatherer | None" = None,
     ) -> PipelineResult:
         """
         Execute the planning pipeline.
@@ -129,8 +133,34 @@ class PlanningPipeline:
             await self._checkpoint_mgr.clear_checkpoint(job_id)
             logger.info(f"Starting fresh pipeline for job {job_id}")
 
-        # Determine which stages to execute
-        completed_stages = set(prior_outputs.keys())
+        # Run agent context gathering (once, before all stages, with checkpoint)
+        if agent is not None and "_agent_context" not in prior_outputs:
+            logger.info(f"Running AgentContextGatherer for job {job_id}")
+            gathered = await agent.gather(
+                client=client,
+                job_description=job_description,
+                progress_callback=progress_callback,
+            )
+            await self._checkpoint_mgr.save_stage(
+                job_id, "_agent_context", {"text": gathered}
+            )
+            prior_outputs["_agent_context"] = {"text": gathered}
+            logger.info(
+                f"AgentContextGatherer complete: {len(gathered)} chars of context"
+            )
+        elif "_agent_context" in prior_outputs:
+            logger.info(
+                f"Resuming: using checkpointed agent context for job {job_id}"
+            )
+
+        # Inject gathered context for stages to consume
+        if "_agent_context" in prior_outputs:
+            prior_outputs["_gathered_context"] = prior_outputs["_agent_context"].get(
+                "text", ""
+            )
+
+        # Determine which stages to execute (exclude internal _ keys)
+        completed_stages = {k for k in prior_outputs.keys() if not k.startswith("_")}
         remaining_stages = [s for s in self._stages if s.name not in completed_stages]
 
         if not remaining_stages:

@@ -12,7 +12,7 @@ import aiosqlite
 logger = logging.getLogger(__name__)
 
 # Schema version for future migrations
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # Jobs table DDL
 JOBS_TABLE_SQL = """
@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     api_review INTEGER DEFAULT 0,
+    source_dir TEXT,
     cost_estimate_json TEXT,
     review_result_json TEXT
 )
@@ -129,6 +130,26 @@ async def _migrate_v2_to_v3(db: aiosqlite.Connection) -> None:
     logger.info("Note: awaiting_review state added to enum (no table recreation needed)")
 
 
+async def _migrate_v3_to_v4(db: aiosqlite.Connection) -> None:
+    """
+    Migrate schema from v3 to v4.
+
+    Changes:
+        - Add source_dir column to jobs table
+    """
+    logger.info("Migrating schema from v3 to v4")
+
+    cursor = await db.execute("PRAGMA table_info(jobs)")
+    columns = await cursor.fetchall()
+    column_names = [col[1] for col in columns]
+
+    if "source_dir" not in column_names:
+        await db.execute("ALTER TABLE jobs ADD COLUMN source_dir TEXT")
+        logger.info("Added source_dir column to jobs table")
+    else:
+        logger.info("source_dir column already exists (skip)")
+
+
 async def init_db(db_path: str) -> None:
     """
     Initialize database schema with WAL mode and optimal settings.
@@ -174,16 +195,23 @@ async def init_db(db_path: str) -> None:
                 await _set_schema_version(db, SCHEMA_VERSION)
                 logger.info(f"New database initialized at v{SCHEMA_VERSION}")
             elif current_version == 1:
-                # Migrate from v1 to v2
+                # Migrate from v1 to v2, v3, v4
                 await _migrate_v1_to_v2(db)
                 await _migrate_v2_to_v3(db)
-                await _set_schema_version(db, 3)
-                logger.info("Migration to v3 complete")
+                await _migrate_v3_to_v4(db)
+                await _set_schema_version(db, 4)
+                logger.info("Migration to v4 complete")
             elif current_version == 2:
                 # Migrate from v2 to v3
                 await _migrate_v2_to_v3(db)
-                await _set_schema_version(db, 3)
-                logger.info("Migration to v3 complete")
+                await _migrate_v3_to_v4(db)
+                await _set_schema_version(db, 4)
+                logger.info("Migration to v4 complete")
+            elif current_version == 3:
+                # Migrate from v3 to v4
+                await _migrate_v3_to_v4(db)
+                await _set_schema_version(db, 4)
+                logger.info("Migration to v4 complete")
 
         await db.commit()
 

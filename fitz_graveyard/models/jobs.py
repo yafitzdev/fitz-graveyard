@@ -50,6 +50,7 @@ class JobRecord:
     pipeline_state: str | None = None  # JSON checkpoint data
     updated_at: datetime | None = None
     api_review: bool = False  # Whether user opted into API review
+    source_dir: str | None = None  # Path to codebase for agent context gathering
     cost_estimate_json: str | None = None  # Serialized CostEstimate JSON (set by worker)
     review_result_json: str | None = None  # Serialized list of ReviewResult JSON (set after review)
 

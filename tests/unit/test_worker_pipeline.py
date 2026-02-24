@@ -143,7 +143,7 @@ async def test_worker_progress_updates(store: SQLiteJobStore, tmp_path: Path):
     mock_client.generate = AsyncMock(return_value="yes")  # For confidence scorer
 
     # Mock pipeline that calls progress callback
-    async def mock_execute(client, job_id, job_description, resume, progress_callback):
+    async def mock_execute(client, job_id, job_description, resume, progress_callback, **kwargs):
         # Simulate stage progress updates
         if progress_callback:
             await progress_callback(0.1, "context")

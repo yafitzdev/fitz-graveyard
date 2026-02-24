@@ -3,9 +3,9 @@
 
 from .loader import get_config_path, load_config
 from .schema import (
+    AgentConfig,
     ConfidenceConfig,
     FitzPlannerConfig,
-    KragConfig,
     OllamaConfig,
     OutputConfig,
 )
@@ -13,7 +13,7 @@ from .schema import (
 __all__ = [
     "FitzPlannerConfig",
     "OllamaConfig",
-    "KragConfig",
+    "AgentConfig",
     "OutputConfig",
     "ConfidenceConfig",
     "load_config",

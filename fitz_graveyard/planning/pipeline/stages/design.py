@@ -54,12 +54,7 @@ Reasoning: {arch.get('reasoning', '')}
 Key Tradeoffs: {json.dumps(arch.get('key_tradeoffs', {}), indent=2)}
 """
 
-        # Query KRAG for component interfaces and data models
-        krag_queries = [
-            "What are the main classes, data models, and their relationships?",
-            "What component interfaces and contracts exist?",
-        ]
-        krag_context = self._get_krag_context(krag_queries, prior_outputs)
+        krag_context = self._get_gathered_context(prior_outputs)
 
         prompt = prompt_template.format(
             description=job_description,

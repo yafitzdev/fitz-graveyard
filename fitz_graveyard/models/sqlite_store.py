@@ -104,8 +104,8 @@ class SQLiteJobStore(JobStore):
                         id, description, timeline, context, integration_points,
                         state, progress, current_phase, quality_score, file_path,
                         error, pipeline_state, created_at, updated_at,
-                        api_review, cost_estimate_json, review_result_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        api_review, source_dir, cost_estimate_json, review_result_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         record.job_id,
@@ -123,6 +123,7 @@ class SQLiteJobStore(JobStore):
                         created_at_iso,
                         updated_at_iso,
                         1 if record.api_review else 0,
+                        record.source_dir,
                         record.cost_estimate_json,
                         record.review_result_json,
                     ),
@@ -195,6 +196,7 @@ class SQLiteJobStore(JobStore):
             "pipeline_state",
             "updated_at",
             "api_review",
+            "source_dir",
             "cost_estimate_json",
             "review_result_json",
         }
@@ -319,6 +321,7 @@ class SQLiteJobStore(JobStore):
             if row["updated_at"]
             else None,
             api_review=bool(safe_get("api_review", 0)),
+            source_dir=safe_get("source_dir"),
             cost_estimate_json=safe_get("cost_estimate_json"),
             review_result_json=safe_get("review_result_json"),
         )

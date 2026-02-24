@@ -76,6 +76,39 @@ def sanitize_description(text: str, max_length: int = 5000) -> str:
     return cleaned
 
 
+def sanitize_agent_path(user_path: str, root_dir: str) -> "Path":
+    """
+    Validate agent tool path: must exist and be inside root_dir.
+
+    Args:
+        user_path: Path provided by the LLM agent
+        root_dir: Absolute root directory (source_dir) for confinement
+
+    Returns:
+        Resolved absolute Path
+
+    Raises:
+        ValueError: If path is outside root_dir or does not exist
+    """
+    root = Path(root_dir).resolve()
+    try:
+        resolved = (root / user_path).resolve()
+    except (ValueError, OSError) as e:
+        raise ValueError(f"Invalid path '{user_path}': {e}")
+
+    try:
+        resolved.relative_to(root)
+    except ValueError:
+        raise ValueError(
+            f"Path '{user_path}' is outside source directory '{root}'"
+        )
+
+    if not resolved.exists():
+        raise ValueError(f"Path does not exist: {resolved}")
+
+    return resolved
+
+
 def sanitize_job_id(job_id: str) -> str:
     """
     Sanitize and validate job ID.

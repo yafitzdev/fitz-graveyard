@@ -59,12 +59,7 @@ Components: {', '.join(components)}
 ADR Count: {len(design.get('adrs', []))}
 """
 
-        # Query KRAG for module dependencies and integration complexity
-        krag_queries = [
-            "What are the module dependencies and import relationships?",
-            "What incomplete features, TODOs, or planned work exists?",
-        ]
-        krag_context = self._get_krag_context(krag_queries, prior_outputs)
+        krag_context = self._get_gathered_context(prior_outputs)
 
         prompt = prompt_template.format(
             description=job_description,

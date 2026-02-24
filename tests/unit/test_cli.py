@@ -154,8 +154,12 @@ class TestStatus:
 
 class TestGet:
     @patch("fitz_graveyard.cli._get_store")
-    def test_get_complete_job(self, mock_store):
+    @patch("builtins.open", new_callable=MagicMock)
+    def test_get_complete_job(self, mock_open, mock_store):
         """get prints plan markdown."""
+        plan_content = "# Plan for: build auth system\n\nSome plan content."
+        mock_open.return_value.__enter__.return_value.read.return_value = plan_content
+
         job = _make_job(state=JobState.COMPLETE, quality_score=0.82, file_path="/tmp/plan.md")
         mock_store_instance = AsyncMock()
         mock_store_instance.get = AsyncMock(return_value=job)
