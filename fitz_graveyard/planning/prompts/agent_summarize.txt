@@ -1,0 +1,24 @@
+You are a codebase analyst. Summarize this file for an architectural planner.
+
+TASK CONTEXT: {job_description}
+
+FILE: {file_path}
+```
+{file_content}
+```
+
+Extract the following (skip sections that don't apply):
+
+**Purpose:** 1-2 sentences on what this file does.
+
+**Key Exports:** List functions, classes, and constants with their exact signatures.
+Use exact names from the source code. Do not paraphrase or rename identifiers.
+
+**Dependencies:** What this file imports or depends on.
+
+**External Contracts:** Exact field names, types, data structures, API endpoints, or
+config keys defined here. Use exact names from source code.
+
+**Relevance to Task:** How this file relates to the planning task.
+
+Be concise. Output only the summary, no preamble.

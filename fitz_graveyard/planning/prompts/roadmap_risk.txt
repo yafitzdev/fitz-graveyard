@@ -1,0 +1,59 @@
+You are creating an implementation roadmap and risk assessment for this project. Think like someone who has built and operated systems like this before.
+
+{krag_context}
+
+Project context:
+{context}
+
+Architecture and design:
+{architecture_design}
+
+This is a two-part analysis. First plan the implementation phases, then assess risks based on your roadmap.
+
+## Part 1: Roadmap
+
+Think through the actual implementation sequence:
+
+1. Phase 0 — Read before writing: What must be verified by READING SOURCE CODE before the first line of code is written? This phase produces zero code. Its deliverable is a list of verified facts: "I read X file and confirmed Y behavior." Concrete pass/fail outcome. Examples:
+   - Read config.py to verify loader precedence (YAML vs Python provider)
+   - Read validators.py to confirm which schema fields are required vs optional
+   - Read an existing YAML plugin to confirm exact field format
+   If nothing needs verification, skip Phase 0.
+
+2. True MVP: What is the minimum that proves the core value and could be shown to a stakeholder? Be ruthless — what can be cut from v1 without losing the core value proposition?
+
+3. Real dependencies: Which phases genuinely cannot start until another completes because they depend on its output? Which "dependencies" are just ordering preferences?
+
+4. Risk sequencing: What should be built first to reduce technical uncertainty — not what is easiest, but what would invalidate the plan if it turns out to be harder than expected?
+
+5. Underestimated phases: Which phases look simple but hide significant complexity, and why?
+
+6. Concrete deliverables: What would someone see, test, or demo at the end of each phase? Not "implement X module" — what working behavior does it produce? If a phase delivers a config file, schema, or small artifact, write the complete content inline — not a description of it.
+
+7. Scope discipline: Each phase must be necessary and sufficient. Fewer phases is better. 3-5 phases for most projects. A config file task does NOT need 6 phases. If a phase has only one small deliverable, merge it with the adjacent phase. Anything that could be a standalone follow-up task gets cut.
+
+8. Verification: For each phase, what is the exact command someone runs to verify it worked? Not "run tests" — the actual command: `python -m pytest tests/unit/test_something.py -v` or `python -c "from module import func; func()"`. If verification is manual, describe exactly what the person should see.
+
+9. Time estimates: Rough effort per phase (e.g., "~1 hour", "~30 min"). Be honest — small tasks are small. A phase that writes one file and runs a validator is not "2-3 days".
+
+10. Parallelism: Which phases can genuinely run in parallel? Tests alongside config updates? If everything is truly sequential, say so — but check first.
+
+## Part 2: Risk Assessment (based on your roadmap above)
+
+Identify the real risks — not textbook categories, but the things that would actually derail this specific project.
+
+SCOPE RULE: Every risk you list must be directly caused by a decision made in this plan. If a risk would exist whether or not this feature was built, cut it. Do not list risks about other parts of the system, general operational concerns, or things outside the scope of these roadmap phases.
+
+1. Technical bets: This plan makes assumptions that could prove false. What are the 2-3 most critical ones specific to what was just designed? What happens to the timeline and design if each one is wrong?
+
+2. Non-obvious risks: What would an experienced engineer immediately flag that a junior one would miss? These must be specific to the approach chosen — not generic engineering concerns.
+
+3. Integration failures: Which external systems or APIs does THIS feature specifically bet on? What is the blast radius if they change behavior?
+
+4. Silent failure modes: Where could this feature fail in a way that produces no error — just wrong output? These are the most dangerous because no one notices until production.
+
+5. Security attack surface introduced by this change: What new attack surface does this feature specifically add? If the feature adds no new attack surface, say so explicitly rather than inventing one.
+
+6. Testable assertion: Every risk MUST include a concrete verification — the exact check, assertion, or command that would catch this risk. Not "monitor for errors" — the specific test: `assert response['choices'][0]['message']['content'] is not None` or `python -m validators --strict config.yaml`. If you cannot write a concrete test for a risk, the risk is too vague — sharpen it or cut it.
+
+Be specific. Generic risks like "scope creep" or risks about unrelated system components are useless and will be cut.

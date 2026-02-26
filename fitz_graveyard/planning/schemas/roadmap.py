@@ -1,7 +1,7 @@
 # fitz_graveyard/planning/schemas/roadmap.py
 """Schema for implementation roadmap stage output."""
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 
 
 class Phase(BaseModel):
@@ -14,13 +14,21 @@ class Phase(BaseModel):
         description="Phase number (1-indexed)",
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_field_names(cls, data: dict) -> dict:
+        """Handle LLM field name variations (e.g. 'num' instead of 'number')."""
+        if isinstance(data, dict) and "num" in data and "number" not in data:
+            data["number"] = data.pop("num")
+        return data
+
     name: str = Field(
         ...,
         description="Short descriptive name for this phase",
     )
 
     objective: str = Field(
-        ...,
+        default="",
         description="What this phase achieves",
     )
 
@@ -42,6 +50,16 @@ class Phase(BaseModel):
     key_risks: list[str] = Field(
         default_factory=list,
         description="Risks specific to this phase",
+    )
+
+    verification_command: str = Field(
+        default="",
+        description="Exact command or check to verify phase completion",
+    )
+
+    estimated_effort: str = Field(
+        default="",
+        description="Rough time estimate (e.g., '~1 hour', '~30 min')",
     )
 
 

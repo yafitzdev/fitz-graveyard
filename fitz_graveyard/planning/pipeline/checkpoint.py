@@ -8,6 +8,7 @@ enabling crash recovery and incremental progress.
 
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 import aiosqlite
@@ -63,8 +64,11 @@ class CheckpointManager:
                 # Parse existing state (or start fresh)
                 existing_state = json.loads(row[0]) if row[0] else {}
 
-                # Add this stage's output
-                existing_state[stage_name] = stage_output
+                # Add this stage's output with timestamp
+                existing_state[stage_name] = {
+                    "output": stage_output,
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                }
 
                 # Save back to DB
                 await db.execute(
@@ -110,7 +114,27 @@ class CheckpointManager:
             logger.info(
                 f"Loaded checkpoint for job {job_id}: {list(checkpoint.keys())}"
             )
-            return checkpoint
+
+            # Unwrap timestamped format and warn on stale checkpoints
+            STALE_HOURS = 24
+            unwrapped = {}
+            for key, val in checkpoint.items():
+                if isinstance(val, dict) and "output" in val and "completed_at" in val:
+                    # New timestamped format — unwrap
+                    try:
+                        completed = datetime.fromisoformat(val["completed_at"])
+                        age_hours = (datetime.now(timezone.utc) - completed).total_seconds() / 3600
+                        if age_hours > STALE_HOURS:
+                            logger.warning(
+                                f"Checkpoint '{key}' is {age_hours:.0f}h old (>{STALE_HOURS}h)"
+                            )
+                    except (ValueError, TypeError):
+                        pass
+                    unwrapped[key] = val["output"]
+                else:
+                    # Old format (plain dict) — use as-is
+                    unwrapped[key] = val
+            return unwrapped
 
     async def clear_checkpoint(self, job_id: str) -> None:
         """

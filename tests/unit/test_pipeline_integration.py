@@ -61,25 +61,17 @@ async def test_full_pipeline_execution(store: SQLiteJobStore):
     # Create mock LLM client
     mock_client = AsyncMock()
 
-    # Each stage does two-pass (reasoning + JSON): 5 stages × 2 calls = 10 calls total.
-    # Odd calls return reasoning text; even calls return valid JSON for that stage.
-    _context_json = '{"project_description": "API service", "key_requirements": [], "constraints": [], "existing_context": "", "stakeholders": [], "scope_boundaries": {}}'
-    _arch_json = '{"approaches": [{"name": "Monolith", "description": "Single app", "pros": ["Simple"], "cons": ["Scale"], "complexity": "low", "best_for": ["MVPs"]}], "recommended": "Monolith", "reasoning": "Best for now", "key_tradeoffs": {}, "technology_considerations": []}'
-    _design_json = '{"adrs": [], "components": [], "data_model": {}, "integration_points": []}'
-    _roadmap_json = '{"phases": [], "critical_path": [], "parallel_opportunities": [], "total_phases": 0}'
-    _risk_json = '{"risks": [], "overall_risk_level": "low", "recommended_contingencies": []}'
+    # 3 merged stages with single-pass: each returns valid JSON directly.
+    # If single-pass fails, falls back to two-pass (reasoning + JSON).
+    import json
+    _context_json = json.dumps({"project_description": "API service", "key_requirements": [], "constraints": [], "existing_context": "", "stakeholders": [], "scope_boundaries": {}, "existing_files": [], "needed_artifacts": [], "assumptions": []})
+    _arch_design_json = json.dumps({"approaches": [{"name": "Monolith", "description": "Single app", "pros": ["Simple"], "cons": ["Scale"], "complexity": "low", "best_for": ["MVPs"]}], "recommended": "Monolith", "reasoning": "Best for now", "key_tradeoffs": {}, "technology_considerations": [], "scope_statement": "", "adrs": [], "components": [], "data_model": {}, "integration_points": [], "artifacts": []})
+    _roadmap_risk_json = json.dumps({"phases": [], "critical_path": [], "parallel_opportunities": [], "total_phases": 0, "risks": [], "overall_risk_level": "low", "recommended_contingencies": []})
 
     stage_responses = [
-        "Reasoning about context...",   # context pass 1
-        _context_json,                  # context pass 2
-        "Reasoning about architecture...",  # architecture pass 1
-        _arch_json,                     # architecture pass 2
-        "Reasoning about design...",    # design pass 1
-        _design_json,                   # design pass 2
-        "Reasoning about roadmap...",   # roadmap pass 1
-        _roadmap_json,                  # roadmap pass 2
-        "Reasoning about risks...",     # risk pass 1
-        _risk_json,                     # risk pass 2
+        _context_json,       # context (single-pass)
+        _arch_design_json,   # architecture_design (single-pass)
+        _roadmap_risk_json,  # roadmap_risk (single-pass)
     ]
 
     call_count = [0]
@@ -110,12 +102,14 @@ async def test_full_pipeline_execution(store: SQLiteJobStore):
     assert result.failed_stage is None
     assert result.error is None
 
-    # Verify all stages completed
+    # Verify all stages completed (merged stages are flattened by orchestrator)
     assert "context" in result.outputs
-    assert "architecture" in result.outputs
-    assert "design" in result.outputs
-    assert "roadmap" in result.outputs
-    assert "risk" in result.outputs
+    # architecture_design stage output is flattened into "architecture" and "design"
+    assert "architecture" in result.outputs or "architecture_design" in result.outputs
+    assert "design" in result.outputs or "architecture_design" in result.outputs
+    # roadmap_risk stage output is flattened into "roadmap" and "risk"
+    assert "roadmap" in result.outputs or "roadmap_risk" in result.outputs
+    assert "risk" in result.outputs or "roadmap_risk" in result.outputs
 
     # Verify git SHA captured
     assert result.git_sha is not None or result.git_sha == ""
@@ -210,6 +204,7 @@ async def test_plan_output_creation_and_rendering():
             reasoning="Best for initial version",
             key_tradeoffs={"simplicity": "vs scalability"},
             technology_considerations=["Python", "FastAPI"],
+            scope_statement="Small REST API — one service, one database.",
         ),
         design=DesignOutput(
             adrs=[
@@ -239,10 +234,10 @@ async def test_plan_output_creation_and_rendering():
                     number=1,
                     name="MVP",
                     objective="Core functionality",
-                    tasks=["Setup project", "Add auth"],
+                    deliverables=["Working auth endpoint"],
                     dependencies=[],
-                    duration="2 weeks",
-                    deliverables=[],
+                    verification_command="python -m pytest tests/test_auth.py -v",
+                    estimated_effort="~2 hours",
                 )
             ],
             critical_path=[1],
@@ -251,7 +246,6 @@ async def test_plan_output_creation_and_rendering():
         risk=RiskOutput(
             risks=[
                 Risk(
-                    title="Scale issues",
                     category="technical",
                     description="May not scale well",
                     impact="high",
@@ -259,6 +253,7 @@ async def test_plan_output_creation_and_rendering():
                     mitigation="Monitor performance",
                     contingency="Migrate to microservices",
                     affected_phases=[1],
+                    verification="ab -n 1000 -c 50 http://localhost:8000/api/health",
                 )
             ]
         ),
@@ -287,6 +282,11 @@ async def test_plan_output_creation_and_rendering():
     assert "Authentication" in markdown
     assert "Monolith" in markdown
     assert "FastAPI" in markdown
+    # New fields: scope statement, verification, effort, risk verification
+    assert "Small REST API" in markdown
+    assert "python -m pytest tests/test_auth.py -v" in markdown
+    assert "~2 hours" in markdown
+    assert "ab -n 1000" in markdown
 
 
 @pytest.mark.asyncio

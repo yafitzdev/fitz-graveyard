@@ -1,5 +1,5 @@
 # fitz_graveyard/planning/agent/__init__.py
-"""Local LLM context-gathering agent using Ollama tool calls."""
+"""Multi-pass context-gathering agent for codebase exploration."""
 
 from fitz_graveyard.planning.agent.gatherer import AgentContextGatherer
 

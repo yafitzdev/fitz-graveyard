@@ -6,11 +6,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from fitz_graveyard.planning.pipeline.stages import (
-    ArchitectureStage,
+    ArchitectureDesignStage,
     ContextStage,
-    DesignStage,
-    RiskStage,
-    RoadmapStage,
+    RoadmapRiskStage,
     create_stages,
 )
 
@@ -21,12 +19,12 @@ GATHERED_CONTEXT = "## Architecture\nKey components: JobStore, BackgroundWorker.
 class TestCreateStages:
     def test_create_stages_no_args(self):
         stages = create_stages()
-        assert len(stages) == 5
+        assert len(stages) == 3
 
     def test_stage_names(self):
         stages = create_stages()
         names = [s.name for s in stages]
-        assert names == ["context", "architecture", "design", "roadmap", "risk"]
+        assert names == ["context", "architecture_design", "roadmap_risk"]
 
     def test_progress_ranges_sequential(self):
         stages = create_stages()
@@ -72,9 +70,9 @@ class TestContextStageGatheredContext:
         assert "{krag_context}" not in messages[1]["content"]
 
 
-class TestArchitectureStageGatheredContext:
+class TestArchitectureDesignStageGatheredContext:
     def test_uses_gathered_context(self):
-        stage = ArchitectureStage()
+        stage = ArchitectureDesignStage()
         prior = {"_gathered_context": GATHERED_CONTEXT}
         messages = stage.build_prompt("add a feature", prior)
         assert len(messages) == 2
@@ -82,50 +80,22 @@ class TestArchitectureStageGatheredContext:
         assert GATHERED_CONTEXT in messages[1]["content"]
 
     def test_no_context_no_crash(self):
-        stage = ArchitectureStage()
+        stage = ArchitectureDesignStage()
         messages = stage.build_prompt("add a feature", {})
         assert len(messages) == 2
         assert "{krag_context}" not in messages[1]["content"]
 
 
-class TestDesignStageGatheredContext:
+class TestRoadmapRiskStageGatheredContext:
     def test_uses_gathered_context(self):
-        stage = DesignStage()
+        stage = RoadmapRiskStage()
         prior = {"_gathered_context": GATHERED_CONTEXT}
         messages = stage.build_prompt("add a feature", prior)
         # User message is at index 1 (index 0 is system prompt)
         assert GATHERED_CONTEXT in messages[1]["content"]
 
     def test_no_context_no_crash(self):
-        stage = DesignStage()
-        messages = stage.build_prompt("add a feature", {})
-        assert "{krag_context}" not in messages[1]["content"]
-
-
-class TestRoadmapStageGatheredContext:
-    def test_uses_gathered_context(self):
-        stage = RoadmapStage()
-        prior = {"_gathered_context": GATHERED_CONTEXT}
-        messages = stage.build_prompt("add a feature", prior)
-        # User message is at index 1 (index 0 is system prompt)
-        assert GATHERED_CONTEXT in messages[1]["content"]
-
-    def test_no_context_no_crash(self):
-        stage = RoadmapStage()
-        messages = stage.build_prompt("add a feature", {})
-        assert "{krag_context}" not in messages[1]["content"]
-
-
-class TestRiskStageGatheredContext:
-    def test_uses_gathered_context(self):
-        stage = RiskStage()
-        prior = {"_gathered_context": GATHERED_CONTEXT}
-        messages = stage.build_prompt("add a feature", prior)
-        # User message is at index 1 (index 0 is system prompt)
-        assert GATHERED_CONTEXT in messages[1]["content"]
-
-    def test_no_context_no_crash(self):
-        stage = RiskStage()
+        stage = RoadmapRiskStage()
         messages = stage.build_prompt("add a feature", {})
         assert "{krag_context}" not in messages[1]["content"]
 

@@ -14,18 +14,18 @@ Design:
 Roadmap:
 {roadmap}
 
-Identify the real risks — not textbook categories, but the things that would actually derail this specific project:
+Identify the real risks — not textbook categories, but the things that would actually derail this specific project.
 
-1. Technical bets: This project makes assumptions that could prove false. What are the 2-3 most critical ones? What happens to timeline and design if each one is wrong?
+SCOPE RULE: Every risk you list must be directly caused by a decision made in this plan. If a risk would exist whether or not this feature was built, cut it. Do not list risks about other parts of the system, general operational concerns, or things outside the scope of these roadmap phases.
 
-2. Non-obvious risks: What would an experienced engineer immediately flag that a junior one would miss? These are often the most dangerous because no one plans for them.
+1. Technical bets: This plan makes assumptions that could prove false. What are the 2-3 most critical ones specific to what was just designed? What happens to the timeline and design if each one is wrong?
 
-3. Integration failures: Which external systems or APIs is this project betting on? What is the blast radius if they change behavior, go down, or become cost-prohibitive?
+2. Non-obvious risks: What would an experienced engineer immediately flag that a junior one would miss? These must be specific to the approach chosen — not generic engineering concerns.
 
-4. Knowledge concentration: What skills or knowledge are on the critical path? What breaks if the one person who understands X is unavailable?
+3. Integration failures: Which external systems or APIs does THIS feature specifically bet on? What is the blast radius if they change behavior?
 
-5. Security attack surface: What is the most realistic attack vector? What data, if exfiltrated, causes the most damage?
+4. Silent failure modes: Where could this feature fail in a way that produces no error — just wrong output? These are the most dangerous because no one notices until production.
 
-6. Schedule reality: Which phases are underestimated? What does an 80th percentile timeline look like vs. the optimistic estimate?
+5. Security attack surface introduced by this change: What new attack surface does this feature specifically add? If the feature adds no new attack surface, say so explicitly rather than inventing one.
 
-Be specific. Generic risks like "scope creep" are useless. Name specific risks for this project with concrete impact assessments.
+Be specific. Generic risks like "scope creep" or risks about unrelated system components are useless and will be cut.

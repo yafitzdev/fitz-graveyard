@@ -42,6 +42,7 @@ async def list_plans(store: JobStore) -> dict:
             state=record.state.value,
             quality_score=record.quality_score,
             created_at=record.created_at.isoformat(),
+            file_path=record.file_path,
         )
         summaries.append(summary)
 

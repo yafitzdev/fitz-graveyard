@@ -5,11 +5,13 @@ import pytest
 from datetime import datetime
 
 from fitz_graveyard.planning.schemas import (
+    Assumption,
     ContextOutput,
     ArchitectureOutput,
     Approach,
     DesignOutput,
     ADR,
+    Artifact,
     ComponentDesign,
     RoadmapOutput,
     Phase,
@@ -50,6 +52,53 @@ class TestContextOutput:
         assert len(context.constraints) == 2
         assert "in_scope" in context.scope_boundaries
 
+    def test_with_assumptions(self):
+        """Test creation with assumptions field."""
+        context = ContextOutput(
+            project_description="Build an API",
+            assumptions=[
+                Assumption(
+                    assumption="REST API, not GraphQL",
+                    impact="Architecture changes significantly if GraphQL",
+                    confidence="medium",
+                ),
+                Assumption(
+                    assumption="Single-tenant deployment",
+                    impact="Data isolation strategy changes for multi-tenant",
+                    confidence="low",
+                ),
+            ],
+        )
+        assert len(context.assumptions) == 2
+        assert context.assumptions[0].assumption == "REST API, not GraphQL"
+        assert context.assumptions[1].confidence == "low"
+
+    def test_with_existing_files_and_artifacts(self):
+        """Test creation with existing_files and needed_artifacts."""
+        context = ContextOutput(
+            project_description="Build plugin",
+            existing_files=["src/config.py — config loader"],
+            needed_artifacts=["openai.yaml — plugin config file"],
+        )
+        assert len(context.existing_files) == 1
+        assert len(context.needed_artifacts) == 1
+
+    def test_existing_files_default_empty(self):
+        """existing_files defaults to empty list."""
+        context = ContextOutput(project_description="Test")
+        assert context.existing_files == []
+        assert context.needed_artifacts == []
+
+    def test_assumptions_default_empty(self):
+        """Assumptions defaults to empty list."""
+        context = ContextOutput(project_description="Test")
+        assert context.assumptions == []
+
+    def test_assumption_default_confidence(self):
+        """Assumption confidence defaults to medium."""
+        a = Assumption(assumption="test", impact="test impact")
+        assert a.confidence == "medium"
+
 
 class TestArchitectureOutput:
     """Tests for ArchitectureOutput schema."""
@@ -62,6 +111,20 @@ class TestArchitectureOutput:
         )
         assert arch.recommended == "Monolith"
         assert arch.approaches == []
+
+    def test_scope_statement_default_empty(self):
+        """scope_statement defaults to empty string."""
+        arch = ArchitectureOutput(recommended="Monolith", reasoning="Simple")
+        assert arch.scope_statement == ""
+
+    def test_with_scope_statement(self):
+        """Test creation with scope_statement."""
+        arch = ArchitectureOutput(
+            recommended="Monolith",
+            reasoning="Simple",
+            scope_statement="This task produces one YAML file.",
+        )
+        assert arch.scope_statement == "This task produces one YAML file."
 
     def test_with_approaches(self):
         """Test creation with multiple approaches."""
@@ -102,6 +165,26 @@ class TestDesignOutput:
         assert design.adrs == []
         assert design.components == []
         assert design.data_model == {}
+
+    def test_artifacts_default_empty(self):
+        """Artifacts defaults to empty list."""
+        design = DesignOutput()
+        assert design.artifacts == []
+
+    def test_with_artifacts(self):
+        """Test creation with artifacts."""
+        design = DesignOutput(
+            artifacts=[
+                Artifact(
+                    filename="openai.yaml",
+                    content="provider:\n  name: openai\n",
+                    purpose="Plugin config for OpenAI",
+                ),
+            ],
+        )
+        assert len(design.artifacts) == 1
+        assert design.artifacts[0].filename == "openai.yaml"
+        assert "provider:" in design.artifacts[0].content
 
     def test_with_adrs_and_components(self):
         """Test creation with ADRs and components."""
@@ -144,6 +227,24 @@ class TestRoadmapOutput:
         assert roadmap.phases == []
         assert roadmap.total_phases == 0
 
+    def test_phase_new_fields_default_empty(self):
+        """verification_command and estimated_effort default to empty string."""
+        phase = Phase(number=1, name="Test", objective="Test")
+        assert phase.verification_command == ""
+        assert phase.estimated_effort == ""
+
+    def test_phase_with_verification_and_effort(self):
+        """Test Phase with verification_command and estimated_effort."""
+        phase = Phase(
+            number=1,
+            name="Setup",
+            objective="Init project",
+            verification_command="python -m pytest tests/ -v",
+            estimated_effort="~30 min",
+        )
+        assert phase.verification_command == "python -m pytest tests/ -v"
+        assert phase.estimated_effort == "~30 min"
+
     def test_with_phases_and_dependencies(self):
         """Test creation with phases and dependency graph."""
         phases = [
@@ -184,6 +285,26 @@ class TestRiskOutput:
         risk_output = RiskOutput()
         assert risk_output.risks == []
         assert risk_output.overall_risk_level == "medium"
+
+    def test_risk_verification_default_empty(self):
+        """verification defaults to empty string."""
+        risk = Risk(
+            category="technical", description="test",
+            impact="high", likelihood="medium", mitigation="test",
+        )
+        assert risk.verification == ""
+
+    def test_risk_with_verification(self):
+        """Test Risk with verification field."""
+        risk = Risk(
+            category="technical",
+            description="API returns null",
+            impact="high",
+            likelihood="medium",
+            mitigation="Add null check",
+            verification="assert response['content'] is not None",
+        )
+        assert "assert" in risk.verification
 
     def test_with_risks(self):
         """Test creation with identified risks."""
@@ -270,6 +391,43 @@ class TestPlanOutput:
             unknown_field="should be ignored",
         )
         assert plan.context.project_description == "Test"
+
+
+class TestConfigValidation:
+    """Tests for config unknown key warnings."""
+
+    def test_warn_unknown_top_level_key(self, caplog):
+        """Unknown top-level key triggers warning."""
+        import logging
+        from fitz_graveyard.config.loader import _warn_unknown_keys
+        from fitz_graveyard.config.schema import FitzPlannerConfig
+
+        yaml_data = {"provider": "ollama", "tiemout": 600}
+        with caplog.at_level(logging.WARNING):
+            _warn_unknown_keys(yaml_data, FitzPlannerConfig)
+        assert any("tiemout" in msg for msg in caplog.messages)
+
+    def test_warn_unknown_nested_key(self, caplog):
+        """Unknown nested key triggers warning with full path."""
+        import logging
+        from fitz_graveyard.config.loader import _warn_unknown_keys
+        from fitz_graveyard.config.schema import FitzPlannerConfig
+
+        yaml_data = {"ollama": {"base_url": "http://localhost:11434", "mdoel": "test"}}
+        with caplog.at_level(logging.WARNING):
+            _warn_unknown_keys(yaml_data, FitzPlannerConfig)
+        assert any("ollama.mdoel" in msg for msg in caplog.messages)
+
+    def test_no_warning_for_valid_keys(self, caplog):
+        """Valid keys don't trigger warnings."""
+        import logging
+        from fitz_graveyard.config.loader import _warn_unknown_keys
+        from fitz_graveyard.config.schema import FitzPlannerConfig
+
+        yaml_data = {"provider": "ollama", "ollama": {"base_url": "http://localhost:11434"}}
+        with caplog.at_level(logging.WARNING):
+            _warn_unknown_keys(yaml_data, FitzPlannerConfig)
+        assert not any("Unknown config key" in msg for msg in caplog.messages)
 
 
 class TestPromptLoading:

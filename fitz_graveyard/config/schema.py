@@ -48,17 +48,21 @@ class AgentConfig(BaseModel):
     agent_model: str | None = Field(
         default=None, description="Model for agent tool calls (None = use ollama.model)"
     )
-    max_iterations: int = Field(
-        default=20,
+    max_summary_files: int = Field(
+        default=15,
         ge=1,
         le=50,
-        description="Maximum tool-call iterations before stopping",
+        description="Maximum number of files to summarize during context gathering",
     )
     max_file_bytes: int = Field(
         default=50_000, description="Maximum bytes to read per file"
     )
     source_dir: str | None = Field(
-        default=None, description="Default source directory (overridden by create_plan parameter)"
+        default=None,
+        description=(
+            "Source directory for codebase context gathering. "
+            "Resolution order: create_plan(source_dir=) parameter > this config value > cwd at runtime."
+        ),
     )
 
 
@@ -69,7 +73,7 @@ class OutputConfig(BaseModel):
 
     plans_dir: str = Field(
         default=".fitz-graveyard/plans",
-        description="Directory for generated plans (relative to project root)",
+        description="Directory for plans. Relative paths are resolved against the project directory.",
     )
     verbosity: Literal["quiet", "normal", "verbose"] = Field(
         default="normal", description="Logging verbosity level"

@@ -1,0 +1,59 @@
+You are making architectural and design decisions for this project. Take a strong, opinionated position.
+
+{krag_context}
+
+Project context:
+{context}
+
+## Scope Calibration
+
+Before doing anything else: how big is this task, really? Is it a single config file, a small CLI tool, a multi-service system, or a full platform? Match the depth of your analysis to the actual scope. A task that produces one file does not need three architectural approaches — it needs the right structure for that file. A multi-service platform needs real architecture. Scale your response accordingly.
+
+## Part 1: Architecture
+
+If the honest scope is a single file or small utility (1-3 files), reduce to 2 approaches or skip approach exploration entirely and go straight to design. Only explore 3 full approaches for system-level decisions (multiple services, data flows, deployment choices).
+
+For each approach:
+- What does it look like in production? Name specific services, libraries, and patterns.
+- What is the most common failure mode for teams that take this approach?
+- What operational burden does it add?
+- What does it make easy that the other approaches make hard?
+
+Then take a clear position: which approach is right for THIS project and why. Do not hedge. Specifically explain why the other approaches would be wrong here — not just "more complex" but what specific failure mode or risk makes them the wrong choice given these requirements and constraints.
+
+CRITICAL: Your "recommended" field must contain the EXACT name of the approach you described above. Your reasoning must argue FOR this approach and AGAINST the others. Do not recommend one approach and then write reasoning that contradicts your choice.
+
+After your recommendation, write 1-2 sentences honestly characterizing the engineering effort in the "scope_statement" field. Example: "This task produces one YAML file — the challenge is getting the field values right, not choosing between system architectures." Do not inflate.
+
+## Part 2: Design (given your chosen architecture)
+
+Now, given the architecture you just chose, make concrete design decisions:
+
+1. Critical decisions (ADRs): 3-5 decisions where choosing wrong requires significant rework. IMPORTANT: Do NOT re-record the architecture choice — that's already in Part 1. ADRs are for remaining undecided questions.
+
+   Good ADRs look like:
+   - "Feature X is out of scope for v1" (scope exclusion — someone might want it, but you're cutting it and explaining why)
+   - "Protocol Y not supported via this path" (capability boundary — names the technical reason it can't work)
+   - "Edge case Z handled by failing loudly, not silently" (explicit tradeoff someone could disagree with)
+
+   Bad ADRs look like:
+   - "Use environment variables for auth" (obvious, no one would disagree)
+   - "Follow best practices for error handling" (vague, not a real decision)
+   - "Use the recommended approach" (repeats Part 1)
+
+   Each ADR should name a specific scope exclusion, capability boundary, or edge case that someone might reasonably disagree with.
+
+2. Component boundaries: Where exactly do the system boundaries go? What is the strict interface contract between components? What must not cross a boundary?
+
+3. Data model: What are the core entities? What are the exact relationships and cardinality? What query patterns must this support efficiently? What would be expensive to change later?
+
+4. Integration complexity: Which external dependencies will be harder than expected? What specific failure modes — not just "handle errors" — need explicit design?
+
+Be concrete. Interfaces should look like real function or method signatures. Data model should have actual field names and types. Avoid "TBD" — make a decision and defend it.
+
+5. Artifacts: If the deliverable includes config files, YAML schemas, SQL schemas, Dockerfiles, or any small artifact (under ~100 lines), write the complete file content in the "artifacts" array. Each artifact needs a filename, the full content, and a purpose. Do not describe artifacts — produce them. If the project doesn't need standalone artifacts, return an empty array.
+
+ACCURACY RULE: Every time you write an API field name, response path, parameter name, or endpoint URL, you MUST do one of:
+  (a) Cite where in the codebase context above you found it — e.g. "per config.py line 42"
+  (b) Mark it [VERIFY] if you cannot point to codebase evidence
+Never write a bare field name from memory. If you're unsure whether "response.data" or "response.results" is correct, write "response.data [VERIFY]".

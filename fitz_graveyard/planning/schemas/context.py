@@ -4,6 +4,16 @@
 from pydantic import BaseModel, Field, ConfigDict
 
 
+class Assumption(BaseModel):
+    """An explicit assumption made due to ambiguity in the request."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    assumption: str = Field(..., description="What the model assumed")
+    impact: str = Field(..., description="What changes if this assumption is wrong")
+    confidence: str = Field(default="medium", description="How confident: low, medium, high")
+
+
 class ContextOutput(BaseModel):
     """Output from context understanding stage.
 
@@ -41,4 +51,19 @@ class ContextOutput(BaseModel):
     scope_boundaries: dict[str, list[str]] = Field(
         default_factory=dict,
         description="What's in scope vs out of scope, helps prevent scope creep",
+    )
+
+    existing_files: list[str] = Field(
+        default_factory=list,
+        description="Key existing files relevant to this task (from codebase analysis)",
+    )
+
+    needed_artifacts: list[str] = Field(
+        default_factory=list,
+        description="Concrete files this project must produce (e.g. config.yaml, schema.sql)",
+    )
+
+    assumptions: list[Assumption] = Field(
+        default_factory=list,
+        description="Explicit assumptions made due to ambiguity in the request",
     )

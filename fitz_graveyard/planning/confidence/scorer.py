@@ -73,13 +73,16 @@ class ConfidenceScorer:
         """
         self.ollama_client = ollama_client
 
-    async def score_section(self, section_name: str, content: str) -> float:
+    async def score_section(
+        self, section_name: str, content: str, codebase_context: str = "",
+    ) -> float:
         """
         Score a plan section's quality.
 
         Args:
             section_name: Name of the section (e.g., "implementation", "security")
             content: Section content text
+            codebase_context: Optional codebase context for grounding assessment
 
         Returns:
             Confidence score (0.0-1.0), higher is better quality
@@ -91,44 +94,56 @@ class ConfidenceScorer:
             return heuristic_score
 
         # Hybrid mode: combine LLM and heuristics
-        llm_score = await self._llm_assessment(section_name, content)
+        llm_score = await self._llm_assessment(section_name, content, codebase_context)
         hybrid_score = 0.7 * llm_score + 0.3 * heuristic_score
         return round(hybrid_score, 2)
 
-    async def _llm_assessment(self, section_name: str, content: str) -> float:
+    async def _llm_assessment(
+        self, section_name: str, content: str, codebase_context: str = "",
+    ) -> float:
         """
-        Ask LLM to self-assess section quality.
+        Ask LLM to rate section quality on a 1-5 scale.
 
-        Prompt asks yes/no: "Is this section sufficiently detailed and concrete?"
+        When codebase_context is provided, the LLM also checks whether the section
+        references real files/APIs from the codebase vs hallucinated ones.
 
         Returns:
-            1.0 if yes, 0.3 if no, 0.5 on error
+            Mapped score: 1→0.2, 2→0.4, 3→0.6, 4→0.8, 5→1.0. Default 0.5 on error.
         """
-        prompt = f"""You are reviewing the "{section_name}" section of a technical plan.
+        context_block = ""
+        grounding_criterion = ""
+        if codebase_context:
+            context_block = f"\nCodebase context (ground truth):\n{codebase_context}\n"
+            grounding_criterion = (
+                "\nAlso check: does the section reference real files, APIs, and patterns "
+                "from the codebase context? Hallucinated references should lower the score."
+            )
 
+        prompt = f"""Rate the quality of this "{section_name}" section on a 1-5 scale:
+1 = Missing or incoherent
+2 = Vague, generic, lacks specifics
+3 = Adequate but could be more concrete
+4 = Good — specific and actionable
+5 = Excellent — concrete, thorough, production-ready
+{grounding_criterion}
+{context_block}
 Section content:
 {content}
 
-Is this section sufficiently detailed, concrete, and actionable? Answer ONLY "yes" or "no".
-"""
+Reply with ONLY a single digit (1-5)."""
 
+        SCALE = {1: 0.2, 2: 0.4, 3: 0.6, 4: 0.8, 5: 1.0}
         try:
             messages = [{"role": "user", "content": prompt}]
             response = await self.ollama_client.generate(messages)
-            response_lower = response.strip().lower()
-
-            if "yes" in response_lower:
-                return 1.0
-            elif "no" in response_lower:
-                return 0.3
-            else:
-                logger.warning(
-                    f"LLM response not yes/no: {response[:50]}. Defaulting to 0.5"
-                )
-                return 0.5
-
+            match = re.search(r'[1-5]', response.strip())
+            if match:
+                digit = int(match.group())
+                return SCALE[digit]
+            logger.warning(f"LLM response not 1-5: {response[:50]}. Defaulting to 0.5")
+            return 0.5
         except Exception as e:
-            logger.error(f"LLM assessment failed: {e}. Defaulting to 0.5")
+            logger.warning(f"LLM assessment failed: {e}. Defaulting to 0.5")
             return 0.5
 
     def _heuristic_score(self, content: str) -> float:

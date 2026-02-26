@@ -19,3 +19,5 @@ Think through the design carefully:
 4. Integration complexity: Which external dependencies will be harder than expected? What specific failure modes — not just "handle errors" — need explicit design?
 
 Be concrete. Interfaces should look like real function or method signatures. Data model should have actual field names and types. Avoid "TBD" — make a decision and defend it.
+
+If the deliverable is a config file, YAML schema, or small artifact (under ~50 lines), write the complete file content inline as part of the design. Do not describe it — produce it.

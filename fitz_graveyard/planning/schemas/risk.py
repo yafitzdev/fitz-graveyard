@@ -44,6 +44,11 @@ class Risk(BaseModel):
         description="Phase numbers most affected by this risk",
     )
 
+    verification: str = Field(
+        default="",
+        description="Exact test, assertion, or command that catches this risk",
+    )
+
 
 class RiskOutput(BaseModel):
     """Output from risk analysis stage.

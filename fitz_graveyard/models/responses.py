@@ -71,6 +71,9 @@ class PlanSummary(BaseModel):
         default=None, ge=0.0, le=1.0, description="Plan quality score if available"
     )
     created_at: str = Field(description="Creation timestamp (ISO format)")
+    file_path: str | None = Field(
+        default=None, description="Path to saved plan file on disk"
+    )
 
 
 class ListPlansResponse(BaseModel):

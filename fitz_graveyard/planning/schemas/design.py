@@ -43,6 +43,27 @@ class ADR(BaseModel):
     )
 
 
+class Artifact(BaseModel):
+    """A concrete deliverable file produced by the design."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    filename: str = Field(
+        ...,
+        description="Relative file path for the artifact (e.g. config.yaml, schema.sql)",
+    )
+
+    content: str = Field(
+        ...,
+        description="Complete file content — not a description, the actual content",
+    )
+
+    purpose: str = Field(
+        default="",
+        description="Why this artifact exists and what it enables",
+    )
+
+
 class ComponentDesign(BaseModel):
     """Design specification for a system component."""
 
@@ -100,4 +121,9 @@ class DesignOutput(BaseModel):
     integration_points: list[str] = Field(
         default_factory=list,
         description="External systems or APIs that will be integrated",
+    )
+
+    artifacts: list[Artifact] = Field(
+        default_factory=list,
+        description="Concrete deliverable files (configs, schemas, etc.) with full content",
     )

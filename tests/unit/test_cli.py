@@ -253,3 +253,116 @@ class TestCancel:
         result = runner.invoke(app, ["cancel", JOB_ID_1])
         assert result.exit_code == 0
         assert "skipped" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Enhanced progress display tests
+# ---------------------------------------------------------------------------
+
+class TestPhaseDescriptions:
+    """Tests for _PHASE_DESCRIPTIONS and _get_phase_description."""
+
+    def test_known_phase_direct_lookup(self):
+        from fitz_graveyard.cli import _get_phase_description
+        assert _get_phase_description("health_check") == "Checking LLM connectivity..."
+
+    def test_generating_substep(self):
+        from fitz_graveyard.cli import _get_phase_description
+        assert _get_phase_description("architecture_design:generating") == "Exploring architecture and design (single-pass)..."
+
+    def test_formatting_substep(self):
+        from fitz_graveyard.cli import _get_phase_description
+        assert _get_phase_description("architecture_design:formatting") == "Structuring architecture+design as JSON..."
+
+    def test_agent_mapping_phase(self):
+        from fitz_graveyard.cli import _get_phase_description
+        assert _get_phase_description("agent:mapping") == "Mapping codebase..."
+
+    def test_agent_selecting_phase(self):
+        from fitz_graveyard.cli import _get_phase_description
+        assert _get_phase_description("agent:selecting") == "Selecting relevant files..."
+
+    def test_agent_summarizing_phase(self):
+        from fitz_graveyard.cli import _get_phase_description
+        desc = _get_phase_description("agent:summarizing:src/main.py")
+        assert desc == "Summarizing main.py..."
+
+    def test_agent_synthesizing_phase(self):
+        from fitz_graveyard.cli import _get_phase_description
+        assert _get_phase_description("agent:synthesizing") == "Synthesizing context..."
+
+    def test_bare_stage_name_maps_to_generating(self):
+        from fitz_graveyard.cli import _get_phase_description
+        desc = _get_phase_description("context")
+        assert desc == "Analyzing requirements (single-pass)..."
+
+    def test_empty_phase_returns_empty(self):
+        from fitz_graveyard.cli import _get_phase_description
+        assert _get_phase_description("") == ""
+        assert _get_phase_description(None) == ""
+
+    def test_unknown_phase_returns_as_is(self):
+        from fitz_graveyard.cli import _get_phase_description
+        assert _get_phase_description("some_unknown_thing") == "some_unknown_thing"
+
+    def test_all_stages_have_generating_and_formatting(self):
+        """All 3 pipeline stages should have generating and formatting descriptions."""
+        from fitz_graveyard.cli import _PHASE_DESCRIPTIONS
+        for stage in ("context", "architecture_design", "roadmap_risk"):
+            assert f"{stage}:generating" in _PHASE_DESCRIPTIONS, f"Missing {stage}:generating"
+            assert f"{stage}:formatting" in _PHASE_DESCRIPTIONS, f"Missing {stage}:formatting"
+
+
+class TestMakeLiveDisplay:
+    """Tests for _make_live_display rendering."""
+
+    def test_basic_rendering(self):
+        from fitz_graveyard.cli import _make_live_display
+        panel = _make_live_display("Test project", 0.5, 30.0)
+        # Should return a rich Panel
+        from rich.panel import Panel
+        assert isinstance(panel, Panel)
+
+    def test_with_stage_durations(self):
+        from fitz_graveyard.cli import _make_live_display
+        panel = _make_live_display(
+            "Test project", 0.5, 45.0,
+            stage_durations={0: 2.0, 1: 38.0, 2: 24.0},
+        )
+        from rich.panel import Panel
+        assert isinstance(panel, Panel)
+
+    def test_with_status_line(self):
+        from fitz_graveyard.cli import _make_live_display
+        panel = _make_live_display(
+            "Test project", 0.3, 20.0,
+            current_phase="architecture_design:generating",
+        )
+        from rich.panel import Panel
+        assert isinstance(panel, Panel)
+
+    def test_with_log_lines(self):
+        from fitz_graveyard.cli import _make_live_display
+        panel = _make_live_display(
+            "Test project", 0.6, 60.0,
+            log_lines=["12:04:21 Requirements analysis complete", "12:04:45 Exploring approaches..."],
+        )
+        from rich.panel import Panel
+        assert isinstance(panel, Panel)
+
+    def test_with_active_stage_timer(self):
+        import time
+        from fitz_graveyard.cli import _make_live_display
+        panel = _make_live_display(
+            "Test project", 0.3, 15.0,
+            stage_started={3: time.monotonic() - 10},
+        )
+        from rich.panel import Panel
+        assert isinstance(panel, Panel)
+
+    def test_long_description_truncated(self):
+        from fitz_graveyard.cli import _make_live_display
+        long_desc = "A" * 100
+        panel = _make_live_display(long_desc, 0.0, 0.0)
+        from rich.panel import Panel
+        assert isinstance(panel, Panel)

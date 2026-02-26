@@ -72,3 +72,8 @@ class ArchitectureOutput(BaseModel):
         default_factory=list,
         description="Key technologies or patterns this architecture requires",
     )
+
+    scope_statement: str = Field(
+        default="",
+        description="1-2 sentences honestly characterizing the engineering effort and scope",
+    )

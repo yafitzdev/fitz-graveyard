@@ -92,6 +92,24 @@ class PlanRenderer:
                 sections.append(f"- {stakeholder}")
             sections.append("")
 
+        if plan.context.existing_files:
+            sections.append("**Existing Files:**")
+            for f in plan.context.existing_files:
+                sections.append(f"- {f}")
+            sections.append("")
+
+        if plan.context.needed_artifacts:
+            sections.append("**Expected Deliverables:**")
+            for a in plan.context.needed_artifacts:
+                sections.append(f"- {a}")
+            sections.append("")
+
+        if plan.context.assumptions:
+            sections.append("**Assumptions (verify these):**")
+            for a in plan.context.assumptions:
+                sections.append(f"- **{a.assumption}** [{a.confidence}] — if wrong: {a.impact}")
+            sections.append("")
+
         # Architecture
         sections.append("## Architecture")
         sections.append("")
@@ -110,6 +128,10 @@ class PlanRenderer:
         sections.append(f"### Recommended: {plan.architecture.recommended}")
         sections.append(f"\n{plan.architecture.reasoning}")
         sections.append("")
+
+        if plan.architecture.scope_statement:
+            sections.append(f"*{plan.architecture.scope_statement}*")
+            sections.append("")
 
         # Design
         sections.append("## Design")
@@ -144,6 +166,23 @@ class PlanRenderer:
                     sections.append(f"- {attr}")
                 sections.append("")
 
+        if plan.design.artifacts:
+            sections.append("### Artifacts")
+            for artifact in plan.design.artifacts:
+                sections.append(f"**`{artifact.filename}`**")
+                if artifact.purpose:
+                    sections.append(f"*{artifact.purpose}*")
+                sections.append("")
+                # Detect language from extension for syntax highlighting
+                ext = artifact.filename.rsplit(".", 1)[-1] if "." in artifact.filename else ""
+                lang_map = {"yaml": "yaml", "yml": "yaml", "sql": "sql", "py": "python",
+                            "json": "json", "toml": "toml", "sh": "bash", "dockerfile": "dockerfile"}
+                lang = lang_map.get(ext.lower(), "")
+                sections.append(f"```{lang}")
+                sections.append(artifact.content)
+                sections.append("```")
+                sections.append("")
+
         # Roadmap
         sections.append("## Roadmap")
         sections.append("")
@@ -156,8 +195,15 @@ class PlanRenderer:
                 for deliverable in phase.deliverables:
                     sections.append(f"- {deliverable}")
                 sections.append("")
+            if phase.estimated_effort:
+                sections.append(f"**Effort:** {phase.estimated_effort}")
+                sections.append("")
             if phase.dependencies:
                 sections.append(f"**Dependencies:** Phases {', '.join(str(d) for d in phase.dependencies)}")
+                sections.append("")
+            if phase.verification_command:
+                sections.append("**Verify:**")
+                sections.append(f"```\n{phase.verification_command}\n```")
                 sections.append("")
 
         if plan.roadmap.critical_path:
@@ -176,6 +222,9 @@ class PlanRenderer:
             sections.append(f"**Mitigation:** {risk.mitigation}")
             if risk.contingency:
                 sections.append(f"**Contingency:** {risk.contingency}")
+            if risk.verification:
+                sections.append("**Verify:**")
+                sections.append(f"```\n{risk.verification}\n```")
             if risk.affected_phases:
                 sections.append(f"**Affected Phases:** {', '.join(str(p) for p in risk.affected_phases)}")
             sections.append("")

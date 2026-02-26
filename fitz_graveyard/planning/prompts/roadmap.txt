@@ -13,14 +13,16 @@ Design:
 
 Think through the actual implementation sequence:
 
-1. True MVP: What is the minimum that proves the core value and could be shown to a stakeholder? Be ruthless — what can be cut from v1 without losing the core value proposition?
+1. Phase 0 — Unknown first: What is the single most important thing to verify before writing the first line of code? What assumption, if wrong, would invalidate everything that follows? This becomes Phase 0. It has no code deliverable — just a concrete verification task with a clear pass/fail outcome.
 
-2. Real dependencies: Which phases genuinely cannot start until another completes because they depend on its output? Which "dependencies" are just ordering preferences?
+2. True MVP: What is the minimum that proves the core value and could be shown to a stakeholder? Be ruthless — what can be cut from v1 without losing the core value proposition?
 
-3. Risk sequencing: What should be built first to reduce technical uncertainty — not what is easiest, but what would invalidate the plan if it turns out to be harder than expected?
+3. Real dependencies: Which phases genuinely cannot start until another completes because they depend on its output? Which "dependencies" are just ordering preferences?
 
-4. Underestimated phases: Which phases look simple but hide significant complexity, and why?
+4. Risk sequencing: What should be built first to reduce technical uncertainty — not what is easiest, but what would invalidate the plan if it turns out to be harder than expected?
 
-5. Concrete deliverables: What would someone see, test, or demo at the end of each phase? Not "implement X module" — what working behavior does it produce?
+5. Underestimated phases: Which phases look simple but hide significant complexity, and why?
 
-4-7 phases is usually right. Design for incremental delivery, not a textbook waterfall.
+6. Concrete deliverables: What would someone see, test, or demo at the end of each phase? Not "implement X module" — what working behavior does it produce? If a phase delivers a config file, schema, or small artifact, write the complete content inline — not a description of it.
+
+7. Scope discipline: Each phase must be necessary and sufficient to deliver the stated goal. Anything that could be a standalone follow-up task gets cut. 4-7 phases total. Design for incremental delivery, not a textbook waterfall.

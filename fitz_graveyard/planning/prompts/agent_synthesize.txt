@@ -1,0 +1,32 @@
+You are a codebase analyst. Combine these file summaries into a structured context document for an architectural planner.
+
+TASK: {job_description}
+
+FILE SUMMARIES:
+{summaries}
+
+Produce a markdown document with these sections:
+
+## Project Overview
+What the project is, its purpose, and high-level architecture.
+
+## Relevant Architecture
+Module structure, layer boundaries, and patterns relevant to the task.
+
+## Key Interfaces & Contracts
+Exact function signatures, class interfaces, field names, and data structures
+that the planner must know about. Use exact names from the summaries.
+
+## Existing Patterns
+Coding conventions, abstractions, and design patterns found in the codebase.
+
+## Files That Will Change
+Which existing files are likely affected by the task and why.
+
+## Files to Create
+New files that may need to be created, based on project conventions.
+
+RULES:
+- Do NOT invent information not present in the summaries above.
+- Use exact identifiers, field names, and signatures from the summaries.
+- Be concise but thorough. The planner depends on this document for accuracy.

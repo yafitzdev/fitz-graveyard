@@ -9,6 +9,7 @@ import logging
 from pathlib import Path
 
 import yaml
+from pydantic import BaseModel
 from platformdirs import user_config_path
 
 from .schema import FitzPlannerConfig
@@ -20,6 +21,22 @@ def get_config_path() -> Path:
     """Get path to config file, ensuring config directory exists."""
     config_dir = user_config_path("fitz-graveyard", ensure_exists=True)
     return config_dir / "config.yaml"
+
+
+def _warn_unknown_keys(yaml_data: dict, model_class: type[BaseModel], prefix: str = "") -> None:
+    """Log warnings for YAML keys not recognized by the Pydantic model."""
+    if not isinstance(yaml_data, dict):
+        return
+    known = set(model_class.model_fields.keys())
+    for key in yaml_data:
+        full_key = f"{prefix}.{key}" if prefix else key
+        if key not in known:
+            logger.warning(f"Unknown config key '{full_key}' — will be ignored. Typo?")
+        else:
+            field = model_class.model_fields[key]
+            annotation = field.annotation
+            if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+                _warn_unknown_keys(yaml_data[key], annotation, full_key)
 
 
 def load_config() -> FitzPlannerConfig:
@@ -46,6 +63,9 @@ def load_config() -> FitzPlannerConfig:
     # Load existing config
     with config_path.open("r") as f:
         config_data = yaml.safe_load(f)
+
+    # Warn on unknown keys before Pydantic silently ignores them
+    _warn_unknown_keys(config_data, FitzPlannerConfig)
 
     # Parse and validate with Pydantic
     config = FitzPlannerConfig(**config_data)

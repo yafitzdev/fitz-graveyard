@@ -8,6 +8,7 @@ CheckpointManager, and schema migration.
 
 import json
 from dataclasses import dataclass
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -263,6 +264,59 @@ async def test_checkpoint_nonexistent_job(checkpoint_manager: CheckpointManager)
 
     with pytest.raises(ValueError, match="Job fake_id not found"):
         await checkpoint_manager.clear_checkpoint("fake_id")
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_backwards_compat_old_format(
+    checkpoint_manager: CheckpointManager, temp_db: str
+):
+    """Old-format checkpoints (no timestamp wrapper) are loaded as-is."""
+    async with aiosqlite.connect(temp_db) as db:
+        await db.execute(
+            """INSERT INTO jobs (
+                id, description, state, progress, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?)""",
+            ("job_old", "Old job", "running", 0.0, "2024-01-01", "2024-01-01"),
+        )
+        # Write old-format checkpoint directly (plain dict, no "output" key)
+        old_state = {"stage_a": {"result": "data_a"}}
+        await db.execute(
+            "UPDATE jobs SET pipeline_state = ? WHERE id = ?",
+            (json.dumps(old_state), "job_old"),
+        )
+        await db.commit()
+
+    checkpoint = await checkpoint_manager.load_checkpoint("job_old")
+    assert checkpoint == {"stage_a": {"result": "data_a"}}
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_stale_warning(
+    checkpoint_manager: CheckpointManager, temp_db: str, caplog
+):
+    """Stale checkpoints (>24h) produce a warning."""
+    async with aiosqlite.connect(temp_db) as db:
+        await db.execute(
+            """INSERT INTO jobs (
+                id, description, state, progress, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?)""",
+            ("job_stale", "Stale job", "running", 0.0, "2024-01-01", "2024-01-01"),
+        )
+        # Write timestamped checkpoint with old timestamp
+        stale_time = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+        state = {"stage_a": {"output": {"result": "data"}, "completed_at": stale_time}}
+        await db.execute(
+            "UPDATE jobs SET pipeline_state = ? WHERE id = ?",
+            (json.dumps(state), "job_stale"),
+        )
+        await db.commit()
+
+    import logging
+    with caplog.at_level(logging.WARNING):
+        checkpoint = await checkpoint_manager.load_checkpoint("job_stale")
+
+    assert checkpoint == {"stage_a": {"result": "data"}}
+    assert any("48h old" in msg or "old (>24h)" in msg for msg in caplog.messages)
 
 
 # Tests for PlanningPipeline

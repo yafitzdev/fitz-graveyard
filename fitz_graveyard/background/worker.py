@@ -67,6 +67,7 @@ class BackgroundWorker:
         self._memory_threshold = memory_threshold
         self._current_job_id: str | None = None
         self._pre_gathered_context: str | None = None
+        self._resume_from_checkpoint: bool = False
         self._task: asyncio.Task | None = None
 
         # Initialize pipeline components if config provided
@@ -251,7 +252,10 @@ class BackgroundWorker:
 
         # Step 1: Health check (skip on second pass)
         if not is_review_confirmed:
-            await self._store.update(job.job_id, progress=0.05, current_phase="health_check")
+            if not self._resume_from_checkpoint:
+                await self._store.update(job.job_id, progress=0.05, current_phase="health_check")
+            else:
+                await self._store.update(job.job_id, current_phase="health_check")
             healthy = await self._ollama_client.health_check()
             if not healthy:
                 raise ConnectionError(
@@ -286,7 +290,7 @@ class BackgroundWorker:
                 client=self._ollama_client,
                 job_id=job.job_id,
                 job_description=job.description,
-                resume=False,
+                resume=self._resume_from_checkpoint,
                 progress_callback=progress_callback,
                 agent=agent,
                 pre_gathered_context=self._pre_gathered_context,
@@ -312,12 +316,18 @@ class BackgroundWorker:
         # Step 3: Score sections with confidence scorer (skip on second pass - use stored scores)
         if not is_review_confirmed:
             await self._store.update(job.job_id, progress=0.96, current_phase="scoring")
+            # Get codebase context for grounded scoring
+            scoring_context = result.outputs.get("_gathered_context", "")
             section_scores = {}
             if self._scorer:
                 for stage_name, stage_output in result.outputs.items():
+                    if stage_name.startswith("_"):
+                        continue
                     # Score based on stage output (simplified: score description if available)
                     content = str(stage_output)
-                    score = await self._scorer.score_section(stage_name, content)
+                    score = await self._scorer.score_section(
+                        stage_name, content, codebase_context=scoring_context,
+                    )
                     section_scores[stage_name] = score
 
             # Compute overall quality score
@@ -409,12 +419,17 @@ class BackgroundWorker:
             cost_estimate = CostEstimate.model_validate_json(job.cost_estimate_json)
 
             # Reconstruct flagged sections from stored pipeline state
+            scoring_context = result.outputs.get("_gathered_context", "")
             section_scores = {}
             flagged_sections = []
             if self._scorer and self._flagger:
                 for stage_name, stage_output in result.outputs.items():
+                    if stage_name.startswith("_"):
+                        continue
                     content = str(stage_output)
-                    score = await self._scorer.score_section(stage_name, content)
+                    score = await self._scorer.score_section(
+                        stage_name, content, codebase_context=scoring_context,
+                    )
                     section_scores[stage_name] = score
 
                     is_flagged, reason = self._flagger.flag_section(stage_name, score)
@@ -500,7 +515,12 @@ class BackgroundWorker:
 
         # Step 6: Write to file
         await self._store.update(job.job_id, progress=0.98, current_phase="writing_file")
-        output_dir = Path(self._config.output.plans_dir)
+        plans_dir = Path(self._config.output.plans_dir)
+        if not plans_dir.is_absolute():
+            base = Path(job.source_dir).resolve() if job.source_dir else Path.cwd()
+            output_dir = base / plans_dir
+        else:
+            output_dir = plans_dir
         output_dir.mkdir(parents=True, exist_ok=True)
 
         timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
@@ -524,7 +544,8 @@ class BackgroundWorker:
         )
 
     async def process_job_direct(
-        self, job_id: str, pre_gathered_context: str | None = None
+        self, job_id: str, pre_gathered_context: str | None = None,
+        resume: bool = False,
     ) -> None:
         """
         Process a single job directly (for inline CLI execution).
@@ -535,6 +556,7 @@ class BackgroundWorker:
         Args:
             job_id: Job to process
             pre_gathered_context: Optional pre-gathered codebase context to skip agent re-run
+            resume: If True, resume from checkpoint (skip completed stages)
 
         Raises:
             ValueError: If job not found
@@ -546,10 +568,16 @@ class BackgroundWorker:
 
         self._current_job_id = job_id
         self._pre_gathered_context = pre_gathered_context
+        self._resume_from_checkpoint = resume
         try:
-            await self._store.update(
-                job_id, state=JobState.RUNNING, progress=0.0, current_phase="starting"
-            )
+            if resume:
+                await self._store.update(
+                    job_id, state=JobState.RUNNING, current_phase="resuming"
+                )
+            else:
+                await self._store.update(
+                    job_id, state=JobState.RUNNING, progress=0.0, current_phase="starting"
+                )
             await self._process_job(job)
             # Check if job ended at AWAITING_REVIEW (pipeline paused for API review)
             final_job = await self._store.get(job_id)
@@ -565,6 +593,7 @@ class BackgroundWorker:
         finally:
             self._current_job_id = None
             self._pre_gathered_context = None
+            self._resume_from_checkpoint = False
 
     def _build_messages(self, job) -> list[dict]:
         """
