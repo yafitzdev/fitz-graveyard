@@ -18,7 +18,7 @@ MCP (fastmcp)  ──→ tools/ ──→ SQLiteJobStore
 
 ```bash
 pip install -e ".[dev]"           # Dev install
-pytest                            # 400 tests
+pytest                            # 402 tests
 fitz-graveyard plan "desc"        # Queue job
 fitz-graveyard run                # Start worker (Ctrl+C to stop)
 fitz-graveyard list               # Show all jobs
@@ -40,14 +40,15 @@ QUEUED → RUNNING → COMPLETE
 
 ## Pipeline (agent pre-stage + 3 planning stages, sequential)
 
-0. **Agent context gathering** (0.06-0.09) — Multi-pass pipeline (map → select → summarize → synthesize), no tool calling. Python walks the file tree, LLM selects relevant files, summarizes each, and synthesizes into context doc. Returns `{"synthesized": str, "raw_summaries": str}`. Orchestrator injects both into `prior_outputs`. Checkpointed — skipped on resume.
+0. **Agent context gathering** (0.06-0.09) — Multi-pass pipeline (map → index → navigate → summarize → synthesize), no tool calling. Python builds a structural index (classes, functions, imports), LLM navigates by keywords to pick relevant files, summarizes each, and synthesizes into context doc. Returns `{"synthesized": str, "raw_summaries": str}`. Orchestrator injects both into `prior_outputs`. Checkpointed — skipped on resume.
+0.5. **Implementation check** (0.092) — Surgical LLM call: "is this task already implemented?" Returns `{"already_implemented": bool, "evidence": str, "gaps": [str]}`. Injected into `prior_outputs["_implementation_check"]` so downstream stages start from ground truth.
 1. **Context** (0.10-0.25) — requirements, constraints, assumptions. Per-field extraction (4 groups).
 2. **Architecture+Design** (0.25-0.65) — merged stage, per-field extraction (6 groups). Returns `{"architecture": {...}, "design": {...}}`, flattened into `prior_outputs`.
 3. **Roadmap+Risk** (0.65-0.95) — merged stage, per-field extraction (3 groups). Returns `{"roadmap": {...}, "risk": {...}}`.
 
 Per-field extraction: 1 reasoning + 1 self-critique + N small JSON extractions per stage. Each extraction produces a tiny schema (<2000 chars) that a 3B model can handle reliably. Failed groups get Pydantic defaults instead of crashing the stage. Selective krag_context: only groups needing codebase evidence receive it.
 
-Post-pipeline: cross-stage coherence check → confidence scoring (with codebase context) → optional API review pause → render markdown → write file.
+Post-pipeline: cross-stage coherence check → confidence scoring (section-specific criteria, 1-10 scale) → optional API review pause → render markdown → write file.
 
 ## Critical Constraints
 
@@ -79,7 +80,7 @@ fitz_graveyard/
 ├── background/                # ServerLifecycle, BackgroundWorker, signals
 ├── llm/                       # OllamaClient, LMStudioClient, factory, retry, memory monitor
 ├── planning/pipeline/stages/  # 3 merged pipeline stages + orchestrator + checkpoints
-├── planning/agent/            # Multi-pass context gatherer (map, select, summarize, synthesize)
+├── planning/agent/            # Structural index + multi-pass context gatherer (map, index, navigate, summarize, synthesize)
 ├── planning/prompts/          # Externalized .txt prompt templates
 ├── planning/confidence/       # Scorer + flagger for section quality
 ├── api_review/                # Anthropic client + cost calculator (optional)

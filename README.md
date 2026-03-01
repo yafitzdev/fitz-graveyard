@@ -33,7 +33,7 @@ fitz-graveyard get 1 # full architectural plan in the morning
 Solo project by Yan Fitzner ([LinkedIn](https://www.linkedin.com/in/yan-fitzner/), [GitHub](https://github.com/yafitzdev)).
 
 - ~7k lines of Python
-- 400+ tests
+- 400+ tests (402)
 - Zero LangChain/LlamaIndex dependencies — built from scratch
 
 ---
@@ -70,7 +70,7 @@ And the best part: **as local models improve, your plans improve for free.**
 > A 35B model at Q6 on a single GPU produces plans in ~15 minutes. A 70B model in RAM takes a few hours. You don't need a datacenter — you need patience and a machine that can stay on overnight.
 
 **Reads your codebase first 🔍**
-> An agent walks your file tree, picks task-relevant files using keyword extraction, summarizes them, discovers missed references, and synthesizes a context document. Every planning stage sees your actual code, not a hallucinated version of it.
+> An agent builds a structural index of your codebase (classes, functions, imports), navigates it using keyword extraction to pick task-relevant files, summarizes them, and synthesizes a context document. An implementation check then verifies whether the task is already built before planning begins. Every planning stage sees your actual code, not a hallucinated version of it.
 
 **Per-field extraction that small models can handle 🧩**
 > Each stage does 1 reasoning pass + 1 self-critique + N tiny JSON extractions (<2000 chars each). Even a 3B model can reliably produce structured output at this scale. Failed extractions get Pydantic defaults instead of crashing the stage — partial plan > no plan.
@@ -87,7 +87,8 @@ And the best part: **as local models improve, your plans improve for free.**
 **Other features at a glance 🃏**
 > 1. [x] **Two LLM providers.** Ollama (with OOM fallback to smaller model) or LM Studio (OpenAI-compatible API).
 > 2. [x] **Cross-stage coherence check.** Post-pipeline pass verifies context → architecture → roadmap consistency.
-> 3. [x] **Codebase-aware confidence.** Confidence scorer receives codebase context for grounded assessment.
+> 3. [x] **Section-specific confidence scoring.** Each section type (context, architecture, design, roadmap, risk) scored against its own criteria with 1-10 granularity.
+> 4. [x] **Implementation detection.** Surgical check prevents planning to build what already exists.
 
 ---
 
@@ -98,7 +99,10 @@ An agent pre-stage followed by 3 merged planning stages. Each stage uses per-fie
 <br>
 
 ```
-  [Agent]    map file tree → select relevant files → summarize → discover missed refs → synthesize
+  [Agent]    map file tree → build structural index → navigate by keywords → summarize → synthesize
+                 |
+                 v
+  [Check]    implementation check — is this task already built?
                  |
                  v
   [Stage 1]  Context — requirements, constraints, assumptions (4 field groups)
@@ -106,7 +110,7 @@ An agent pre-stage followed by 3 merged planning stages. Each stage uses per-fie
   [Stage 3]  Roadmap + Risk — merged stage (3 field groups)
                  |
                  v
-  [Post]     coherence check → confidence scoring → optional API review → render markdown
+  [Post]     coherence check → confidence scoring (section-specific criteria) → optional API review → render markdown
 ```
 
 <br>
