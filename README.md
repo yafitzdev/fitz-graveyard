@@ -78,15 +78,16 @@ And the best part: **as local models improve, your plans improve for free.**
 **Crash recovery built in 🔄**
 > Jobs checkpoint to SQLite. Machine crashes mid-plan? `retry` picks up from the last checkpoint. Power goes out overnight? Resume in the morning.
 
+**Claude where it counts, local everywhere else 🎯**
+> The local model does the heavy lifting — 95% of the tokens. But the pipeline knows what it's uncertain about. Per-section confidence scoring flags weak spots, and those sections can pause for an Anthropic API review pass before the plan finalizes. You get Claude-grade quality on the parts that matter, at a fraction of the token cost. Fully optional — off by default, zero API calls unless you opt in.
+
 **Two interfaces, same engine 🔌**
 > CLI for background job queues, MCP server for Claude Code / Claude Desktop integration. Both wrap the same `tools/` service layer and SQLite job store.
 
 **Other features at a glance 🃏**
-> 1. [x] **Optional API review.** Low-confidence sections can pause for an Anthropic API review pass. Off by default — fully local unless you opt in.
-> 2. [x] **Two LLM providers.** Ollama (with OOM fallback to smaller model) or LM Studio (OpenAI-compatible API).
-> 3. [x] **Per-section confidence scoring.** Each section gets a confidence score — low scores are flagged for review.
-> 4. [x] **Cross-stage coherence check.** Post-pipeline pass verifies context → architecture → roadmap consistency.
-> 5. [x] **Codebase-aware confidence.** Confidence scorer receives codebase context for grounded assessment.
+> 1. [x] **Two LLM providers.** Ollama (with OOM fallback to smaller model) or LM Studio (OpenAI-compatible API).
+> 2. [x] **Cross-stage coherence check.** Post-pipeline pass verifies context → architecture → roadmap consistency.
+> 3. [x] **Codebase-aware confidence.** Confidence scorer receives codebase context for grounded assessment.
 
 ---
 
