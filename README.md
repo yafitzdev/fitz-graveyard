@@ -331,3 +331,4 @@ MIT
 ### Links
 
 - [GitHub](https://github.com/yafitzdev/fitz-graveyard)
+- [PyPI](https://pypi.org/project/fitz-graveyard/)
