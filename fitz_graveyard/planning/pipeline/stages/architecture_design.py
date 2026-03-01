@@ -35,16 +35,24 @@ _FIELD_GROUPS = [
         "schema": json.dumps({
             "approaches": [
                 {
-                    "name": "Approach Name",
+                    "name": "Approach A",
                     "description": "What it looks like in production",
                     "pros": ["advantage"],
                     "cons": ["disadvantage"],
                     "complexity": "low|medium|high",
                     "best_for": ["scenario"],
-                }
+                },
+                {
+                    "name": "Approach B (minimum 2 approaches required)",
+                    "description": "A genuinely different strategy",
+                    "pros": ["advantage"],
+                    "cons": ["disadvantage"],
+                    "complexity": "low|medium|high",
+                    "best_for": ["scenario"],
+                },
             ],
             "recommended": "must match one approach name exactly",
-            "reasoning": "why this approach is right",
+            "reasoning": "why this approach is right AND why the other is wrong",
             "scope_statement": "1-2 sentences characterizing the effort",
         }, indent=2),
     },

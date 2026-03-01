@@ -307,16 +307,29 @@ class PlanningPipeline:
 
         coherence_fixes = await self._coherence_check(client, prior_outputs)
         if coherence_fixes:
-            # Apply fixes to prior_outputs
+            # Apply fixes to prior_outputs — scalar fields only.
+            # Never replace list fields (risks, phases, approaches) since the LLM
+            # coherence check often returns truncated arrays that destroy data.
+            _PROTECTED_KEYS = {"risks", "phases", "approaches", "adrs", "components",
+                               "key_requirements", "constraints", "deliverables"}
+            applied = []
             for section, fixes in coherence_fixes.items():
-                if section in prior_outputs and isinstance(prior_outputs[section], dict):
-                    prior_outputs[section].update(fixes)
-                    # Also update merged stage outputs
-                    for stage in self._stages:
-                        if stage.name in prior_outputs and isinstance(prior_outputs[stage.name], dict):
-                            if section in prior_outputs[stage.name]:
-                                prior_outputs[stage.name][section].update(fixes)
-            logger.info(f"Applied coherence fixes to sections: {list(coherence_fixes.keys())}")
+                if not isinstance(fixes, dict):
+                    continue
+                if section not in prior_outputs or not isinstance(prior_outputs[section], dict):
+                    continue
+                safe_fixes = {k: v for k, v in fixes.items() if k not in _PROTECTED_KEYS}
+                if not safe_fixes:
+                    logger.info(f"Coherence: skipped {section} fixes (only list fields)")
+                    continue
+                prior_outputs[section].update(safe_fixes)
+                for stage in self._stages:
+                    if stage.name in prior_outputs and isinstance(prior_outputs[stage.name], dict):
+                        if section in prior_outputs[stage.name]:
+                            prior_outputs[stage.name][section].update(safe_fixes)
+                applied.append(section)
+            if applied:
+                logger.info(f"Applied coherence fixes to sections: {applied}")
 
         # All stages completed — check if HEAD advanced during execution
         end_sha = get_git_sha()

@@ -11,7 +11,7 @@ Before doing anything else: how big is this task, really? Is it a single config 
 
 ## Part 1: Architecture
 
-If the honest scope is a single file or small utility (1-3 files), reduce to 2 approaches or skip approach exploration entirely and go straight to design. Only explore 3 full approaches for system-level decisions (multiple services, data flows, deployment choices).
+Always explore at least 2 approaches, even for small tasks — there is always more than one way to solve a problem. For system-level decisions (multiple services, data flows, deployment choices), explore 3 full approaches. The approaches must be genuinely different strategies, not variations of the same idea.
 
 For each approach:
 - What does it look like in production? Name specific services, libraries, and patterns.
