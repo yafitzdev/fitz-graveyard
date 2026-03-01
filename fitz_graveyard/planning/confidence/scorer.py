@@ -3,6 +3,7 @@
 Confidence scorer using hybrid LLM + heuristic approach.
 
 Scores plan section quality on 0.0-1.0 scale to identify sections needing review.
+Uses section-specific criteria for more accurate scoring.
 """
 
 import logging
@@ -10,6 +11,54 @@ import re
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# Section-specific scoring criteria (appended to LLM prompt)
+_SECTION_CRITERIA: dict[str, str] = {
+    "context": (
+        "- Does it identify specific, testable requirements (not vague goals)?\n"
+        "- Does it list real existing files from the codebase with accurate descriptions?\n"
+        "- Are needed artifacts genuinely NEW files, or does it re-list existing ones?\n"
+        "- If the codebase already implements this task, does the plan acknowledge that?\n"
+        "- Are assumptions explicit with impact assessment?"
+    ),
+    "architecture_design": (
+        "- Does it consider whether the task is already implemented before proposing new code?\n"
+        "- Are the explored approaches genuinely different, not just variations?\n"
+        "- Does the recommended approach match the actual codebase patterns?\n"
+        "- Do ADRs record real decisions (not obvious choices)?\n"
+        "- Do artifacts reference real interfaces and field names from the codebase?"
+    ),
+    "architecture": (
+        "- Does it consider whether the task is already implemented before proposing new code?\n"
+        "- Are the explored approaches genuinely different, not just variations?\n"
+        "- Does the scope statement honestly characterize the engineering effort?\n"
+        "- Does the recommended approach match the actual codebase patterns?"
+    ),
+    "design": (
+        "- Do ADRs record real decisions with concrete tradeoffs (not obvious choices)?\n"
+        "- Do component interfaces use real function signatures from the codebase?\n"
+        "- Do artifacts reference real field names and patterns from existing code?\n"
+        "- Is the data model grounded in existing schemas?"
+    ),
+    "roadmap": (
+        "- Do phases have concrete deliverables (not just descriptions)?\n"
+        "- Are effort estimates realistic for the actual scope?\n"
+        "- Do verification commands actually test what the phase delivers?\n"
+        "- If the task is already implemented, do phases focus on verification not building?"
+    ),
+    "roadmap_risk": (
+        "- Do roadmap phases have concrete deliverables with verification commands?\n"
+        "- Are effort estimates realistic for the actual scope?\n"
+        "- Do risks cite specific technical causes (not generic categories)?\n"
+        "- Do risk mitigations reference real phases?"
+    ),
+    "risk": (
+        "- Do risks cite specific technical causes (not generic 'might fail')?\n"
+        "- Are impact/likelihood ratings justified, not all 'medium/medium'?\n"
+        "- Do mitigations name concrete actions (not 'add error handling')?\n"
+        "- Do affected phases actually exist in the roadmap?"
+    ),
+}
 
 
 class ConfidenceScorer:
@@ -20,11 +69,7 @@ class ConfidenceScorer:
     - Hybrid mode (has LLM): 0.7 * LLM_score + 0.3 * heuristic_score
     - Heuristics-only mode (no LLM): heuristic_score
 
-    Heuristic scoring checks:
-    - Length (sufficient detail)
-    - Specificity keywords (concrete terms)
-    - Vague keywords (ambiguous terms)
-    - Structure (bullet points, numbers)
+    LLM uses a 1-10 scale for finer granularity, with section-specific criteria.
     """
 
     # Keywords that indicate specificity/concreteness
@@ -80,7 +125,7 @@ class ConfidenceScorer:
         Score a plan section's quality.
 
         Args:
-            section_name: Name of the section (e.g., "implementation", "security")
+            section_name: Name of the section (e.g., "context", "architecture_design")
             content: Section content text
             codebase_context: Optional codebase context for grounding assessment
 
@@ -102,45 +147,53 @@ class ConfidenceScorer:
         self, section_name: str, content: str, codebase_context: str = "",
     ) -> float:
         """
-        Ask LLM to rate section quality on a 1-5 scale.
+        Ask LLM to rate section quality on a 1-10 scale.
 
+        Uses section-specific criteria for more accurate scoring.
         When codebase_context is provided, the LLM also checks whether the section
         references real files/APIs from the codebase vs hallucinated ones.
 
         Returns:
-            Mapped score: 1→0.2, 2→0.4, 3→0.6, 4→0.8, 5→1.0. Default 0.5 on error.
+            Score mapped to 0.0-1.0 (1→0.1, 5→0.5, 10→1.0). Default 0.5 on error.
         """
         context_block = ""
         grounding_criterion = ""
         if codebase_context:
             context_block = f"\nCodebase context (ground truth):\n{codebase_context}\n"
             grounding_criterion = (
-                "\nAlso check: does the section reference real files, APIs, and patterns "
-                "from the codebase context? Hallucinated references should lower the score."
+                "\nGROUNDING CHECK: Does the section reference real files, APIs, and "
+                "patterns from the codebase context? Hallucinated references or proposing "
+                "to build something that already exists should lower the score significantly."
             )
 
-        prompt = f"""Rate the quality of this "{section_name}" section on a 1-5 scale:
-1 = Missing or incoherent
-2 = Vague, generic, lacks specifics
-3 = Adequate but could be more concrete
-4 = Good — specific and actionable
-5 = Excellent — concrete, thorough, production-ready
-{grounding_criterion}
-{context_block}
-Section content:
-{content}
+        # Get section-specific criteria
+        criteria = _SECTION_CRITERIA.get(section_name, "")
+        criteria_block = ""
+        if criteria:
+            criteria_block = f"\nSection-specific criteria:\n{criteria}\n"
 
-Reply with ONLY a single digit (1-5)."""
+        prompt = (
+            f'Rate the quality of this "{section_name}" section on a 1-10 scale:\n'
+            "1-2 = Missing, incoherent, or fundamentally wrong\n"
+            "3-4 = Vague, generic, or ignores existing codebase\n"
+            "5-6 = Adequate but could be more concrete or grounded\n"
+            "7-8 = Good — specific, actionable, and grounded in codebase\n"
+            "9-10 = Excellent — production-ready, correctly leverages existing code\n"
+            f"{criteria_block}"
+            f"{grounding_criterion}"
+            f"{context_block}"
+            f"\nSection content:\n{content}\n\n"
+            "Reply with ONLY a number from 1 to 10."
+        )
 
-        SCALE = {1: 0.2, 2: 0.4, 3: 0.6, 4: 0.8, 5: 1.0}
         try:
             messages = [{"role": "user", "content": prompt}]
             response = await self.ollama_client.generate(messages)
-            match = re.search(r'[1-5]', response.strip())
+            match = re.search(r'\b(10|[1-9])\b', response.strip())
             if match:
                 digit = int(match.group())
-                return SCALE[digit]
-            logger.warning(f"LLM response not 1-5: {response[:50]}. Defaulting to 0.5")
+                return digit / 10.0
+            logger.warning(f"LLM response not 1-10: {response[:50]}. Defaulting to 0.5")
             return 0.5
         except Exception as e:
             logger.warning(f"LLM assessment failed: {e}. Defaulting to 0.5")

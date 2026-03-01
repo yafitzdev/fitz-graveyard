@@ -135,12 +135,12 @@ class MockOllamaClient:
 
 
 class TestConfidenceScorerLLM:
-    """Test LLM-based scoring with 1-5 scale."""
+    """Test LLM-based scoring with 1-10 scale."""
 
     @pytest.mark.asyncio
-    async def test_llm_assessment_5_returns_1_0(self):
-        """LLM '5' response should return 1.0."""
-        mock_llm = MockOllamaClient(response="5")
+    async def test_llm_assessment_10_returns_1_0(self):
+        """LLM '10' response should return 1.0."""
+        mock_llm = MockOllamaClient(response="10")
         scorer = ConfidenceScorer(ollama_client=mock_llm)
 
         score = await scorer._llm_assessment("test", "content")
@@ -148,31 +148,49 @@ class TestConfidenceScorerLLM:
         assert mock_llm.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_llm_assessment_1_returns_0_2(self):
-        """LLM '1' response should return 0.2."""
+    async def test_llm_assessment_1_returns_0_1(self):
+        """LLM '1' response should return 0.1."""
         mock_llm = MockOllamaClient(response="1")
         scorer = ConfidenceScorer(ollama_client=mock_llm)
 
         score = await scorer._llm_assessment("test", "content")
-        assert score == 0.2
+        assert score == 0.1
 
     @pytest.mark.asyncio
-    async def test_llm_assessment_3_returns_0_6(self):
-        """LLM '3' response should return 0.6."""
-        mock_llm = MockOllamaClient(response="3")
+    async def test_llm_assessment_5_returns_0_5(self):
+        """LLM '5' response should return 0.5."""
+        mock_llm = MockOllamaClient(response="5")
         scorer = ConfidenceScorer(ollama_client=mock_llm)
 
         score = await scorer._llm_assessment("test", "content")
-        assert score == 0.6
+        assert score == 0.5
+
+    @pytest.mark.asyncio
+    async def test_llm_assessment_7_returns_0_7(self):
+        """LLM '7' response should return 0.7."""
+        mock_llm = MockOllamaClient(response="7")
+        scorer = ConfidenceScorer(ollama_client=mock_llm)
+
+        score = await scorer._llm_assessment("test", "content")
+        assert score == 0.7
 
     @pytest.mark.asyncio
     async def test_llm_assessment_extracts_digit_from_text(self):
         """LLM response with surrounding text should still extract digit."""
-        mock_llm = MockOllamaClient(response="I'd rate this a 4 out of 5")
+        mock_llm = MockOllamaClient(response="I'd rate this a 7 out of 10")
         scorer = ConfidenceScorer(ollama_client=mock_llm)
 
         score = await scorer._llm_assessment("test", "content")
-        assert score == 0.8  # 4 → 0.8
+        assert score == 0.7  # 7 → 0.7
+
+    @pytest.mark.asyncio
+    async def test_llm_assessment_extracts_10_from_text(self):
+        """LLM response '10' should be extracted correctly (not as '1' + '0')."""
+        mock_llm = MockOllamaClient(response="I'd give this a 10")
+        scorer = ConfidenceScorer(ollama_client=mock_llm)
+
+        score = await scorer._llm_assessment("test", "content")
+        assert score == 1.0
 
     @pytest.mark.asyncio
     async def test_llm_assessment_invalid_returns_default(self):
@@ -195,15 +213,15 @@ class TestConfidenceScorerLLM:
     @pytest.mark.asyncio
     async def test_hybrid_scoring_weights(self):
         """Hybrid scoring should weight LLM (0.7) and heuristics (0.3)."""
-        mock_llm = MockOllamaClient(response="5")
+        mock_llm = MockOllamaClient(response="8")
         scorer = ConfidenceScorer(ollama_client=mock_llm)
 
         # Use content that would score ~0.5 heuristically
         content = "This is a medium section."
         score = await scorer.score_section("test", content)
 
-        # Expected: 0.7 * 1.0 (LLM 5) + 0.3 * ~0.5 (heuristic) ≈ 0.85
-        assert 0.75 <= score <= 0.95
+        # Expected: 0.7 * 0.8 (LLM 8) + 0.3 * ~0.5 (heuristic) ≈ 0.71
+        assert 0.60 <= score <= 0.80
 
     @pytest.mark.asyncio
     async def test_codebase_context_included_in_prompt(self):
