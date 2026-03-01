@@ -1,57 +1,194 @@
+
+
+<div align="center">
+
 # fitz-graveyard
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+### Overnight AI architectural planning on local hardware. Queue a job. Go to sleep. Wake up to a plan.
 
-Local-first AI architectural planning using local LLMs. Queue a project description, walk away, come back to a full architectural plan.
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![PyPI version](https://badge.fury.io/py/fitz-graveyard.svg)](https://pypi.org/project/fitz-graveyard/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Two interfaces (CLI + MCP server) wrap the same service layer. A background worker processes jobs sequentially from a SQLite queue.
+[The Problem](#the-problem) • [The Insight](#the-insight-) • [Why fitz-graveyard?](#why-fitz-graveyard) • [How It Works](#how-it-works) • [GitHub](https://github.com/yafitzdev/fitz-graveyard)
 
-## Prerequisites
+</div>
 
+<br />
+
+---
+
+```bash
+pip install fitz-graveyard
+
+fitz-graveyard plan "Add OAuth2 authentication with Google and GitHub providers"
+fitz-graveyard run   # let it cook overnight
+fitz-graveyard get 1 # full architectural plan in the morning
+```
+
+---
+
+### About 🧑‍🌾
+
+Solo project by Yan Fitzner ([LinkedIn](https://www.linkedin.com/in/yan-fitzner/), [GitHub](https://github.com/yafitzdev)).
+
+- ~7k lines of Python
+- 400+ tests
+- Zero LangChain/LlamaIndex dependencies — built from scratch
+
+---
+
+### The Problem
+
+Claude Code costs $100/month to run semi-productively — and that's *heavily subsidized*. When subsidies shrink, prices go up. The single most expensive operation in agentic LLM coding is the **planning phase**: understanding a codebase, reasoning about architecture, producing a structured plan. Every token of that burns through your API budget.
+
+What if the planning phase could run on local hardware instead? What if you could do it with a machine you already own?
+
+---
+
+### The Insight 💡
+
+Running LLMs locally means balancing three things: **tokens per second**, **quantization quality**, and **model intelligence**. A 70B model at high quant gives you excellent reasoning but crawls at 2-5 tok/s on consumer hardware. That feels unusable — until you realize planning doesn't need to be interactive.
+
+> **Queue a job. Go to sleep. Let it run overnight.**
+>
+> Suddenly tok/s doesn't matter. You can run a large, intelligent model purely in RAM at 10 tok/s and that's *fine*.
+
+```
+10 tok/s × 60s × 60min × 8 hours = 288,000 tokens
+```
+
+That's enough for a full architectural plan — reasoning, self-critique, structured extraction — from a model running on hardware you already own. No API costs. No data leaving your network.
+
+And the best part: **as local models improve, your plans improve for free.**
+
+---
+
+### Why fitz-graveyard?
+
+**Runs on modest hardware 🖥️**
+> A 35B model at Q6 on a single GPU produces plans in ~15 minutes. A 70B model in RAM takes a few hours. You don't need a datacenter — you need patience and a machine that can stay on overnight.
+
+**Reads your codebase first 🔍**
+> An agent walks your file tree, picks task-relevant files using keyword extraction, summarizes them, discovers missed references, and synthesizes a context document. Every planning stage sees your actual code, not a hallucinated version of it.
+
+**Per-field extraction that small models can handle 🧩**
+> Each stage does 1 reasoning pass + 1 self-critique + N tiny JSON extractions (<2000 chars each). Even a 3B model can reliably produce structured output at this scale. Failed extractions get Pydantic defaults instead of crashing the stage — partial plan > no plan.
+
+**Crash recovery built in 🔄**
+> Jobs checkpoint to SQLite. Machine crashes mid-plan? `retry` picks up from the last checkpoint. Power goes out overnight? Resume in the morning.
+
+**Two interfaces, same engine 🔌**
+> CLI for background job queues, MCP server for Claude Code / Claude Desktop integration. Both wrap the same `tools/` service layer and SQLite job store.
+
+**Other features at a glance 🃏**
+> 1. [x] **Optional API review.** Low-confidence sections can pause for an Anthropic API review pass. Off by default — fully local unless you opt in.
+> 2. [x] **Two LLM providers.** Ollama (with OOM fallback to smaller model) or LM Studio (OpenAI-compatible API).
+> 3. [x] **Per-section confidence scoring.** Each section gets a confidence score — low scores are flagged for review.
+> 4. [x] **Cross-stage coherence check.** Post-pipeline pass verifies context → architecture → roadmap consistency.
+> 5. [x] **Codebase-aware confidence.** Confidence scorer receives codebase context for grounded assessment.
+
+---
+
+### How It Works
+
+An agent pre-stage followed by 3 merged planning stages. Each stage uses per-field extraction: one reasoning prompt produces analysis, a self-critique pass catches scope inflation and hallucinated files, then small JSON extractions pull structured data from the reasoning.
+
+<br>
+
+```
+  [Agent]    map file tree → select relevant files → summarize → discover missed refs → synthesize
+                 |
+                 v
+  [Stage 1]  Context — requirements, constraints, assumptions (4 field groups)
+  [Stage 2]  Architecture + Design — merged stage (6 field groups)
+  [Stage 3]  Roadmap + Risk — merged stage (3 field groups)
+                 |
+                 v
+  [Post]     coherence check → confidence scoring → optional API review → render markdown
+```
+
+<br>
+
+> [!NOTE]
+> The pipeline decomposes a problem that would overwhelm a small model into pieces it can handle reliably. Each JSON extraction is <2000 chars — small enough for a 3B quantized model to produce valid output.
+
+---
+
+<details>
+
+<summary><strong>📦 Quick Start</strong></summary>
+
+<br>
+
+```bash
+# Install
+pip install fitz-graveyard
+
+# Queue a job
+fitz-graveyard plan "Build a plugin system for data transformations"
+
+# Start the background worker
+fitz-graveyard run
+
+# Check on it
+fitz-graveyard status 1
+
+# Read the plan
+fitz-graveyard get 1
+```
+
+**Optional extras:**
+```bash
+pip install "fitz-graveyard[api-review]"    # Anthropic API review pass
+pip install "fitz-graveyard[lm-studio]"    # LM Studio provider (openai SDK)
+pip install "fitz-graveyard[dev]"          # pytest, build tools
+```
+
+**Prerequisites:**
 - Python 3.10+
-- One of:
-  - [Ollama](https://ollama.com) installed and running
-  - [LM Studio](https://lmstudio.ai) running with a loaded model
+- [Ollama](https://ollama.com) installed and running, or [LM Studio](https://lmstudio.ai) with a loaded model
 
-## Installation
+</details>
 
-```bash
-pip install -e "."
-```
+---
 
-Optional extras:
+<details>
 
-```bash
-pip install -e ".[api-review]"    # Anthropic API review pass
-pip install -e ".[lm-studio]"    # LM Studio provider (openai SDK)
-pip install -e ".[dev]"          # pytest, build tools
-```
+<summary><strong>📦 CLI Reference</strong></summary>
 
-## CLI Usage
+<br>
 
 ```bash
-fitz-graveyard plan "Build a REST API for user management"   # Queue job
-fitz-graveyard run                # Start background worker (Ctrl+C to stop)
-fitz-graveyard list               # Show all jobs
-fitz-graveyard status <id>        # Check progress
-fitz-graveyard get <id>           # Print completed plan as markdown
-fitz-graveyard retry <id>         # Re-queue failed/interrupted job
-fitz-graveyard confirm <id>       # Approve API review (if paused)
-fitz-graveyard cancel <id>        # Skip API review, finalize plan
-fitz-graveyard serve              # Start MCP server
+fitz-graveyard plan "description"   # Queue a planning job
+fitz-graveyard run                  # Start background worker (Ctrl+C to stop)
+fitz-graveyard list                 # Show all jobs
+fitz-graveyard status <id>          # Check progress
+fitz-graveyard get <id>             # Print completed plan as markdown
+fitz-graveyard retry <id>           # Re-queue failed/interrupted job
+fitz-graveyard confirm <id>         # Approve optional API review
+fitz-graveyard cancel <id>          # Skip API review, finalize plan
+fitz-graveyard serve                # Start MCP server
 ```
 
-### Job States
-
+**Job lifecycle:**
 ```
 QUEUED → RUNNING → COMPLETE
                  → AWAITING_REVIEW → QUEUED (confirm) / COMPLETE (cancel)
                  → FAILED / INTERRUPTED (both retryable)
 ```
 
-## MCP Server (Claude Code / Claude Desktop)
+</details>
 
-Add to your MCP config:
+---
+
+<details>
+
+<summary><strong>📦 MCP Server</strong></summary>
+
+<br>
+
+Plug into Claude Code or Claude Desktop:
 
 ```json
 {
@@ -64,7 +201,7 @@ Add to your MCP config:
 }
 ```
 
-### MCP Tools
+**MCP Tools:**
 
 | Tool | Description |
 |------|-------------|
@@ -76,9 +213,17 @@ Add to your MCP config:
 | `confirm_review` | Approve API review after seeing cost |
 | `cancel_review` | Skip API review, finalize plan |
 
-## Configuration
+</details>
 
-Auto-created on first run via `platformdirs`:
+---
+
+<details>
+
+<summary><strong>📦 Configuration</strong></summary>
+
+<br>
+
+Auto-created on first run:
 
 | Platform | Path |
 |----------|------|
@@ -122,20 +267,15 @@ output:
   verbosity: normal
 ```
 
-## Pipeline
+</details>
 
-The planning pipeline runs as an agent pre-stage followed by 3 merged stages:
+---
 
-0. **Agent context gathering** — Multi-pass pipeline (map → select → summarize → discover → synthesize). Python walks the file tree, LLM selects relevant files, summarizes each, and synthesizes into a context document. Checkpointed — skipped on resume.
-1. **Context** — Requirements, constraints, assumptions. Per-field extraction (4 groups).
-2. **Architecture + Design** — Merged stage, per-field extraction (6 groups).
-3. **Roadmap + Risk** — Merged stage, per-field extraction (3 groups).
+<details>
 
-Each stage uses per-field extraction: 1 reasoning pass + 1 self-critique + N small JSON extractions. Failed groups get Pydantic defaults instead of crashing the stage.
+<summary><strong>📦 Architecture</strong></summary>
 
-Post-pipeline: cross-stage coherence check, confidence scoring, optional API review pause, render markdown, write file.
-
-## Architecture
+<br>
 
 ```
 CLI (typer)   ──→ tools/ ──→ SQLiteJobStore ←── BackgroundWorker ──→ PlanningPipeline
@@ -161,15 +301,33 @@ fitz_graveyard/
 └── validation/                # Input sanitization
 ```
 
-## Development
+</details>
+
+---
+
+<details>
+
+<summary><strong>📦 Development</strong></summary>
+
+<br>
 
 ```bash
 git clone https://github.com/yafitzdev/fitz-graveyard.git
 cd fitz-graveyard
-pip install -e ".[dev]"
+pip install -e ".[dev]"  # editable install for development
 pytest  # 400 tests
 ```
 
-## License
+</details>
 
-[MIT](LICENSE)
+---
+
+### License
+
+MIT
+
+---
+
+### Links
+
+- [GitHub](https://github.com/yafitzdev/fitz-graveyard)
