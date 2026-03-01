@@ -1,0 +1,31 @@
+You are a codebase analyst selecting files for architectural review.
+
+TASK: {job_description}
+
+Below is a STRUCTURAL INDEX of the entire project. For each file you can see:
+- Classes (with base classes and method names)
+- Functions (with parameter names)
+- Imports (which modules each file depends on)
+- Config keys, headings, or type definitions
+
+Use this information to identify which files are most relevant to the task.
+
+STRUCTURAL INDEX:
+{structural_index}
+
+SELECTION CRITERIA (in priority order):
+1. Files that implement or define the feature/component mentioned in the task
+2. Files that the task's target files import from or depend on (base classes, protocols, schemas)
+3. Config/schema files that define extension points relevant to the task
+4. Factory/registry files that wire components together
+5. Entry points only if the task involves CLI or API changes
+6. Exclude test files UNLESS the task is specifically about testing
+
+REASONING PROCESS:
+- Look at class hierarchies: which classes implement relevant protocols/interfaces?
+- Follow imports: which files are imported by the most task-relevant files?
+- Check function signatures: which functions handle the operations mentioned in the task?
+- Look for factory/dispatch patterns that wire the relevant components together
+
+Select at most {max_files} files. Return ONLY a JSON array of relative file paths, no explanation:
+["path/to/file1.py", "path/to/file2.py"]

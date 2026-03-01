@@ -3,11 +3,12 @@
 AgentContextGatherer — multi-pass pipeline to explore the codebase
 and produce a structured markdown context document.
 
-Replaces the old tool-calling loop with a deterministic pipeline:
-  Pass 1: Map        (pure Python — pathlib walk, build file tree)
-  Pass 2a: Select    (1 LLM call — pick relevant files from tree)
-  Pass 2b: Summarize (N LLM calls — one per selected file)
-  Pass 3: Synthesize (1 LLM call — combine summaries into context doc)
+Pipeline:
+  Pass 1: Map        (pure Python — pathlib walk, build file list)
+  Pass 2: Index      (pure Python — structural extraction per file)
+  Pass 3: Navigate   (1 LLM call — select files using structural index)
+  Pass 4: Summarize  (N LLM calls — one per selected file)
+  Pass 5: Synthesize (1 LLM call — combine summaries into context doc)
 
 Every LLM call uses generate() (plain text), not generate_with_tools().
 """
@@ -19,6 +20,7 @@ from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
+from fitz_graveyard.planning.agent.indexer import INDEXABLE_EXTENSIONS, build_structural_index
 from fitz_graveyard.planning.prompts import load_prompt
 from fitz_graveyard.validation.sanitize import sanitize_agent_path
 
@@ -27,33 +29,22 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_MAX_TREE_FILES = 500
+_MAX_TREE_FILES = 2000
 
-_SKIP_DIRS = {
-    ".git", "__pycache__", "node_modules", ".venv", "venv", ".tox",
-    ".mypy_cache", ".pytest_cache", ".ruff_cache", "dist", "build",
-    ".eggs", "*.egg-info",
-}
-
-_BINARY_SUFFIXES = {
-    ".pyc", ".pyo", ".so", ".dll", ".exe", ".db", ".sqlite",
-    ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".ico", ".svg",
-    ".woff", ".woff2", ".ttf", ".eot",
-    ".zip", ".tar", ".gz", ".bz2", ".xz", ".7z",
-    ".pdf", ".doc", ".docx", ".xls", ".xlsx",
-    ".mp3", ".mp4", ".wav", ".avi", ".mov",
-    ".bin", ".dat", ".o", ".a", ".lib",
-}
+# Directories that are never source code in any project.
+# Intentionally minimal — the real filter is INDEXABLE_EXTENSIONS.
+_SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv"}
 
 
 class AgentContextGatherer:
     """
     Multi-pass pipeline to gather codebase context.
 
-    Pass 1: Map — pure Python pathlib walk, builds file tree string
-    Pass 2a: Select — 1 LLM call picks relevant files
-    Pass 2b: Summarize — N LLM calls, one per file
-    Pass 3: Synthesize — 1 LLM call combines summaries
+    Pass 1: Map       — pure Python pathlib walk, builds file list
+    Pass 2: Index     — pure Python structural extraction (AST, regex, parsers)
+    Pass 3: Navigate  — 1 LLM call selects files using structural index
+    Pass 4: Summarize — N LLM calls, one per file
+    Pass 5: Synthesize — 1 LLM call combines summaries
     """
 
     def __init__(self, config: "AgentConfig", source_dir: str) -> None:
@@ -89,21 +80,29 @@ class AgentContextGatherer:
         try:
             # Pass 1: Map (pure Python, instant)
             await self._report(progress_callback, 0.06, "agent:mapping")
-            file_tree = self._build_file_tree()
-            if not file_tree:
+            file_tree, file_paths = self._build_file_tree()
+            if not file_paths:
                 logger.info("AgentContextGatherer: empty or invalid source dir")
                 return empty
 
-            # Pass 2a: Select (1 LLM call)
-            await self._report(progress_callback, 0.065, "agent:selecting")
-            selected = await self._select_files(
-                client, model, file_tree, job_description
+            # Pass 2: Index (pure Python, no LLM)
+            await self._report(progress_callback, 0.063, "agent:indexing")
+            structural_index = self._build_index(file_paths)
+            logger.info(
+                f"AgentContextGatherer: indexed {len(file_paths)} files "
+                f"({len(structural_index)} chars)"
+            )
+
+            # Pass 3: Navigate (1 LLM call with structural index)
+            await self._report(progress_callback, 0.065, "agent:navigating")
+            selected = await self._navigate_files(
+                client, model, structural_index, job_description
             )
             if not selected:
                 logger.info("AgentContextGatherer: no files selected")
                 return empty
 
-            # Pass 2b: Summarize (N LLM calls)
+            # Pass 4: Summarize (N LLM calls)
             summaries = []
             for i, rel_path in enumerate(selected):
                 progress = 0.065 + 0.02 * ((i + 1) / len(selected))
@@ -122,7 +121,7 @@ class AgentContextGatherer:
 
             raw_summaries = "\n\n".join(summaries)
 
-            # Pass 3: Synthesize (1 LLM call)
+            # Pass 5: Synthesize (1 LLM call)
             await self._report(progress_callback, 0.085, "agent:synthesizing")
             synthesized = await self._synthesize(
                 client, model, summaries, job_description
@@ -138,39 +137,40 @@ class AgentContextGatherer:
             logger.exception("AgentContextGatherer: pipeline failed")
             return empty
 
-    def _build_file_tree(self) -> str:
-        """Build a file tree string from the source directory.
+    def _build_file_tree(self) -> tuple[str, list[str]]:
+        """Build a file tree string and path list from the source directory.
 
-        Pure Python: walks directory with pathlib, skips ignored dirs and
-        binary files, caps at _MAX_TREE_FILES entries.
+        Only includes files whose extension is in INDEXABLE_EXTENSIONS —
+        this is the primary filter that keeps junk out regardless of
+        directory names.  A minimal _SKIP_DIRS set handles the few
+        directories that are universally non-source (.git, __pycache__,
+        .venv, node_modules).
 
         Returns:
-            Newline-separated "relative/path (size)" entries, or "" if
-            the directory is empty/invalid.
+            Tuple of (tree_string, list_of_relative_posix_paths).
+            ("", []) if directory is empty/invalid.
         """
         root = Path(self._source_dir).resolve()
         if not root.is_dir():
-            return ""
+            return "", []
 
         entries = []
+        paths = []
         try:
             for path in sorted(root.rglob("*")):
-                # Skip directories themselves (we list files only)
                 if not path.is_file():
                     continue
 
-                # Check if any parent is in skip list
+                # Only include files the indexer can extract structure from
+                if path.suffix.lower() not in INDEXABLE_EXTENSIONS:
+                    continue
+
                 rel = path.relative_to(root)
                 parts = rel.parts
                 if any(self._should_skip_dir(p) for p in parts[:-1]):
                     continue
 
-                # Skip binary files
-                if path.suffix.lower() in _BINARY_SUFFIXES:
-                    continue
-
-                # Use posix-style paths for consistency
-                rel_posix = PurePosixPath(*rel.parts)
+                rel_posix = str(PurePosixPath(*rel.parts))
                 size = path.stat().st_size
                 if size < 1024:
                     size_str = f"{size}B"
@@ -178,41 +178,44 @@ class AgentContextGatherer:
                     size_str = f"{size / 1024:.1f}KB"
 
                 entries.append(f"{rel_posix} ({size_str})")
+                paths.append(rel_posix)
 
                 if len(entries) >= _MAX_TREE_FILES:
                     entries.append(f"... (truncated at {_MAX_TREE_FILES} files)")
                     break
         except OSError as e:
             logger.warning(f"AgentContextGatherer: tree walk error: {e}")
-            return ""
+            return "", []
 
-        return "\n".join(entries)
+        return "\n".join(entries), paths
 
     @staticmethod
     def _should_skip_dir(name: str) -> bool:
         """Check if a directory name should be skipped."""
-        if name in _SKIP_DIRS:
-            return True
-        # Handle *.egg-info pattern
-        if name.endswith(".egg-info"):
-            return True
-        return False
+        return name in _SKIP_DIRS
 
-    async def _select_files(
+    def _build_index(self, file_paths: list[str]) -> str:
+        """Build structural index of all files using pure Python extraction."""
+        return build_structural_index(
+            self._source_dir, file_paths, self._config.max_file_bytes,
+        )
+
+    async def _navigate_files(
         self,
         client: Any,
         model: str,
-        file_tree: str,
+        structural_index: str,
         job_description: str,
     ) -> list[str]:
-        """Ask LLM to select relevant files from the tree.
+        """Ask LLM to select relevant files using the structural index.
 
         1 LLM call via generate(). Parses JSON array from response.
         Falls back to _heuristic_select() on parse failure.
         """
         max_files = self._config.max_summary_files
-        prompt = load_prompt("agent_select").format(
-            file_tree=file_tree,
+
+        prompt = load_prompt("agent_navigate").format(
+            structural_index=structural_index,
             job_description=job_description,
             max_files=max_files,
         )
@@ -224,14 +227,14 @@ class AgentContextGatherer:
             )
             selected = self._parse_file_list(response)
         except Exception as e:
-            logger.warning(f"AgentContextGatherer: select LLM failed: {e}")
+            logger.warning(f"AgentContextGatherer: navigate LLM failed: {e}")
             selected = None
 
         if not selected:
             logger.info("AgentContextGatherer: falling back to heuristic select")
-            selected = self._heuristic_select(file_tree, job_description)
+            selected = self._heuristic_select(structural_index, job_description)
 
-        # Validate paths exist and cap at max_files
+        # Validate paths exist, stay in source_dir, and cap at max_files
         root = Path(self._source_dir).resolve()
         valid = []
         for rel_path in selected:
@@ -245,7 +248,7 @@ class AgentContextGatherer:
                 except ValueError:
                     continue
 
-        logger.info(f"AgentContextGatherer: selected {len(valid)} files")
+        logger.info(f"AgentContextGatherer: selected {len(valid)} files via structural index")
         return valid
 
     @staticmethod
@@ -255,9 +258,8 @@ class AgentContextGatherer:
         Handles:
         - Plain JSON array: ["a.py", "b.py"]
         - JSON object: {"files": ["a.py", "b.py"]}
-        - Markdown fenced JSON: ```json\n[...]\n```
+        - Markdown fenced JSON: ```json\\n[...]\\n```
         """
-        # Strip markdown fences
         text = response.strip()
         fence_match = re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", text, re.DOTALL)
         if fence_match:
@@ -278,22 +280,24 @@ class AgentContextGatherer:
         return None
 
     @staticmethod
-    def _heuristic_select(file_tree: str, job_description: str) -> list[str]:
+    def _heuristic_select(index_or_tree: str, job_description: str) -> list[str]:
         """Fallback file selection when LLM fails.
 
-        Priority: README/pyproject.toml first, then shallow __init__.py,
-        then remaining sorted by path length (shorter = more central).
+        Extracts file paths from the structural index (## path lines),
+        prioritizes project roots (README, pyproject.toml), then sorts
+        by path depth (shorter = more central).
         """
-        lines = file_tree.strip().splitlines()
-        # Extract just the path (before the size in parens)
-        paths = []
-        for line in lines:
-            if line.startswith("..."):
-                continue
-            # "path/to/file.py (1.2KB)" → "path/to/file.py"
-            match = re.match(r"^(.+?)\s+\(", line)
-            if match:
-                paths.append(match.group(1))
+        # Extract paths from ## headers in structural index
+        paths = re.findall(r'^## (.+)$', index_or_tree, re.MULTILINE)
+
+        if not paths:
+            # Fallback: try parsing as file tree ("path (size)" format)
+            for line in index_or_tree.strip().splitlines():
+                if line.startswith("..."):
+                    continue
+                match = re.match(r"^(.+?)\s+\(", line)
+                if match:
+                    paths.append(match.group(1))
 
         priority = []
         rest = []
@@ -309,9 +313,7 @@ class AgentContextGatherer:
             else:
                 rest.append(p)
 
-        # Sort rest by path depth (shorter paths = more central)
         rest.sort(key=lambda p: (p.count("/"), len(p)))
-
         return priority + rest
 
     async def _summarize_file(
