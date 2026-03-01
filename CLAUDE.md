@@ -7,7 +7,7 @@
 
 ## What This Is
 
-Local-first AI architectural planning via Ollama. Two interfaces (CLI + MCP) wrap the same `tools/` service layer. Background worker processes jobs sequentially from SQLite queue.
+Local-first AI architectural planning via local LLMs (Ollama or LM Studio). Two interfaces (CLI + MCP) wrap the same `tools/` service layer. Background worker processes jobs sequentially from SQLite queue.
 
 ```
 CLI (typer)    ──→ tools/ ──→ SQLiteJobStore ←── BackgroundWorker ──→ PlanningPipeline
@@ -18,7 +18,7 @@ MCP (fastmcp)  ──→ tools/ ──→ SQLiteJobStore
 
 ```bash
 pip install -e ".[dev]"           # Dev install
-pytest                            # 244 tests
+pytest                            # 400 tests
 fitz-graveyard plan "desc"        # Queue job
 fitz-graveyard run                # Start worker (Ctrl+C to stop)
 fitz-graveyard list               # Show all jobs
@@ -55,14 +55,15 @@ Post-pipeline: cross-stage coherence check → confidence scoring (with codebase
 - SQLite: WAL mode, crash recovery on startup (`running` → `interrupted`)
 - Windows: `ProactorEventLoop` can't use `loop.add_signal_handler()` — falls back to `signal.signal()`
 - Agent: graceful fallback — disabled config or no source_dir → returns `{"synthesized": "", "raw_summaries": ""}`, never crashes pipeline
-- OOM: 80B → 32B fallback via `OllamaClient`
+- OOM: Ollama has 80B → 32B fallback; LM Studio fallback is optional (default: none)
 
 ## Config
 
 Auto-created at `platformdirs.user_config_path("fitz-graveyard") / "config.yaml"`.
 DB at same location (`jobs.db`). All config models use `extra="ignore"`.
 
-Key settings: `ollama.model`, `ollama.fallback_model`, `ollama.memory_threshold`,
+Key settings: `provider` (`ollama` | `lm_studio`), `ollama.model`, `ollama.fallback_model`,
+`ollama.memory_threshold`, `lm_studio.base_url`, `lm_studio.model`,
 `agent.enabled`, `agent.max_summary_files` (default 15), `agent.source_dir` (default: cwd),
 `anthropic.api_key` (None = disabled), `confidence.default_threshold`.
 
@@ -76,7 +77,7 @@ fitz_graveyard/
 ├── tools/                     # Service layer (create_plan, check_status, etc.)
 ├── models/                    # JobStore ABC, SQLiteJobStore, JobRecord, responses
 ├── background/                # ServerLifecycle, BackgroundWorker, signals
-├── llm/                       # OllamaClient, retry, memory monitor
+├── llm/                       # OllamaClient, LMStudioClient, factory, retry, memory monitor
 ├── planning/pipeline/stages/  # 3 merged pipeline stages + orchestrator + checkpoints
 ├── planning/agent/            # Multi-pass context gatherer (map, select, summarize, synthesize)
 ├── planning/prompts/          # Externalized .txt prompt templates

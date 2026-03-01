@@ -2,6 +2,6 @@
 """
 Multi-stage planning pipeline infrastructure.
 
-Provides the core abstractions and orchestration for the five-stage
-planning pipeline.
+Provides the core abstractions and orchestration for the three-stage
+planning pipeline (Context, Architecture+Design, Roadmap+Risk).
 """
