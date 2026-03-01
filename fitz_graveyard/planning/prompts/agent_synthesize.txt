@@ -20,11 +20,19 @@ that the planner must know about. Use exact names from the summaries.
 ## Existing Patterns
 Coding conventions, abstractions, and design patterns found in the codebase.
 
+## Already Implemented
+Does the codebase already contain code that fully or partially solves this task?
+Look for existing classes, functions, modules, or endpoints that match what the
+task is asking for. If the task says "build X" but X already exists, say so
+explicitly and describe what exists. This is the most important section — building
+something that already exists is the worst possible outcome.
+
 ## Files That Will Change
 Which existing files are likely affected by the task and why.
 
 ## Files to Create
 New files that may need to be created, based on project conventions.
+If the task is already implemented, this section should say "None — see Already Implemented above."
 
 RULES:
 - Do NOT invent information not present in the summaries above.

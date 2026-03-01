@@ -147,7 +147,10 @@ class ArchitectureDesignStage(PipelineStage):
 
         # Use raw summaries for reasoning prompt — more detail for accurate architecture
         krag_context = self._get_raw_summaries(prior_outputs)
+        impl_check = self._get_implementation_check(prior_outputs)
         prompt = prompt_template.format(context=context_str.strip(), krag_context=krag_context)
+        if impl_check:
+            prompt = f"{impl_check}\n\n{prompt}"
         return self._make_messages(prompt)
 
     def parse_output(self, raw_output: str) -> dict[str, Any]:

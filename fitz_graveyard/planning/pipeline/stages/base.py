@@ -118,6 +118,36 @@ def _repair_truncated_json(
     return None
 
 
+def _sanitize_json_strings(text: str) -> str:
+    """Replace literal control characters inside JSON string values with escape sequences.
+
+    LLMs often produce literal newlines/tabs inside JSON strings, which is
+    invalid JSON. This fixes that while leaving structural whitespace untouched.
+    """
+    result = []
+    in_string = False
+    escape = False
+    for ch in text:
+        if escape:
+            result.append(ch)
+            escape = False
+        elif ch == '\\' and in_string:
+            result.append(ch)
+            escape = True
+        elif ch == '"':
+            result.append(ch)
+            in_string = not in_string
+        elif in_string and ch == '\n':
+            result.append('\\n')
+        elif in_string and ch == '\r':
+            result.append('\\r')
+        elif in_string and ch == '\t':
+            result.append('\\t')
+        else:
+            result.append(ch)
+    return ''.join(result)
+
+
 def extract_json(raw_output: str) -> dict[str, Any]:
     """
     Extract JSON from LLM output, handling common formatting variations.
@@ -136,15 +166,17 @@ def extract_json(raw_output: str) -> dict[str, Any]:
     Raises:
         ValueError: If no valid JSON found
     """
+    sanitized = _sanitize_json_strings(raw_output)
+
     # Strategy 1: Direct parse
     try:
-        return json.loads(raw_output.strip())
+        return json.loads(sanitized.strip())
     except json.JSONDecodeError:
         pass
 
     # Strategy 2: Code fence (```json ... ```)
     fence_match = re.search(
-        r"```(?:json)?\s*\n(.*?)\n```", raw_output, re.DOTALL | re.IGNORECASE
+        r"```(?:json)?\s*\n(.*?)\n```", sanitized, re.DOTALL | re.IGNORECASE
     )
     if fence_match:
         try:
@@ -154,7 +186,7 @@ def extract_json(raw_output: str) -> dict[str, Any]:
 
     # Strategy 3: Bare code block ({...} or [...])
     # Find first { or [ and last matching } or ]
-    json_match = re.search(r"(\{.*\}|\[.*\])", raw_output, re.DOTALL)
+    json_match = re.search(r"(\{.*\}|\[.*\])", sanitized, re.DOTALL)
     if json_match:
         try:
             return json.loads(json_match.group(1))
@@ -163,11 +195,11 @@ def extract_json(raw_output: str) -> dict[str, Any]:
 
     # Strategy 4: Attempt to repair truncated JSON by closing unclosed brackets/braces
     # (handles models that hit context/token limits mid-output)
-    first_brace = raw_output.find("{")
-    first_bracket = raw_output.find("[")
+    first_brace = sanitized.find("{")
+    first_bracket = sanitized.find("[")
     if first_brace != -1 or first_bracket != -1:
         start = first_brace if (first_brace != -1 and (first_bracket == -1 or first_brace < first_bracket)) else first_bracket
-        candidate = raw_output[start:]
+        candidate = sanitized[start:]
         braces, brackets, in_string = _count_unclosed_delimiters(candidate)
         # Always attempt repair if strategies 1-3 failed — even if delimiters
         # appear balanced, the JSON may have trailing garbage or subtle issues
@@ -530,7 +562,7 @@ class PipelineStage(ABC):
             logger.warning(f"Stage '{self.name}': self-critique failed: {e}")
             return reasoning_text
 
-    _MAX_GATHERED_CONTEXT_CHARS = 8000
+    _MAX_GATHERED_CONTEXT_CHARS = 16000
 
     def _get_gathered_context(self, prior_outputs: dict[str, Any]) -> str:
         """
@@ -555,7 +587,7 @@ class PipelineStage(ABC):
             ctx = ctx[:self._MAX_GATHERED_CONTEXT_CHARS] + "\n\n[... context trimmed for brevity]"
         return ctx
 
-    _MAX_RAW_SUMMARIES_CHARS = 12000
+    _MAX_RAW_SUMMARIES_CHARS = 24000
 
     def _get_raw_summaries(self, prior_outputs: dict[str, Any]) -> str:
         """
@@ -578,6 +610,27 @@ class PipelineStage(ABC):
             )
             ctx = ctx[:self._MAX_RAW_SUMMARIES_CHARS] + "\n\n[... summaries trimmed for brevity]"
         return ctx
+
+    def _get_implementation_check(self, prior_outputs: dict[str, Any]) -> str:
+        """Format the implementation check result for injection into prompts.
+
+        Returns a short directive string if the task is already implemented,
+        or empty string if not (or if no check was performed).
+        """
+        check = prior_outputs.get("_implementation_check", {})
+        if not check or not isinstance(check, dict):
+            return ""
+        if not check.get("already_implemented"):
+            return ""
+        evidence = check.get("evidence", "")
+        gaps = check.get("gaps", [])
+        text = f"IMPORTANT — EXISTING IMPLEMENTATION DETECTED: {evidence}"
+        if gaps:
+            text += f"\nGaps to fill: {', '.join(gaps)}"
+        else:
+            text += "\nNo gaps identified — task may already be complete."
+        text += "\nDo NOT propose building something that already exists. If the task is done, say so."
+        return text
 
     async def execute(
         self,

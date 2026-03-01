@@ -16,7 +16,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from fitz_graveyard.planning.pipeline.checkpoint import CheckpointManager
-from fitz_graveyard.planning.pipeline.stages.base import SYSTEM_PROMPT, PipelineStage, StageResult
+from fitz_graveyard.planning.pipeline.stages.base import SYSTEM_PROMPT, PipelineStage, StageResult, extract_json
+from fitz_graveyard.planning.prompts import load_prompt
 
 if TYPE_CHECKING:
     from fitz_graveyard.planning.agent import AgentContextGatherer
@@ -190,6 +191,23 @@ class PlanningPipeline:
                 prior_outputs["_gathered_context"] = agent_ctx.get("synthesized", "")
                 prior_outputs["_raw_summaries"] = agent_ctx.get("raw_summaries", "")
 
+        # Implementation check: does the codebase already solve this task?
+        if (
+            prior_outputs.get("_gathered_context")
+            and "_implementation_check" not in prior_outputs
+        ):
+            if progress_callback:
+                result_or_coro = progress_callback(0.092, "agent:checking_existing")
+                if hasattr(result_or_coro, '__await__'):
+                    await result_or_coro
+            check = await self._implementation_check(
+                client, prior_outputs["_gathered_context"], job_description,
+            )
+            prior_outputs["_implementation_check"] = check
+            logger.info(
+                f"Implementation check: already_implemented={check.get('already_implemented', False)}"
+            )
+
         # Flatten merged stage outputs from checkpoint (same as live execution)
         # Merged stages store e.g. {"architecture_design": {"architecture": {}, "design": {}}}
         # but downstream code expects flattened keys like "architecture", "design"
@@ -318,6 +336,40 @@ class PlanningPipeline:
             git_sha=start_sha,
             head_advanced=head_advanced,
         )
+
+    async def _implementation_check(
+        self,
+        client: Any,
+        synthesized_context: str,
+        job_description: str,
+    ) -> dict[str, Any]:
+        """Check if the requested task is already implemented in the codebase.
+
+        1 LLM call using the agent's synthesized context. Returns a dict with
+        'already_implemented' (bool), 'evidence' (str), and 'gaps' (list[str]).
+        On failure, returns a safe default (not implemented).
+        """
+        prompt = load_prompt("implementation_check").format(
+            job_description=job_description,
+            synthesized_context=synthesized_context,
+        )
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ]
+        try:
+            t0 = time.monotonic()
+            response = await client.generate(messages=messages)
+            t1 = time.monotonic()
+            logger.info(f"Implementation check took {t1 - t0:.1f}s ({len(response)} chars)")
+            result = extract_json(response)
+            if isinstance(result, dict) and "already_implemented" in result:
+                return result
+            logger.warning(f"Implementation check returned unexpected structure: {type(result)}")
+            return {"already_implemented": False, "evidence": "", "gaps": []}
+        except Exception as e:
+            logger.warning(f"Implementation check failed (non-fatal): {e}")
+            return {"already_implemented": False, "evidence": "", "gaps": []}
 
     async def _coherence_check(
         self,

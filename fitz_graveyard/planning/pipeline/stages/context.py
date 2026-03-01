@@ -49,7 +49,7 @@ _FIELD_GROUPS = [
         "fields": ["existing_files", "needed_artifacts"],
         "schema": json.dumps({
             "existing_files": ["path/to/relevant/file.py — what it does"],
-            "needed_artifacts": ["config.yaml — the config file this project must produce"],
+            "needed_artifacts": ["new_file.py — what it produces (empty list [] if task is already implemented)"],
         }, indent=2),
     },
     {
@@ -82,8 +82,11 @@ class ContextStage(PipelineStage):
     def build_prompt(self, job_description: str, prior_outputs: dict[str, Any]) -> list[dict]:
         # Use raw summaries for reasoning — more detail for accurate file identification
         gathered_context = self._get_raw_summaries(prior_outputs)
+        impl_check = self._get_implementation_check(prior_outputs)
         prompt_template = load_prompt("context")
         prompt = prompt_template.format(description=job_description, krag_context=gathered_context)
+        if impl_check:
+            prompt = f"{impl_check}\n\n{prompt}"
         return self._make_messages(prompt)
 
     def parse_output(self, raw_output: str) -> dict[str, Any]:

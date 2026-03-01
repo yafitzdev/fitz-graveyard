@@ -1,0 +1,16 @@
+You are checking whether a requested task is already implemented in an existing codebase.
+
+TASK: {job_description}
+
+CODEBASE ANALYSIS:
+{synthesized_context}
+
+Based on the codebase analysis above, is this task already fully or partially implemented?
+
+Look for:
+- Existing classes, modules, or functions that match what the task asks for
+- Existing endpoints, configs, or integrations that fulfill the requirements
+- If the analysis says "Already Implemented" or "Files to Create: None", that is strong evidence
+
+Return ONLY valid JSON, no other text:
+{{"already_implemented": true or false, "evidence": "1-2 sentence explanation citing specific files/classes", "gaps": ["specific missing feature 1", "missing feature 2"] or [] if fully implemented}}
