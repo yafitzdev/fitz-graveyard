@@ -430,6 +430,7 @@ class TestConfigValidation:
         assert not any("Unknown config key" in msg for msg in caplog.messages)
 
 
+
 class TestPromptLoading:
     """Tests for prompt loading utilities."""
 

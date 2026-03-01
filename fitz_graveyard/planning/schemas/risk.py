@@ -1,7 +1,7 @@
 # fitz_graveyard/planning/schemas/risk.py
 """Schema for risk analysis stage output."""
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 
 
 class Risk(BaseModel):
@@ -10,29 +10,41 @@ class Risk(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     category: str = Field(
-        ...,
+        default="technical",
         description="Risk category (technical, resource, schedule, etc.)",
     )
 
     description: str = Field(
-        ...,
+        default="",
         description="What the risk is",
     )
 
     impact: str = Field(
-        ...,
+        default="medium",
         description="Impact level if risk materializes: low, medium, high, critical",
     )
 
     likelihood: str = Field(
-        ...,
+        default="medium",
         description="Probability of occurrence: low, medium, high",
     )
 
     mitigation: str = Field(
-        ...,
+        default="",
         description="How to prevent or reduce this risk",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_field_names(cls, data: dict) -> dict:
+        """Handle LLM field name variations."""
+        if not isinstance(data, dict):
+            return data
+        if "desc" in data and "description" not in data:
+            data["description"] = data.pop("desc")
+        if "phases" in data and "affected_phases" not in data:
+            data["affected_phases"] = data.pop("phases")
+        return data
 
     contingency: str = Field(
         default="",

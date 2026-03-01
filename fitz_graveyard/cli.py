@@ -71,6 +71,59 @@ _DISPLAY_STAGES = [
 ]
 
 
+# ASCII cooking animation frames — cycles during live progress
+_COOKING_FRAMES = [
+    # Frame 0: stir right, steam left
+    [
+        "      ┌──┐       ",
+        "     ╭┤  ├╮      ",
+        "    ( •  • )  ~  ",
+        "     ╰─┬┬─╯ ~   ",
+        "    ╭──┘└─╮      ",
+        "    │  ⟋  │      ",
+        "    │~≈~≈~│      ",
+        "    ╰─────╯      ",
+        "     ═════       ",
+    ],
+    # Frame 1: stir left, steam right
+    [
+        "      ┌──┐       ",
+        "     ╭┤  ├╮      ",
+        "   ~  ( •  • )   ",
+        "    ~  ╰─┬┬─╯    ",
+        "     ╭──┘└──╮    ",
+        "     │  ⟍   │    ",
+        "     │≈~≈~≈ │    ",
+        "     ╰──────╯    ",
+        "      ══════     ",
+    ],
+    # Frame 2: stir right, steam both
+    [
+        "      ┌──┐       ",
+        "     ╭┤  ├╮      ",
+        "    ( °  ° ) ~   ",
+        "   ~  ╰─┬┬─╯    ",
+        "    ╭──┘└─╮      ",
+        "    │  ⟋  │      ",
+        "    │≈~≈~≈│      ",
+        "    ╰─────╯      ",
+        "     ═════       ",
+    ],
+    # Frame 3: stir left, steam up
+    [
+        "      ┌──┐  ~    ",
+        "     ╭┤  ├╮      ",
+        "    ( °  ° )     ",
+        "     ╰─┬┬─╯ ~   ",
+        "     ╭─┘└──╮    ",
+        "     │  ⟍  │    ",
+        "     │~≈~≈~│    ",
+        "     ╰─────╯    ",
+        "      ═════     ",
+    ],
+]
+
+
 _PHASE_DESCRIPTIONS = {
     "starting": "Starting up...",
     "initializing": "Initializing...",
@@ -124,6 +177,8 @@ def _make_live_display(
     stage_durations: dict[int, float] | None = None,
     stage_started: dict[int, float] | None = None,
     log_lines: list[str] | None = None,
+    tick: int = 0,
+    model_name: str = "",
 ):
     """Build a rich renderable for the live progress display."""
     from rich.table import Table
@@ -179,18 +234,30 @@ def _make_live_display(
     status_desc = _get_phase_description(current_phase)
     status_text = RichText(f"\n  {status_desc}", style="dim italic") if status_desc else RichText("")
 
-    # Activity log
-    parts: list = [table, bar_text, status_text]
+    # Left side: progress info
+    left_parts: list = [table, bar_text, status_text]
     if log_lines:
-        parts.append(RichText(""))  # spacer
+        left_parts.append(RichText(""))  # spacer
         for line in log_lines:
-            parts.append(RichText(f"  {line}", style="dim"))
+            left_parts.append(RichText(f"  {line}", style="dim"))
+    left_parts.append(RichText(""))  # bottom padding
 
-    parts.append(RichText(""))  # bottom padding
+    # Right side: cooking animation
+    frame = _COOKING_FRAMES[tick % len(_COOKING_FRAMES)]
+    anim_text = RichText("\n".join(frame), style="bright_black")
+
+    # Combine left + right in a two-column layout
+    layout = Table.grid(padding=(0, 3))
+    layout.add_column()
+    layout.add_column()
+    layout.add_row(Group(*left_parts), anim_text)
+
+    subtitle = RichText(f" {model_name} ", style="dim italic") if model_name else None
 
     return Panel(
-        Group(*parts),
+        layout,
         title=title,
+        subtitle=subtitle,
         border_style="bright_black",
     )
 
@@ -239,6 +306,12 @@ async def _run_inline(
     console = Console(stderr=True)
     start = time.monotonic()
 
+    # Resolve display model name from active provider
+    if config.provider == "lm_studio":
+        model_name = config.lm_studio.model
+    else:
+        model_name = config.ollama.model
+
     job_task = asyncio.create_task(
         worker.process_job_direct(job_id, pre_gathered_context=pre_gathered_context, resume=resume)
     )
@@ -251,10 +324,11 @@ async def _run_inline(
     # Activity log
     log_lines: deque[str] = deque(maxlen=5)
     last_phase = ""
+    tick = 0
 
     try:
         with Live(
-            _make_live_display(description, 0.0, 0.0),
+            _make_live_display(description, 0.0, 0.0, model_name=model_name),
             console=console,
             refresh_per_second=4,
         ) as live:
@@ -286,7 +360,10 @@ async def _run_inline(
                         stage_durations=stage_durations,
                         stage_started=stage_started,
                         log_lines=list(log_lines),
+                        tick=tick,
+                        model_name=model_name,
                     ))
+                tick += 1
                 await asyncio.sleep(0.3)
 
             # Final update
@@ -299,6 +376,8 @@ async def _run_inline(
                     stage_durations=stage_durations,
                     stage_started=stage_started,
                     log_lines=list(log_lines),
+                    tick=tick,
+                    model_name=model_name,
                 ))
 
     except (KeyboardInterrupt, asyncio.CancelledError):

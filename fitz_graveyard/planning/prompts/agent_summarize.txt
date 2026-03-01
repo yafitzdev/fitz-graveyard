@@ -7,18 +7,22 @@ FILE: {file_path}
 {file_content}
 ```
 
-Extract the following (skip sections that don't apply):
+Extract the following (skip sections that don't apply to this file type):
 
 **Purpose:** 1-2 sentences on what this file does.
 
-**Key Exports:** List functions, classes, and constants with their exact signatures.
+**Key Exports:** (for code files) List functions, classes, and constants with their exact signatures.
 Use exact names from the source code. Do not paraphrase or rename identifiers.
 
-**Dependencies:** What this file imports or depends on.
+**Schema / Structure:** (for YAML, JSON, TOML, config files) List the top-level keys, their types,
+required vs optional, and any example values present in the file. Use exact field names.
 
-**External Contracts:** Exact field names, types, data structures, API endpoints, or
-config keys defined here. Use exact names from source code.
+**Dependencies:** What this file imports, loads, or depends on. Include file paths or module names.
 
-**Relevance to Task:** How this file relates to the planning task.
+**External Contracts:** Exact field names, types, data structures, API endpoints, config keys,
+plugin hooks, or schema constraints defined here. Use exact names from source code.
+
+**Relevance to Task:** How this file relates to the planning task. Be specific — name which
+part of the task this file enables, constrains, or must be integrated with.
 
 Be concise. Output only the summary, no preamble.

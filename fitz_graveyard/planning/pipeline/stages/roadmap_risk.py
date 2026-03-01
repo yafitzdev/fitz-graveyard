@@ -86,12 +86,21 @@ def _remove_dependency_cycles(phases: list[dict]) -> list[dict]:
     """
     phase_nums = {p["number"] for p in phases}
     for phase in phases:
-        original = phase.get("dependencies", [])
+        def _to_int(d):
+            try:
+                return int(d)
+            except (ValueError, TypeError):
+                import re
+                m = re.search(r'\d+', str(d))
+                return int(m.group()) if m else None
+
+        original = [x for x in (_to_int(d) for d in phase.get("dependencies", [])) if x is not None]
         cleaned = [d for d in original if d < phase["number"] and d in phase_nums]
         if cleaned != original:
             removed = set(original) - set(cleaned)
             logger.warning(f"Phase {phase['number']}: removed invalid deps {removed}")
-            phase["dependencies"] = cleaned
+        # Always write back — normalizes string deps ("Phase 0") to ints (0)
+        phase["dependencies"] = cleaned
     return phases
 
 

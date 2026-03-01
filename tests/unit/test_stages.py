@@ -1062,23 +1062,23 @@ class TestGatheredContextCap:
 
     def test_long_context_trimmed(self):
         stage = ContextStage()
-        long_ctx = "x" * 10000
+        long_ctx = "x" * 20000
         result = stage._get_gathered_context({"_gathered_context": long_ctx})
-        assert len(result) < 10000
+        assert len(result) < 20000
         assert result.endswith("[... context trimmed for brevity]")
         assert result.startswith("x" * 100)
 
     def test_context_at_limit_unchanged(self):
         stage = ContextStage()
-        ctx = "x" * 8000
+        ctx = "x" * 16000
         result = stage._get_gathered_context({"_gathered_context": ctx})
         assert result == ctx
 
     def test_context_just_over_limit_trimmed(self):
         stage = ContextStage()
-        ctx = "x" * 8001
+        ctx = "x" * 16001
         result = stage._get_gathered_context({"_gathered_context": ctx})
-        assert len(result) < 8100  # 8000 + trim message
+        assert len(result) < 16100  # 16000 + trim message
         assert "[... context trimmed for brevity]" in result
 
 
@@ -1103,14 +1103,14 @@ class TestRawSummaries:
 
     def test_long_raw_trimmed(self):
         stage = ContextStage()
-        long_raw = "x" * 15000
+        long_raw = "x" * 28000
         result = stage._get_raw_summaries({"_raw_summaries": long_raw})
-        assert len(result) < 15000
+        assert len(result) < 28000
         assert "[... summaries trimmed for brevity]" in result
 
     def test_raw_at_limit_unchanged(self):
         stage = ContextStage()
-        raw = "x" * 12000
+        raw = "x" * 24000
         result = stage._get_raw_summaries({"_raw_summaries": raw})
         assert result == raw
 
