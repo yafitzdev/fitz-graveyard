@@ -130,6 +130,7 @@ _PHASE_DESCRIPTIONS = {
     "health_check": "Checking LLM connectivity...",
     "agent:mapping": "Mapping codebase...",
     "agent:selecting": "Selecting relevant files...",
+    "agent:selecting_dirs": "Selecting relevant directories...",
     "agent:synthesizing": "Synthesizing context...",
     "context:reasoning": "Analyzing requirements and constraints...",
     "context_complete": "Requirements analysis complete",
@@ -407,12 +408,8 @@ async def _run_inline(
         console.print(f"[green]✓ Done[/green]  quality: {quality}  time: {_fmt_duration(elapsed)}")
         if final_job.file_path:
             console.print(f"[dim]Saved:[/dim] {final_job.file_path}")
+            console.print(f"[dim]View:[/dim]  fitz-graveyard get {job_id}")
         console.print()
-        # Print the plan to stdout
-        if final_job.file_path:
-            from fitz_graveyard.tools.get_plan import get_plan
-            result = await get_plan(job_id, "full", store)
-            typer.echo(result["content"])
     elif state == "awaiting_review":
         console.print(f"[magenta]⏸ Awaiting review[/magenta]  Run 'fitz-graveyard confirm {job_id}' to proceed.")
     else:
@@ -772,6 +769,37 @@ def serve():
     from fitz_graveyard.__main__ import main
 
     asyncio.run(main())
+
+
+@app.command()
+def purge(
+    include_complete: bool = typer.Option(False, "--all", help="Also remove completed jobs"),
+):
+    """Kill all zombie jobs (interrupted, queued, running, failed)."""
+    async def _purge():
+        import aiosqlite
+        store = await _get_store()
+        try:
+            states = ["interrupted", "queued", "running", "failed"]
+            if include_complete:
+                states.append("complete")
+
+            placeholders = ",".join("?" for _ in states)
+            async with aiosqlite.connect(store._db_path) as db:
+                cursor = await db.execute(
+                    f"UPDATE jobs SET state='failed' WHERE state IN ({placeholders})",
+                    states,
+                )
+                await db.commit()
+                return cursor.rowcount
+        finally:
+            await store.close()
+
+    count = _run(_purge())
+    if count:
+        typer.echo(f"Purged {count} job(s).")
+    else:
+        typer.echo("No jobs to purge.")
 
 
 if __name__ == "__main__":
