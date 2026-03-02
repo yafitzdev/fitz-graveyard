@@ -418,11 +418,15 @@ def _extract_full_imports(content: str) -> set[str]:
 
 
 def _extract_full_imports_regex(content: str) -> set[str]:
-    """Regex fallback for full import paths."""
+    """Regex fallback for full import paths.
+
+    Unlike the structural index regex (top-level only), this matches
+    indented imports too — critical for lazy imports inside functions.
+    """
     imports: set[str] = set()
-    for m in re.finditer(r'^from\s+(\S+)\s+import', content, re.MULTILINE):
+    for m in re.finditer(r'^\s*from\s+(\S+)\s+import', content, re.MULTILINE):
         imports.add(m.group(1))
-    for m in re.finditer(r'^import\s+(\S+)', content, re.MULTILINE):
+    for m in re.finditer(r'^\s*import\s+(\S+)', content, re.MULTILINE):
         imports.add(m.group(1).split(",")[0].strip())
     return imports
 

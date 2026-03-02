@@ -457,6 +457,17 @@ class TestExtractFullImportsRegex:
         result = _extract_full_imports_regex("import foo.bar\n")
         assert "foo.bar" in result
 
+    def test_indented_imports(self):
+        code = (
+            "class Engine:\n"
+            "    def init(self):\n"
+            "        from pkg.governance import run_constraints\n"
+            "            from pkg.governance.decider import Decider\n"
+        )
+        result = _extract_full_imports_regex(code)
+        assert "pkg.governance" in result
+        assert "pkg.governance.decider" in result
+
 
 class TestBuildImportGraph:
     def test_resolves_intra_project(self, tmp_path):
