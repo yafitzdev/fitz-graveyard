@@ -739,6 +739,26 @@ class TestExpandWithCallers:
         # Should have a.py + 2 hops max
         assert "b.py" in result
 
+    def test_multi_hop_lazy_imports(self, tmp_path):
+        """Lazy imports inside methods are followed transitively."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "governor.py").write_text("class Gov: pass\n")
+        (pkg / "decider.py").write_text("from pkg.governor import Gov\n")
+        engines = tmp_path / "engines"
+        engines.mkdir()
+        (engines / "engine.py").write_text(
+            "class Engine:\n"
+            "    def init(self):\n"
+            "        from pkg.decider import Decider\n"
+        )
+
+        files = ["pkg/governor.py", "pkg/decider.py", "engines/engine.py"]
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        result = gatherer._expand_with_callers(["pkg/governor.py"], files, 15)
+        assert "pkg/decider.py" in result
+        assert "engines/engine.py" in result
+
     def test_multi_hop_no_cycles(self, tmp_path):
         """Circular imports don't cause infinite loop."""
         (tmp_path / "a.py").write_text("from b import y\nx = 1\n")

@@ -407,7 +407,7 @@ def _extract_full_imports(content: str) -> set[str]:
         return _extract_full_imports_regex(content)
 
     imports: set[str] = set()
-    for node in ast.iter_child_nodes(tree):
+    for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 imports.add(alias.name)

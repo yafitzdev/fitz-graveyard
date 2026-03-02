@@ -433,6 +433,17 @@ class TestExtractFullImports:
         result = _extract_full_imports(code)
         assert "fitz_ai.governance" in result
 
+    def test_lazy_imports_inside_functions(self):
+        code = (
+            "class Engine:\n"
+            "    def init(self):\n"
+            "        from pkg.governance.decider import Decider\n"
+            "        from pkg.governance import run_constraints\n"
+        )
+        result = _extract_full_imports(code)
+        assert "pkg.governance.decider" in result
+        assert "pkg.governance" in result
+
     def test_empty_content(self):
         assert _extract_full_imports("") == set()
 
@@ -487,3 +498,26 @@ class TestBuildImportGraph:
         (tmp_path / "a.py").write_text("")
         _forward, lookup = build_import_graph(str(tmp_path), ["a.py"])
         assert lookup["a"] == "a.py"
+
+    def test_lazy_imports_create_edges(self, tmp_path):
+        """Imports inside methods (lazy imports) are still resolved."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "governor.py").write_text("class Gov: pass\n")
+        (pkg / "decider.py").write_text(
+            "from pkg.governor import Gov\n"
+            "class Decider: pass\n"
+        )
+        engines = tmp_path / "engines"
+        engines.mkdir()
+        (engines / "engine.py").write_text(
+            "class Engine:\n"
+            "    def init(self):\n"
+            "        from pkg.decider import Decider\n"
+        )
+        files = ["pkg/governor.py", "pkg/decider.py", "engines/engine.py"]
+        forward, _lookup = build_import_graph(str(tmp_path), files)
+        # engine.py has a lazy import of pkg.decider -> should create edge
+        assert "pkg/decider.py" in forward.get("engines/engine.py", set())
+        # decider.py has top-level import of pkg.governor -> should create edge
+        assert "pkg/governor.py" in forward.get("pkg/decider.py", set())
