@@ -2,6 +2,7 @@
 """Aggregated output schema combining all planning stages."""
 
 from datetime import datetime
+from typing import Any
 from pydantic import BaseModel, Field, ConfigDict
 
 from fitz_graveyard.planning.schemas.context import ContextOutput
@@ -81,4 +82,10 @@ class PlanOutput(BaseModel):
     api_review_feedback: dict[str, str] | None = Field(
         default=None,
         description="API review feedback per section (section_name -> feedback text)",
+    )
+
+    # Diagnostics
+    diagnostics: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Pipeline diagnostics (provider, model, timings, call counts)",
     )

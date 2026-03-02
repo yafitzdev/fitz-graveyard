@@ -12,7 +12,7 @@ import subprocess
 import time
 import traceback
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from fitz_graveyard.planning.pipeline.checkpoint import CheckpointManager
@@ -44,6 +44,7 @@ class PipelineResult:
     error: str | None = None
     git_sha: str | None = None
     head_advanced: bool = False
+    stage_timings: dict[str, float] = field(default_factory=dict)
 
 
 def get_git_sha() -> str | None:
@@ -150,9 +151,13 @@ class PlanningPipeline:
                 f"Using pre-gathered context for job {job_id} ({len(pre_gathered_context)} chars)"
             )
 
+        # Track stage timings
+        stage_timings: dict[str, float] = {}
+
         # Run agent context gathering (once, before all stages, with checkpoint)
         if agent is not None and "_agent_context" not in prior_outputs:
             logger.info(f"Running AgentContextGatherer for job {job_id}")
+            t_agent = time.monotonic()
             gathered = await agent.gather(
                 client=client,
                 job_description=job_description,
@@ -165,6 +170,7 @@ class PlanningPipeline:
             prior_outputs["_agent_context"] = gathered
             synth_len = len(gathered.get("synthesized", ""))
             raw_len = len(gathered.get("raw_summaries", ""))
+            stage_timings["agent_gathering"] = time.monotonic() - t_agent
             logger.info(
                 f"AgentContextGatherer complete: synthesized={synth_len}, raw={raw_len} chars"
             )
@@ -200,9 +206,11 @@ class PlanningPipeline:
                 result_or_coro = progress_callback(0.092, "agent:checking_existing")
                 if hasattr(result_or_coro, '__await__'):
                     await result_or_coro
+            t_impl = time.monotonic()
             check = await self._implementation_check(
                 client, prior_outputs["_gathered_context"], job_description,
             )
+            stage_timings["implementation_check"] = time.monotonic() - t_impl
             prior_outputs["_implementation_check"] = check
             logger.info(
                 f"Implementation check: already_implemented={check.get('already_implemented', False)}"
@@ -228,6 +236,7 @@ class PlanningPipeline:
                 success=True,
                 outputs=prior_outputs,
                 git_sha=get_git_sha(),
+                stage_timings=stage_timings,
             )
 
         logger.info(
@@ -265,7 +274,9 @@ class PlanningPipeline:
             stage.set_substep_callback(_substep_cb)
 
             # Run stage
+            t_stage = time.monotonic()
             result = await stage.execute(client, job_description, prior_outputs)
+            stage_timings[stage.name] = time.monotonic() - t_stage
 
             # Handle failure
             if not result.success:
@@ -276,6 +287,7 @@ class PlanningPipeline:
                     failed_stage=stage.name,
                     error=result.error,
                     git_sha=get_git_sha(),
+                    stage_timings=stage_timings,
                 )
 
             # Save checkpoint
@@ -305,7 +317,9 @@ class PlanningPipeline:
             if hasattr(result_or_coro, '__await__'):
                 await result_or_coro
 
+        t_coherence = time.monotonic()
         coherence_fixes = await self._coherence_check(client, prior_outputs)
+        stage_timings["coherence_check"] = time.monotonic() - t_coherence
         if coherence_fixes:
             # Apply fixes to prior_outputs — scalar fields only.
             # Never replace list fields (risks, phases, approaches) since the LLM
@@ -348,6 +362,7 @@ class PlanningPipeline:
             outputs=prior_outputs,
             git_sha=start_sha,
             head_advanced=head_advanced,
+            stage_timings=stage_timings,
         )
 
     async def _implementation_check(

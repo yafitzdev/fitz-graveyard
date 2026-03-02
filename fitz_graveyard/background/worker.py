@@ -482,7 +482,19 @@ class BackgroundWorker:
                 f"Actual cost: ${actual_cost.actual_cost_usd:.4f} USD"
             )
 
-        # Step 4: Create PlanOutput with all stage outputs
+        # Step 4: Build diagnostics and create PlanOutput
+        call_metrics = []
+        if isinstance(self._ollama_client, (OllamaClient, LMStudioClient)):
+            call_metrics = self._ollama_client.drain_call_metrics()
+        diagnostics = {
+            "provider": self._config.provider,
+            "model": self._ollama_client.model,
+            "agent_enabled": self._config.agent.enabled,
+            "stage_timings_s": result.stage_timings,
+            "total_llm_calls": len(call_metrics),
+            "total_generation_s": round(sum(m["elapsed_s"] for m in call_metrics), 1),
+        }
+
         # Pipeline outputs are dicts from model_dump(), need to reconstruct Pydantic models
         await self._store.update(job.job_id, progress=0.97, current_phase="rendering")
 
@@ -505,6 +517,7 @@ class BackgroundWorker:
             api_review_requested=job.api_review,
             api_review_cost=api_review_cost_dict,
             api_review_feedback=api_review_feedback,
+            diagnostics=diagnostics,
         )
 
         # Step 5: Render to markdown

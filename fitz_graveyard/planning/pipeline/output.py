@@ -269,6 +269,27 @@ class PlanRenderer:
                 sections.append("API review pending.")
                 sections.append("")
 
+        # Diagnostics
+        if plan.diagnostics:
+            sections.append("## Diagnostics")
+            sections.append("")
+            sections.append("| Metric | Value |")
+            sections.append("|--------|-------|")
+            diag = plan.diagnostics
+            if "provider" in diag:
+                sections.append(f"| Provider | {diag['provider']} |")
+            if "model" in diag:
+                sections.append(f"| Model | {diag['model']} |")
+            if "agent_enabled" in diag:
+                sections.append(f"| Agent | {'enabled' if diag['agent_enabled'] else 'disabled'} |")
+            if "total_llm_calls" in diag:
+                sections.append(f"| Total LLM calls | {diag['total_llm_calls']} |")
+            if "total_generation_s" in diag:
+                sections.append(f"| Total generation time | {diag['total_generation_s']:.1f}s |")
+            for key, val in diag.get("stage_timings_s", {}).items():
+                sections.append(f"| Stage: {key} | {val:.1f}s |")
+            sections.append("")
+
         return "\n".join(sections)
 
     def _render_frontmatter(self, plan: PlanOutput) -> str:
