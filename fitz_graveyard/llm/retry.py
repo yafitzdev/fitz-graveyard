@@ -53,3 +53,45 @@ ollama_retry = retry(
     retry=retry_if_exception(is_retryable),
     before_sleep=before_sleep_log(logger, logging.WARNING),
 )
+
+
+def is_lm_studio_retryable(exception: BaseException) -> bool:
+    """
+    Returns True if the LM Studio exception should be retried.
+
+    Retryable conditions:
+    - ConnectionError (server unavailable)
+    - httpx transport errors (connection refused, timeout)
+    - openai APIConnectionError / APITimeoutError (model loading, server restart)
+    """
+    if isinstance(exception, ConnectionError):
+        return True
+
+    # httpx transport-level errors
+    try:
+        import httpx
+        if isinstance(exception, (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout)):
+            return True
+    except ImportError:
+        pass
+
+    # openai SDK errors
+    try:
+        from openai import APIConnectionError, APITimeoutError, APIStatusError
+        if isinstance(exception, (APIConnectionError, APITimeoutError)):
+            return True
+        if isinstance(exception, APIStatusError):
+            return exception.status_code in {408, 429, 502, 503, 504}
+    except ImportError:
+        pass
+
+    return False
+
+
+# Tenacity retry decorator for LM Studio API calls
+lm_studio_retry = retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=5, max=60),
+    retry=retry_if_exception(is_lm_studio_retryable),
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+)

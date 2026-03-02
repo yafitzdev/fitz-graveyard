@@ -291,3 +291,75 @@ class TestToolResultMessage:
         msg = client.tool_result_message("", "result")
         assert msg["tool_call_id"] == ""
         assert msg["content"] == "result"
+
+
+# ---------------------------------------------------------------------------
+# Retry logic
+# ---------------------------------------------------------------------------
+
+class TestRetryBehavior:
+    @pytest.mark.asyncio
+    async def test_retries_on_connection_error(self):
+        client = _make_client(model="test-model")
+
+        chunks = []
+        for text in ["ok"]:
+            chunk = MagicMock()
+            chunk.choices = [MagicMock()]
+            chunk.choices[0].delta.content = text
+            chunks.append(chunk)
+
+        call_count = 0
+
+        async def side_effect(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise ConnectionError("connection refused")
+            return _async_iter(chunks)
+
+        client._client.chat.completions.create = AsyncMock(side_effect=side_effect)
+
+        result = await client.generate([{"role": "user", "content": "hi"}])
+        assert result == "ok"
+        assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_no_retry_on_non_retryable_error(self):
+        client = _make_client(model="test-model")
+
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=ValueError("bad input")
+        )
+
+        with pytest.raises(ValueError, match="bad input"):
+            await client.generate([{"role": "user", "content": "hi"}])
+        assert client._client.chat.completions.create.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_retries_on_openai_api_connection_error(self):
+        from openai import APIConnectionError
+
+        client = _make_client(model="test-model")
+
+        chunks = []
+        for text in ["recovered"]:
+            chunk = MagicMock()
+            chunk.choices = [MagicMock()]
+            chunk.choices[0].delta.content = text
+            chunks.append(chunk)
+
+        call_count = 0
+
+        async def side_effect(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise APIConnectionError(request=MagicMock())
+            return _async_iter(chunks)
+
+        client._client.chat.completions.create = AsyncMock(side_effect=side_effect)
+
+        result = await client.generate([{"role": "user", "content": "hi"}])
+        assert result == "recovered"
+        assert call_count == 2

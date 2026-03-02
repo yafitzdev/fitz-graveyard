@@ -5,10 +5,12 @@ import asyncio
 import inspect
 import json
 import logging
+import time
 from typing import TYPE_CHECKING
 
 import httpx
 
+from .retry import lm_studio_retry
 from .types import AgentMessage, AgentToolCall
 
 if TYPE_CHECKING:
@@ -107,6 +109,7 @@ class LMStudioClient:
         self.fallback_model = fallback_model
         self._timeout = timeout
         self._client = AsyncOpenAI(base_url=base_url, api_key="lm-studio", timeout=timeout)
+        self._call_metrics: list[dict] = []
 
     async def health_check(self) -> bool:
         """
@@ -123,6 +126,7 @@ class LMStudioClient:
             logger.error(f"LM Studio health check failed: {e}")
             return False
 
+    @lm_studio_retry
     async def generate(self, messages: list[dict], model: str | None = None) -> str:
         """
         Generate a streaming response from LM Studio.
@@ -137,11 +141,15 @@ class LMStudioClient:
         model = model or self.model
         logger.info(f"LMStudio.generate: model={model}, messages={len(messages)}")
 
+        t0 = time.monotonic()
         accumulated = []
         stream = await self._client.chat.completions.create(
             model=model,
             messages=messages,
             stream=True,
+            extra_body={
+                "chat_template_kwargs": {"enable_thinking": False},
+            },
         )
         async for chunk in stream:
             delta = chunk.choices[0].delta if chunk.choices else None
@@ -149,7 +157,9 @@ class LMStudioClient:
                 accumulated.append(delta.content)
 
         result = "".join(accumulated)
-        logger.info(f"LMStudio.generate: {len(result)} chars")
+        elapsed = time.monotonic() - t0
+        self._call_metrics.append({"elapsed_s": elapsed, "output_chars": len(result), "model": model})
+        logger.info(f"LMStudio.generate: {len(result)} chars in {elapsed:.1f}s")
         return result
 
     async def generate_with_fallback(self, messages: list[dict]) -> tuple[str, str]:
@@ -164,6 +174,12 @@ class LMStudioClient:
         """
         result = await self.generate(messages)
         return result, self.model
+
+    def drain_call_metrics(self) -> list[dict]:
+        """Return and clear accumulated call metrics from generate() calls."""
+        metrics = self._call_metrics
+        self._call_metrics = []
+        return metrics
 
     async def generate_with_tools(
         self,

@@ -3,6 +3,7 @@
 
 import asyncio
 import logging
+import time
 from typing import TYPE_CHECKING
 
 import httpx
@@ -49,6 +50,7 @@ class OllamaClient:
         self.model = model
         self.fallback_model = fallback_model
         self.client = AsyncClient(host=base_url, timeout=httpx.Timeout(timeout))
+        self._call_metrics: list[dict] = []
 
     async def health_check(self) -> bool:
         """
@@ -101,6 +103,7 @@ class OllamaClient:
         logger.info(f"Generating with model={model}, messages={len(messages)}")
 
         # Stream response and accumulate
+        t0 = time.monotonic()
         accumulated = []
         async for chunk in await self.client.chat(
             model=model, messages=messages, stream=True
@@ -109,8 +112,16 @@ class OllamaClient:
                 accumulated.append(content)
 
         result = "".join(accumulated)
-        logger.info(f"Generated {len(result)} chars")
+        elapsed = time.monotonic() - t0
+        self._call_metrics.append({"elapsed_s": elapsed, "output_chars": len(result), "model": model})
+        logger.info(f"Generated {len(result)} chars in {elapsed:.1f}s")
         return result
+
+    def drain_call_metrics(self) -> list[dict]:
+        """Return and clear accumulated call metrics from generate() calls."""
+        metrics = self._call_metrics
+        self._call_metrics = []
+        return metrics
 
     async def generate_with_fallback(self, messages: list[dict]) -> tuple[str, str]:
         """
