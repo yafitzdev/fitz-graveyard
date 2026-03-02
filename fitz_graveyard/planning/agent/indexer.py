@@ -392,3 +392,212 @@ def _estimate_size(entries: list[tuple[str, str]]) -> int:
     for rel_path, info in entries:
         total += 3 + len(rel_path) + 1 + len(info) + 2  # "## " + path + "\n" + info + "\n\n"
     return total
+
+
+# ---------------------------------------------------------------------------
+# Full import graph (for reverse-import caller expansion)
+# ---------------------------------------------------------------------------
+
+
+def _extract_full_imports(content: str) -> set[str]:
+    """Extract full dotted import paths from Python source (AST, regex fallback)."""
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        return _extract_full_imports_regex(content)
+
+    imports: set[str] = set()
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                imports.add(alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                imports.add(node.module)
+    return imports
+
+
+def _extract_full_imports_regex(content: str) -> set[str]:
+    """Regex fallback for full import paths."""
+    imports: set[str] = set()
+    for m in re.finditer(r'^from\s+(\S+)\s+import', content, re.MULTILINE):
+        imports.add(m.group(1))
+    for m in re.finditer(r'^import\s+(\S+)', content, re.MULTILINE):
+        imports.add(m.group(1).split(",")[0].strip())
+    return imports
+
+
+def _build_module_file_lookup(file_list: list[str]) -> dict[str, str]:
+    """Build module_dotted_path -> relative_file_path lookup.
+
+    E.g.: "fitz_ai.governance.governor" -> "fitz_ai/governance/governor.py"
+    Also maps package inits: "fitz_ai.governance" -> "fitz_ai/governance/__init__.py"
+    """
+    lookup: dict[str, str] = {}
+    for rel_path in file_list:
+        if not rel_path.endswith(".py"):
+            continue
+        module = rel_path[:-3].replace("/", ".")
+        if module.endswith(".__init__"):
+            lookup[module] = rel_path
+            lookup[module[:-9]] = rel_path  # strip ".__init__"
+        else:
+            lookup[module] = rel_path
+    return lookup
+
+
+def build_import_graph(
+    source_dir: str,
+    file_list: list[str],
+    max_file_bytes: int = 50_000,
+) -> tuple[dict[str, set[str]], dict[str, str]]:
+    """Build forward import map and module lookup.
+
+    Returns:
+        (forward_map, module_lookup) where:
+        - forward_map: {file_path: {resolved_file_path, ...}} — only intra-project imports
+        - module_lookup: {dotted.module: file_path}
+    """
+    root = Path(source_dir).resolve()
+    module_lookup = _build_module_file_lookup(file_list)
+    forward: dict[str, set[str]] = {}
+
+    for rel_path in file_list:
+        if not rel_path.endswith(".py"):
+            continue
+        full_path = root / rel_path
+        if not full_path.is_file():
+            continue
+        try:
+            raw = full_path.read_bytes()[:max_file_bytes]
+            content = raw.decode("utf-8", errors="replace")
+        except OSError:
+            continue
+
+        full_imports = _extract_full_imports(content)
+        resolved = set()
+        for imp in full_imports:
+            target = module_lookup.get(imp)
+            if target and target != rel_path:
+                resolved.add(target)
+
+        if resolved:
+            forward[rel_path] = resolved
+
+    return forward, module_lookup
+
+
+# ---------------------------------------------------------------------------
+# Two-tier directory clustering (for large codebases, ≥100 files)
+# ---------------------------------------------------------------------------
+
+_CLUSTERING_THRESHOLD = 100
+
+
+def _group_by_directory(
+    file_list: list[str], max_depth: int = 2,
+) -> dict[str, list[str]]:
+    """Group file paths by their directory prefix up to *max_depth* levels.
+
+    Root-level files (no directory) are grouped under ``"(root)"``.
+
+    Args:
+        file_list: Relative posix-style paths.
+        max_depth: Maximum directory depth for grouping (default 2).
+
+    Returns:
+        Mapping of directory prefix → list of file paths in that group.
+    """
+    groups: dict[str, list[str]] = {}
+    for rel_path in file_list:
+        parts = PurePosixPath(rel_path).parts
+        if len(parts) <= 1:
+            key = "(root)"
+        else:
+            key = "/".join(parts[: min(max_depth, len(parts) - 1)]) + "/"
+        groups.setdefault(key, []).append(rel_path)
+    return groups
+
+
+def build_directory_clusters(
+    source_dir: str,
+    file_list: list[str],
+    max_depth: int = 2,
+    max_file_bytes: int = 50_000,
+) -> tuple[str, dict[str, list[str]]]:
+    """Build aggregated directory-level summaries for LLM directory selection.
+
+    For each directory cluster, aggregates class names, function names, and
+    imports from the files it contains (reusing ``_extract_structure``).
+
+    Args:
+        source_dir:     Absolute path to source root.
+        file_list:      Relative posix-style paths.
+        max_depth:      Directory grouping depth (default 2).
+        max_file_bytes: Max bytes per file for extraction.
+
+    Returns:
+        Tuple of (formatted_text, groups_dict).
+        *formatted_text* is the prompt-ready cluster summary.
+        *groups_dict* maps dir prefix → list of file paths.
+    """
+    root = Path(source_dir).resolve()
+    groups = _group_by_directory(file_list, max_depth)
+
+    lines: list[str] = []
+    for dir_prefix in sorted(groups):
+        files = groups[dir_prefix]
+        all_classes: list[str] = []
+        all_functions: list[str] = []
+        all_imports: set[str] = set()
+
+        for rel_path in files:
+            full_path = root / rel_path
+            if not full_path.is_file():
+                continue
+            try:
+                raw = full_path.read_bytes()[:max_file_bytes]
+                content = raw.decode("utf-8", errors="replace")
+            except OSError:
+                continue
+            if not content.strip():
+                continue
+
+            suffix = PurePosixPath(rel_path).suffix.lower()
+            info = _extract_structure(suffix, content, rel_path)
+            if not info:
+                continue
+
+            for line in info.splitlines():
+                if line.startswith("classes:"):
+                    all_classes.extend(
+                        c.strip() for c in line[len("classes:"):].split(";") if c.strip()
+                    )
+                elif line.startswith("functions:"):
+                    all_functions.extend(
+                        f.strip() for f in line[len("functions:"):].split(",") if f.strip()
+                    )
+                elif line.startswith("imports:"):
+                    all_imports.update(
+                        i.strip() for i in line[len("imports:"):].split(",") if i.strip()
+                    )
+
+        entry = f"## {dir_prefix}  ({len(files)} files)"
+        detail_lines: list[str] = []
+        if all_classes:
+            detail_lines.append(f"classes: {'; '.join(all_classes[:15])}")
+        if all_functions:
+            detail_lines.append(f"functions: {', '.join(all_functions[:15])}")
+        if all_imports:
+            detail_lines.append(f"imports: {', '.join(sorted(all_imports)[:10])}")
+
+        if detail_lines:
+            entry += "\n" + "\n".join(detail_lines)
+        lines.append(entry)
+
+    text = "\n\n".join(lines)
+    logger.info(
+        f"Clustered {len(file_list)} files into {len(groups)} directories "
+        f"({len(text)} chars)"
+    )
+    return text, groups

@@ -20,7 +20,13 @@ from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
-from fitz_graveyard.planning.agent.indexer import INDEXABLE_EXTENSIONS, build_structural_index
+from fitz_graveyard.planning.agent.indexer import (
+    INDEXABLE_EXTENSIONS,
+    _CLUSTERING_THRESHOLD,
+    build_directory_clusters,
+    build_import_graph,
+    build_structural_index,
+)
 from fitz_graveyard.planning.prompts import load_prompt
 from fitz_graveyard.validation.sanitize import sanitize_agent_path
 
@@ -85,15 +91,45 @@ class AgentContextGatherer:
                 logger.info("AgentContextGatherer: empty or invalid source dir")
                 return empty
 
-            # Pass 2: Index (pure Python, no LLM)
-            await self._report(progress_callback, 0.063, "agent:indexing")
-            structural_index = self._build_index(file_paths)
-            logger.info(
-                f"AgentContextGatherer: indexed {len(file_paths)} files "
-                f"({len(structural_index)} chars)"
-            )
+            # Two-tier vs single-pass decision based on file count
+            if len(file_paths) >= _CLUSTERING_THRESHOLD:
+                # Two-tier: cluster → select dirs → focused index → navigate
+                await self._report(progress_callback, 0.061, "agent:indexing")
+                cluster_text, groups = build_directory_clusters(
+                    self._source_dir, file_paths,
+                    max_file_bytes=self._config.max_file_bytes,
+                )
 
-            # Pass 3: Navigate (1 LLM call with structural index)
+                await self._report(
+                    progress_callback, 0.063, "agent:selecting_dirs"
+                )
+                selected_dirs = await self._select_directories(
+                    client, model, cluster_text, groups, job_description
+                )
+
+                # Filter file_paths to only files in selected directories
+                focused_paths = []
+                for d in selected_dirs:
+                    focused_paths.extend(groups.get(d, []))
+
+                await self._report(progress_callback, 0.064, "agent:indexing")
+                structural_index = self._build_index(focused_paths)
+                logger.info(
+                    f"AgentContextGatherer: two-tier — "
+                    f"{len(selected_dirs)}/{len(groups)} dirs, "
+                    f"{len(focused_paths)}/{len(file_paths)} files, "
+                    f"index {len(structural_index)} chars"
+                )
+            else:
+                # Single-pass: index all files directly
+                await self._report(progress_callback, 0.063, "agent:indexing")
+                structural_index = self._build_index(file_paths)
+                logger.info(
+                    f"AgentContextGatherer: indexed {len(file_paths)} files "
+                    f"({len(structural_index)} chars)"
+                )
+
+            # Navigate (1 LLM call with structural index)
             await self._report(progress_callback, 0.065, "agent:navigating")
             selected = await self._navigate_files(
                 client, model, structural_index, job_description
@@ -101,6 +137,11 @@ class AgentContextGatherer:
             if not selected:
                 logger.info("AgentContextGatherer: no files selected")
                 return empty
+
+            # Expand with callers (pure Python, no LLM)
+            selected = self._expand_with_callers(
+                selected, file_paths, self._config.max_summary_files,
+            )
 
             # Pass 4: Summarize (N LLM calls)
             summaries = []
@@ -199,6 +240,103 @@ class AgentContextGatherer:
         return build_structural_index(
             self._source_dir, file_paths, self._config.max_file_bytes,
         )
+
+    def _expand_with_callers(
+        self,
+        selected: list[str],
+        file_paths: list[str],
+        max_files: int,
+    ) -> list[str]:
+        """Add files that import from selected files (transitive).
+
+        BFS over the reverse import graph: finds callers, then callers of
+        callers, until no new files are discovered or max_files is reached.
+        Pure Python. Preserves LLM order, appends callers at the end.
+        """
+        if len(selected) >= max_files:
+            return selected
+
+        forward, _module_lookup = build_import_graph(
+            self._source_dir, file_paths, self._config.max_file_bytes,
+        )
+
+        # Build reverse map: target_file -> {caller_files}
+        reverse: dict[str, set[str]] = {}
+        for caller, targets in forward.items():
+            for target in targets:
+                reverse.setdefault(target, set()).add(caller)
+
+        # BFS: expand from selected files through reverse imports
+        seen = set(selected)
+        frontier = list(selected)
+        callers: list[str] = []
+
+        while frontier and len(selected) + len(callers) < max_files:
+            next_frontier: list[str] = []
+            for src in frontier:
+                for caller in sorted(reverse.get(src, [])):
+                    if caller not in seen:
+                        seen.add(caller)
+                        callers.append(caller)
+                        next_frontier.append(caller)
+                        if len(selected) + len(callers) >= max_files:
+                            break
+                if len(selected) + len(callers) >= max_files:
+                    break
+            frontier = next_frontier
+
+        if callers:
+            logger.info(
+                f"AgentContextGatherer: expanded {len(selected)} files "
+                f"with {len(callers)} callers"
+            )
+            return selected + callers
+
+        return selected
+
+    async def _select_directories(
+        self,
+        client: Any,
+        model: str,
+        cluster_text: str,
+        groups: dict[str, list[str]],
+        job_description: str,
+    ) -> list[str]:
+        """Ask LLM to select relevant directories from cluster summaries.
+
+        1 LLM call. Falls back to all directories on failure.
+        """
+        valid_dirs = set(groups.keys())
+        example_dir = next(iter(sorted(valid_dirs)), "(root)")
+
+        prompt = load_prompt("agent_select_dirs").format(
+            job_description=job_description,
+            directory_clusters=cluster_text,
+            example_dir=example_dir,
+        )
+
+        try:
+            response = await client.generate(
+                messages=[{"role": "user", "content": prompt}],
+                model=model,
+            )
+            selected = self._parse_file_list(response)
+        except Exception as e:
+            logger.warning(f"AgentContextGatherer: dir selection LLM failed: {e}")
+            selected = None
+
+        if selected:
+            # Validate against actual directory names
+            validated = [d for d in selected if d in valid_dirs]
+            if validated:
+                logger.info(
+                    f"AgentContextGatherer: selected {len(validated)}/{len(valid_dirs)} dirs"
+                )
+                return validated
+
+        # Fallback: use all directories
+        logger.info("AgentContextGatherer: dir selection fallback — using all dirs")
+        return list(valid_dirs)
 
     async def _navigate_files(
         self,

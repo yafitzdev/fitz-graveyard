@@ -11,6 +11,7 @@ from fitz_graveyard.planning.agent.gatherer import (
     AgentContextGatherer,
     _MAX_TREE_FILES,
 )
+from fitz_graveyard.planning.agent.indexer import _CLUSTERING_THRESHOLD
 
 
 def _make_config(**kwargs):
@@ -504,3 +505,248 @@ class TestParseFileList:
     def test_filters_non_string_items(self):
         result = AgentContextGatherer._parse_file_list('[1, "a.py", null]')
         assert result == ["a.py"]
+
+
+# ---------------------------------------------------------------------------
+# Two-tier directory selection
+# ---------------------------------------------------------------------------
+class TestTwoTierSelection:
+    @pytest.mark.asyncio
+    async def test_small_codebase_skips_clustering(self, tmp_path, mock_client):
+        """Under threshold: single-pass, no dir selection call."""
+        for i in range(5):
+            (tmp_path / f"mod{i}.py").write_text(f"def fn{i}(): pass")
+
+        mock_client.generate.side_effect = [
+            '["mod0.py", "mod1.py"]',           # navigate
+            "summary 0",                         # summarize mod0
+            "summary 1",                         # summarize mod1
+            "## Overview\nSynthesized.",          # synthesize
+        ]
+
+        phases = []
+        def callback(progress, phase):
+            phases.append(phase)
+
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        result = await gatherer.gather(mock_client, "task", progress_callback=callback)
+        assert result["synthesized"] != ""
+        assert "agent:selecting_dirs" not in phases
+        # 4 LLM calls: navigate + 2 summarize + synthesize
+        assert mock_client.generate.call_count == 4
+
+    @pytest.mark.asyncio
+    async def test_large_codebase_triggers_clustering(self, tmp_path, mock_client):
+        """At/above threshold: two-tier path with dir selection."""
+        # Create enough files to trigger clustering
+        for i in range(_CLUSTERING_THRESHOLD + 10):
+            d = tmp_path / f"pkg{i % 5}"
+            d.mkdir(exist_ok=True)
+            (d / f"mod{i}.py").write_text(f"def fn{i}(): pass")
+
+        mock_client.generate.side_effect = [
+            '["pkg0/"]',                          # select dirs
+            '["pkg0/mod0.py"]',                   # navigate
+            "summary 0",                          # summarize
+            "## Overview\nSynthesized.",           # synthesize
+        ]
+
+        phases = []
+        def callback(progress, phase):
+            phases.append(phase)
+
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        result = await gatherer.gather(mock_client, "task", progress_callback=callback)
+        assert result["synthesized"] != ""
+        assert "agent:selecting_dirs" in phases
+
+    @pytest.mark.asyncio
+    async def test_dir_selection_failure_falls_back(self, tmp_path, mock_client):
+        """If dir selection LLM fails, fall back to all dirs."""
+        for i in range(_CLUSTERING_THRESHOLD + 10):
+            d = tmp_path / f"pkg{i % 3}"
+            d.mkdir(exist_ok=True)
+            (d / f"mod{i}.py").write_text(f"def fn{i}(): pass")
+
+        mock_client.generate.side_effect = [
+            "not valid json",                     # dir selection fails
+            '["pkg0/mod0.py"]',                   # navigate (with all dirs)
+            "summary",                            # summarize
+            "## Overview\nDone.",                  # synthesize
+        ]
+
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        result = await gatherer.gather(mock_client, "task")
+        assert result["synthesized"] != ""
+
+    @pytest.mark.asyncio
+    async def test_caller_expansion_in_gather(self, tmp_path, mock_client):
+        """Caller expansion adds files that import from selected files."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "governor.py").write_text("class GovernanceDecision: pass\n")
+        (pkg / "engine.py").write_text(
+            "from pkg.governor import GovernanceDecision\ndef run(): pass\n"
+        )
+
+        mock_client.generate.side_effect = [
+            '["pkg/governor.py"]',              # navigate — only picks governor
+            "**Purpose:** Governance decisions.", # summarize governor
+            "**Purpose:** Engine.",              # summarize engine (added by expansion)
+            "## Overview\nDone.",                # synthesize
+        ]
+
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        result = await gatherer.gather(mock_client, "add webhook to governance")
+        assert result["synthesized"] != ""
+        # Should have 4 calls: navigate + 2 summarize (governor + engine) + synthesize
+        assert mock_client.generate.call_count == 4
+
+    @pytest.mark.asyncio
+    async def test_dir_selection_validates_names(self, tmp_path, mock_client):
+        """Only dirs that actually exist in groups are accepted."""
+        for i in range(_CLUSTERING_THRESHOLD + 10):
+            d = tmp_path / f"pkg{i % 3}"
+            d.mkdir(exist_ok=True)
+            (d / f"mod{i}.py").write_text(f"def fn{i}(): pass")
+
+        mock_client.generate.side_effect = [
+            '["pkg0/", "nonexistent/"]',          # dir selection — one valid, one not
+            '["pkg0/mod0.py"]',                   # navigate
+            "summary",                            # summarize
+            "## Overview\nDone.",                  # synthesize
+        ]
+
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        result = await gatherer.gather(mock_client, "task")
+        assert result["synthesized"] != ""
+
+
+# ---------------------------------------------------------------------------
+# _expand_with_callers
+# ---------------------------------------------------------------------------
+class TestExpandWithCallers:
+    def test_adds_importers(self, tmp_path):
+        """Selected=[governor.py], engine imports governor -> engine added."""
+        (tmp_path / "governor.py").write_text("class Gov: pass\n")
+        (tmp_path / "engine.py").write_text("from governor import Gov\n")
+        (tmp_path / "unrelated.py").write_text("import os\n")
+
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        result = gatherer._expand_with_callers(
+            ["governor.py"], ["governor.py", "engine.py", "unrelated.py"], 15,
+        )
+        assert "governor.py" in result
+        assert "engine.py" in result
+        assert "unrelated.py" not in result
+
+    def test_respects_max_files(self, tmp_path):
+        """Doesn't exceed cap."""
+        (tmp_path / "base.py").write_text("x = 1\n")
+        for i in range(10):
+            (tmp_path / f"caller{i}.py").write_text("from base import x\n")
+
+        files = ["base.py"] + [f"caller{i}.py" for i in range(10)]
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        result = gatherer._expand_with_callers(["base.py"], files, 5)
+        assert len(result) <= 5
+        assert result[0] == "base.py"
+
+    def test_no_duplicates(self, tmp_path):
+        """Caller already in selected -> not duplicated."""
+        (tmp_path / "a.py").write_text("x = 1\n")
+        (tmp_path / "b.py").write_text("from a import x\n")
+
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        result = gatherer._expand_with_callers(
+            ["a.py", "b.py"], ["a.py", "b.py"], 15,
+        )
+        assert result == ["a.py", "b.py"]
+
+    def test_no_callers_unchanged(self, tmp_path):
+        """No file imports selected -> unchanged."""
+        (tmp_path / "a.py").write_text("x = 1\n")
+        (tmp_path / "b.py").write_text("y = 2\n")
+
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        result = gatherer._expand_with_callers(
+            ["a.py"], ["a.py", "b.py"], 15,
+        )
+        assert result == ["a.py"]
+
+    def test_preserves_llm_order(self, tmp_path):
+        """LLM-selected files stay in original order, callers appended."""
+        (tmp_path / "a.py").write_text("x = 1\n")
+        (tmp_path / "b.py").write_text("y = 2\n")
+        (tmp_path / "c.py").write_text("from a import x\nfrom b import y\n")
+
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        result = gatherer._expand_with_callers(
+            ["b.py", "a.py"], ["a.py", "b.py", "c.py"], 15,
+        )
+        assert result[0] == "b.py"
+        assert result[1] == "a.py"
+        assert "c.py" in result
+
+    def test_at_max_files_returns_unchanged(self, tmp_path):
+        """If already at max_files, no expansion."""
+        (tmp_path / "a.py").write_text("x = 1\n")
+        (tmp_path / "b.py").write_text("from a import x\n")
+
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        result = gatherer._expand_with_callers(
+            ["a.py"], ["a.py", "b.py"], 1,
+        )
+        assert result == ["a.py"]
+
+    def test_multi_hop_transitive(self, tmp_path):
+        """governor -> decider -> engine: selecting governor finds engine at 2 hops."""
+        (tmp_path / "governor.py").write_text("class Gov: pass\n")
+        (tmp_path / "decider.py").write_text("from governor import Gov\n")
+        (tmp_path / "engine.py").write_text("from decider import something\n")
+
+        files = ["governor.py", "decider.py", "engine.py"]
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        result = gatherer._expand_with_callers(["governor.py"], files, 15)
+        assert "decider.py" in result
+        assert "engine.py" in result
+
+    def test_multi_hop_three_levels(self, tmp_path):
+        """a -> b -> c -> d: selecting a finds d at 3 hops."""
+        (tmp_path / "a.py").write_text("x = 1\n")
+        (tmp_path / "b.py").write_text("from a import x\n")
+        (tmp_path / "c.py").write_text("from b import x\n")
+        (tmp_path / "d.py").write_text("from c import x\n")
+
+        files = ["a.py", "b.py", "c.py", "d.py"]
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        result = gatherer._expand_with_callers(["a.py"], files, 15)
+        assert result[0] == "a.py"
+        assert set(result) == {"a.py", "b.py", "c.py", "d.py"}
+
+    def test_multi_hop_stops_at_max_files(self, tmp_path):
+        """BFS stops when max_files is reached, even with more hops available."""
+        (tmp_path / "a.py").write_text("x = 1\n")
+        (tmp_path / "b.py").write_text("from a import x\n")
+        (tmp_path / "c.py").write_text("from b import x\n")
+        (tmp_path / "d.py").write_text("from c import x\n")
+
+        files = ["a.py", "b.py", "c.py", "d.py"]
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        result = gatherer._expand_with_callers(["a.py"], files, 3)
+        assert len(result) <= 3
+        assert result[0] == "a.py"
+        # Should have a.py + 2 hops max
+        assert "b.py" in result
+
+    def test_multi_hop_no_cycles(self, tmp_path):
+        """Circular imports don't cause infinite loop."""
+        (tmp_path / "a.py").write_text("from b import y\nx = 1\n")
+        (tmp_path / "b.py").write_text("from a import x\ny = 2\n")
+
+        files = ["a.py", "b.py"]
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        result = gatherer._expand_with_callers(["a.py"], files, 15)
+        assert "b.py" in result
+        # No duplicates
+        assert len(result) == len(set(result))

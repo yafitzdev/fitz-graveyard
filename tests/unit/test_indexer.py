@@ -8,11 +8,17 @@ import pytest
 
 from fitz_graveyard.planning.agent.indexer import (
     _MAX_INDEX_CHARS,
+    _build_module_file_lookup,
     _extract_config,
+    _extract_full_imports,
+    _extract_full_imports_regex,
     _extract_generic_code,
     _extract_markdown,
     _extract_python,
     _extract_python_regex,
+    _group_by_directory,
+    build_directory_clusters,
+    build_import_graph,
     build_structural_index,
 )
 
@@ -279,3 +285,205 @@ class TestBuildStructuralIndex:
 
         result = build_structural_index(str(tmp_path), files, max_file_bytes=50_000)
         assert len(result) <= _MAX_INDEX_CHARS + 200  # small buffer for last entry
+
+
+# ---------------------------------------------------------------------------
+# _group_by_directory
+# ---------------------------------------------------------------------------
+class TestGroupByDirectory:
+    def test_groups_by_two_level_prefix(self):
+        files = [
+            "src/pkg/main.py",
+            "src/pkg/util.py",
+            "src/other/app.py",
+            "tests/unit/test_a.py",
+        ]
+        groups = _group_by_directory(files, max_depth=2)
+        assert set(groups.keys()) == {"src/pkg/", "src/other/", "tests/unit/"}
+        assert groups["src/pkg/"] == ["src/pkg/main.py", "src/pkg/util.py"]
+        assert groups["src/other/"] == ["src/other/app.py"]
+
+    def test_root_files_grouped_under_root(self):
+        files = ["setup.py", "README.md", "src/app.py"]
+        groups = _group_by_directory(files)
+        assert "(root)" in groups
+        assert groups["(root)"] == ["setup.py", "README.md"]
+        assert "src/" in groups
+
+    def test_single_level_dirs(self):
+        files = ["pkg/mod.py", "pkg/other.py"]
+        groups = _group_by_directory(files, max_depth=2)
+        assert "pkg/" in groups
+        assert len(groups["pkg/"]) == 2
+
+    def test_empty_list(self):
+        assert _group_by_directory([]) == {}
+
+
+# ---------------------------------------------------------------------------
+# build_directory_clusters
+# ---------------------------------------------------------------------------
+class TestBuildDirectoryClusters:
+    def test_aggregates_classes_and_functions(self, tmp_path):
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "models.py").write_text(
+            "class User:\n    def save(self): pass\n\nclass Group:\n    pass\n"
+        )
+        (pkg / "utils.py").write_text("def helper(): pass\ndef format_name(n): pass\n")
+        files = ["pkg/models.py", "pkg/utils.py"]
+
+        text, groups = build_directory_clusters(str(tmp_path), files)
+        assert "pkg/" in groups
+        assert len(groups["pkg/"]) == 2
+        assert "User" in text
+        assert "Group" in text
+        assert "helper" in text
+        assert "(2 files)" in text
+
+    def test_root_files(self, tmp_path):
+        (tmp_path / "setup.py").write_text("def setup(): pass\n")
+        text, groups = build_directory_clusters(str(tmp_path), ["setup.py"])
+        assert "(root)" in groups
+        assert "(root)" in text
+        assert "setup" in text
+
+    def test_caps_classes_at_15(self, tmp_path):
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        classes = "\n".join(f"class C{i}:\n    pass\n" for i in range(20))
+        (pkg / "big.py").write_text(classes)
+        text, _ = build_directory_clusters(str(tmp_path), ["pkg/big.py"])
+        # Should have at most 15 classes listed
+        class_line = [l for l in text.splitlines() if l.startswith("classes:")][0]
+        assert class_line.count(";") <= 14  # 15 items = 14 separators
+
+    def test_caps_functions_at_15(self, tmp_path):
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        funcs = "\n".join(f"def fn{i}(): pass\n" for i in range(20))
+        (pkg / "big.py").write_text(funcs)
+        text, _ = build_directory_clusters(str(tmp_path), ["pkg/big.py"])
+        func_line = [l for l in text.splitlines() if l.startswith("functions:")][0]
+        assert func_line.count(",") <= 14
+
+    def test_caps_imports_at_10(self, tmp_path):
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        imports = "\n".join(f"import mod{i}" for i in range(15))
+        (pkg / "big.py").write_text(imports + "\ndef dummy(): pass\n")
+        text, _ = build_directory_clusters(str(tmp_path), ["pkg/big.py"])
+        import_line = [l for l in text.splitlines() if l.startswith("imports:")][0]
+        assert import_line.count(",") <= 9
+
+    def test_missing_files_skipped(self, tmp_path):
+        text, groups = build_directory_clusters(
+            str(tmp_path), ["nonexistent/file.py"]
+        )
+        assert "nonexistent/" in groups
+        # No structural info extracted, but group exists
+        assert "(1 files)" in text
+
+    def test_empty_file_list(self, tmp_path):
+        text, groups = build_directory_clusters(str(tmp_path), [])
+        assert text == ""
+        assert groups == {}
+
+
+# ---------------------------------------------------------------------------
+# Full import graph
+# ---------------------------------------------------------------------------
+class TestBuildModuleFileLookup:
+    def test_maps_regular_file(self):
+        lookup = _build_module_file_lookup(["foo/bar.py"])
+        assert lookup["foo.bar"] == "foo/bar.py"
+
+    def test_maps_init_file(self):
+        lookup = _build_module_file_lookup(["foo/__init__.py"])
+        assert lookup["foo.__init__"] == "foo/__init__.py"
+        assert lookup["foo"] == "foo/__init__.py"
+
+    def test_skips_non_python(self):
+        lookup = _build_module_file_lookup(["config.yaml", "data.json"])
+        assert lookup == {}
+
+    def test_multiple_files(self):
+        lookup = _build_module_file_lookup([
+            "pkg/mod_a.py", "pkg/mod_b.py", "pkg/__init__.py",
+        ])
+        assert lookup["pkg.mod_a"] == "pkg/mod_a.py"
+        assert lookup["pkg.mod_b"] == "pkg/mod_b.py"
+        assert lookup["pkg"] == "pkg/__init__.py"
+
+
+class TestExtractFullImports:
+    def test_ast_extracts_full_paths(self):
+        code = "from fitz_ai.governance.governor import GovernanceDecision\nimport os\n"
+        result = _extract_full_imports(code)
+        assert "fitz_ai.governance.governor" in result
+        assert "os" in result
+
+    def test_ast_import_statement(self):
+        code = "import fitz_ai.governance.governor\n"
+        result = _extract_full_imports(code)
+        assert "fitz_ai.governance.governor" in result
+
+    def test_regex_fallback_on_syntax_error(self):
+        code = "from fitz_ai.governance import governor\n>>>invalid<<<\n"
+        result = _extract_full_imports(code)
+        assert "fitz_ai.governance" in result
+
+    def test_empty_content(self):
+        assert _extract_full_imports("") == set()
+
+
+class TestExtractFullImportsRegex:
+    def test_from_import(self):
+        result = _extract_full_imports_regex("from foo.bar.baz import Qux\n")
+        assert "foo.bar.baz" in result
+
+    def test_plain_import(self):
+        result = _extract_full_imports_regex("import foo.bar\n")
+        assert "foo.bar" in result
+
+
+class TestBuildImportGraph:
+    def test_resolves_intra_project(self, tmp_path):
+        (tmp_path / "a.py").write_text("from b import something\n")
+        (tmp_path / "b.py").write_text("something = 1\n")
+        forward, lookup = build_import_graph(str(tmp_path), ["a.py", "b.py"])
+        assert "b.py" in forward.get("a.py", set())
+
+    def test_excludes_external(self, tmp_path):
+        (tmp_path / "a.py").write_text("import logging\nimport os\n")
+        forward, _lookup = build_import_graph(str(tmp_path), ["a.py"])
+        assert forward.get("a.py") is None
+
+    def test_empty_for_non_python(self, tmp_path):
+        (tmp_path / "config.yaml").write_text("key: value\n")
+        forward, _lookup = build_import_graph(str(tmp_path), ["config.yaml"])
+        assert forward == {}
+
+    def test_self_import_excluded(self, tmp_path):
+        (tmp_path / "a.py").write_text("from a import x\n")
+        forward, _lookup = build_import_graph(str(tmp_path), ["a.py"])
+        assert forward.get("a.py") is None
+
+    def test_subpackage_imports(self, tmp_path):
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text("")
+        (pkg / "engine.py").write_text("from pkg.governor import GovernanceDecision\n")
+        (pkg / "governor.py").write_text("class GovernanceDecision: pass\n")
+        files = ["pkg/__init__.py", "pkg/engine.py", "pkg/governor.py"]
+        forward, _lookup = build_import_graph(str(tmp_path), files)
+        assert "pkg/governor.py" in forward.get("pkg/engine.py", set())
+
+    def test_missing_file_skipped(self, tmp_path):
+        forward, _lookup = build_import_graph(str(tmp_path), ["nonexistent.py"])
+        assert forward == {}
+
+    def test_returns_module_lookup(self, tmp_path):
+        (tmp_path / "a.py").write_text("")
+        _forward, lookup = build_import_graph(str(tmp_path), ["a.py"])
+        assert lookup["a"] == "a.py"

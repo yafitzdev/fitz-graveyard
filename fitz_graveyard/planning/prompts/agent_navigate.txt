@@ -26,6 +26,8 @@ REASONING PROCESS:
 - Follow imports: which files are imported by the most task-relevant files?
 - Check function signatures: which functions handle the operations mentioned in the task?
 - Look for factory/dispatch patterns that wire the relevant components together
+- Trace call chains: if file A imports from file B, and B is relevant, include A too — callers matter as much as definitions
+- Look for orchestration: files that import multiple task-relevant modules are integration points worth including
 
 Select at most {max_files} files. Return ONLY a JSON array of relative file paths, no explanation:
 ["path/to/file1.py", "path/to/file2.py"]

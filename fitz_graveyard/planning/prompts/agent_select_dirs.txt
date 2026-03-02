@@ -1,0 +1,22 @@
+You are a codebase analyst selecting which directories are relevant to an architectural planning task.
+
+TASK: {job_description}
+
+Below is a DIRECTORY-LEVEL SUMMARY of the project. Each entry shows a directory with:
+- Number of files
+- Aggregated class names, function names, and imports across all files in that directory
+
+DIRECTORY SUMMARIES:
+{directory_clusters}
+
+Select the directories most likely to contain code relevant to the task.
+Include directories that:
+1. Implement or define the feature/component mentioned in the task
+2. Contain base classes, schemas, or protocols used by the relevant code
+3. Have config/schema files that define extension points for the task
+4. Wire components together (factories, registries, entry points)
+
+Exclude directories that are clearly unrelated (e.g. unrelated features, test utilities).
+
+Return ONLY a JSON array of directory prefixes exactly as shown above:
+["{example_dir}"]
