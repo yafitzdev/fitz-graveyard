@@ -462,9 +462,9 @@ class TestArchitectureDesignStage:
 
     @pytest.mark.asyncio
     async def test_execute_per_field(self, stage):
-        """Test per-field extraction: 1 reasoning + 1 critique + 6 field groups = 8 LLM calls."""
+        """Test per-field extraction: 1 reasoning + 1 critique + 6 field groups + 1 ADR validator = 9 LLM calls."""
         mock_client = AsyncMock()
-        # 1 reasoning + 1 critique + 6 field group extractions
+        # 1 reasoning + 1 critique + 6 field group extractions + 1 ensure_min_adrs
         mock_client.generate.side_effect = [
             "Detailed reasoning about architecture and design...",
             "Reviewed and refined reasoning...",
@@ -497,6 +497,13 @@ class TestArchitectureDesignStage:
             json.dumps({
                 "artifacts": [],
             }),
+            # ensure_min_adrs validator (adrs was empty → repair)
+            json.dumps([
+                {"title": "ADR: Generated", "context": "c", "decision": "d",
+                 "rationale": "r", "consequences": [], "alternatives_considered": []},
+                {"title": "ADR: Generated 2", "context": "c", "decision": "d",
+                 "rationale": "r", "consequences": [], "alternatives_considered": []},
+            ]),
         ]
 
         result = await stage.execute(mock_client, "Build API", {})
@@ -505,7 +512,7 @@ class TestArchitectureDesignStage:
         assert "design" in result.output
         assert result.output["architecture"]["recommended"] == "Monolith"
         assert result.output["architecture"]["key_tradeoffs"] == {"simplicity": "vs scale"}
-        assert mock_client.generate.call_count == 8  # 1 reasoning + 1 critique + 6 groups
+        assert mock_client.generate.call_count == 9  # 1 reasoning + 1 critique + 6 groups + 1 ADR validator
 
     @pytest.mark.asyncio
     async def test_execute_passes_krag_context_selectively(self, stage):
@@ -672,7 +679,7 @@ class TestRoadmapRiskStage:
 
     @pytest.mark.asyncio
     async def test_execute_per_field(self, stage):
-        """Test per-field extraction: 1 reasoning + 1 critique + 3 field groups = 5 LLM calls."""
+        """Test per-field extraction: 1 reasoning + 1 critique + 3 field groups + 1 verification validator = 6 LLM calls."""
         mock_client = AsyncMock()
         mock_client.generate.side_effect = [
             "Reasoning about roadmap and risks...",
@@ -681,7 +688,8 @@ class TestRoadmapRiskStage:
             json.dumps({
                 "phases": [
                     {"number": 1, "name": "Setup", "objective": "Initialize", "deliverables": ["DB"],
-                     "dependencies": [], "estimated_complexity": "low", "key_risks": []},
+                     "dependencies": [], "estimated_complexity": "low", "key_risks": [],
+                     "verification_command": "python -m pytest tests/test_setup.py -v"},
                 ],
             }),
             # Group 2: scheduling
@@ -704,7 +712,7 @@ class TestRoadmapRiskStage:
         assert "risk" in result.output
         assert result.output["roadmap"]["total_phases"] == 1
         assert result.output["risk"]["overall_risk_level"] == "low"
-        assert mock_client.generate.call_count == 5  # 1 reasoning + 1 critique + 3 groups
+        assert mock_client.generate.call_count == 5  # 1 reasoning + 1 critique + 3 groups (concrete verification → no validator call)
 
     @pytest.mark.asyncio
     async def test_execute_partial_failure(self, stage):

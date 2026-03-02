@@ -2,6 +2,11 @@ You are creating an implementation roadmap and risk assessment for this project.
 
 {krag_context}
 
+## Binding Constraints (from prior stages)
+
+The following decisions are final. Your roadmap and risk analysis must be consistent with them:
+{binding_constraints}
+
 Project context:
 {context}
 
@@ -43,6 +48,10 @@ Think through the actual implementation sequence:
 Identify the real risks — not textbook categories, but the things that would actually derail this specific project.
 
 SCOPE RULE: Every risk you list must be directly caused by a decision made in this plan. If a risk would exist whether or not this feature was built, cut it. Do not list risks about other parts of the system, general operational concerns, or things outside the scope of these roadmap phases.
+
+GROUNDING RULE: Every risk must reference a real technical mechanism. If your risk mentions a specific file, API, or module, it MUST appear in the codebase context or architecture/design sections. If you cannot point to where the risk originates in actual code, cut it.
+
+QUALITY OVER QUANTITY: 3-4 high-quality risks beat 5+ padded generic concerns. Each risk should make a reader say "I hadn't thought of that."
 
 1. Technical bets: This plan makes assumptions that could prove false. What are the 2-3 most critical ones specific to what was just designed? What happens to the timeline and design if each one is wrong?
 

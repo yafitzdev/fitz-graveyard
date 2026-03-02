@@ -2,6 +2,11 @@ You are making architectural and design decisions for this project. Take a stron
 
 {krag_context}
 
+## Binding Constraints (from context stage)
+
+The following were established in the context stage. Do NOT contradict or ignore them:
+{binding_constraints}
+
 Project context:
 {context}
 

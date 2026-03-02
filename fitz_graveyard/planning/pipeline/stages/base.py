@@ -462,6 +462,8 @@ class PipelineStage(ABC):
             context_block = (
                 "--- CODEBASE CONTEXT (use this for accurate file paths, field names, and existing behavior) ---\n"
                 f"{extra_context}\n\n"
+                "GROUNDING RULE: Every file path, module name, or API field you write in your JSON "
+                "MUST appear in the codebase context above. If you cannot find it above, do not invent it.\n\n"
             )
 
         extract_messages = [

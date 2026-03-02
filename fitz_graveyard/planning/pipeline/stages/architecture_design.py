@@ -153,10 +153,35 @@ class ArchitectureDesignStage(PipelineStage):
                 parts.append(f"Expected deliverable files: {', '.join(context['needed_artifacts'])}")
             context_str = "\n".join(parts)
 
+        # Build binding constraints from context stage
+        binding = ""
+        if "context" in prior_outputs:
+            ctx = prior_outputs["context"]
+            files = ctx.get("existing_files", [])
+            artifacts = ctx.get("needed_artifacts", [])
+            scope = ctx.get("scope_boundaries", {})
+            parts = []
+            if files:
+                parts.append("Existing files to integrate with:\n" + "\n".join(f"  - {f}" for f in files))
+            if artifacts:
+                parts.append("Expected deliverables:\n" + "\n".join(f"  - {a}" for a in artifacts))
+            if scope:
+                in_scope = scope.get("in_scope", [])
+                out_of_scope = scope.get("out_of_scope", [])
+                if in_scope:
+                    parts.append(f"In scope: {', '.join(in_scope)}")
+                if out_of_scope:
+                    parts.append(f"Out of scope: {', '.join(out_of_scope)}")
+            binding = "\n".join(parts) if parts else "No specific constraints from context stage."
+
         # Use raw summaries for reasoning prompt — more detail for accurate architecture
         krag_context = self._get_raw_summaries(prior_outputs)
         impl_check = self._get_implementation_check(prior_outputs)
-        prompt = prompt_template.format(context=context_str.strip(), krag_context=krag_context)
+        prompt = prompt_template.format(
+            context=context_str.strip(),
+            krag_context=krag_context,
+            binding_constraints=binding,
+        )
         if impl_check:
             prompt = f"{impl_check}\n\n{prompt}"
         return self._make_messages(prompt)
@@ -237,7 +262,11 @@ class ArchitectureDesignStage(PipelineStage):
                 )
                 merged.update(partial)
 
-            # 4. Parse through existing parse_output (handles defaults + Pydantic validation)
+            # 4. Post-extraction validators
+            from fitz_graveyard.planning.pipeline.validators import ensure_min_adrs
+            merged = await ensure_min_adrs(merged, client, prior_outputs, reasoning)
+
+            # 5. Parse through existing parse_output (handles defaults + Pydantic validation)
             parsed = self.parse_output(json.dumps(merged))
             return StageResult(
                 stage_name=self.name,

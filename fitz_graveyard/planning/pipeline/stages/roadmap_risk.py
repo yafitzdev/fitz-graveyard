@@ -180,6 +180,25 @@ class RoadmapRiskStage(PipelineStage):
                 artifact_names = [a.get("filename", "") for a in artifacts]
                 architecture_design_str += f"\nDesign Artifacts: {', '.join(artifact_names)}\n"
 
+        # Build binding constraints from prior stages
+        binding_parts = []
+        if "context" in prior_outputs:
+            ctx = prior_outputs["context"]
+            artifacts = ctx.get("needed_artifacts", [])
+            if artifacts:
+                binding_parts.append("Deliverable files (from context):\n" + "\n".join(f"  - {a}" for a in artifacts))
+        if "architecture" in prior_outputs:
+            arch = prior_outputs["architecture"]
+            rec = arch.get("recommended", "")
+            if rec:
+                binding_parts.append(f"Chosen approach: {rec}")
+        if "design" in prior_outputs:
+            design = prior_outputs["design"]
+            comps = [c.get("name", "") for c in design.get("components", []) if c.get("name")]
+            if comps:
+                binding_parts.append(f"Components to implement: {', '.join(comps)}")
+        binding = "\n".join(binding_parts) if binding_parts else "No specific binding constraints."
+
         # Use raw summaries for reasoning prompt — more detail for accurate roadmap
         krag_context = self._get_raw_summaries(prior_outputs)
         prompt = prompt_template.format(
@@ -187,6 +206,7 @@ class RoadmapRiskStage(PipelineStage):
             context=context_str.strip(),
             architecture_design=architecture_design_str.strip(),
             krag_context=krag_context,
+            binding_constraints=binding,
         )
         return self._make_messages(prompt)
 
@@ -255,7 +275,15 @@ class RoadmapRiskStage(PipelineStage):
                 )
                 merged.update(partial)
 
-            # 4. Parse through existing parse_output (handles defaults + Pydantic validation)
+            # 4. Post-extraction validators
+            from fitz_graveyard.planning.pipeline.validators import (
+                ensure_phase_zero, ensure_concrete_verification, ensure_grounded_risks,
+            )
+            merged = ensure_phase_zero(merged, prior_outputs)
+            merged = ensure_grounded_risks(merged, prior_outputs)
+            merged = await ensure_concrete_verification(merged, client, reasoning)
+
+            # 5. Parse through existing parse_output (handles defaults + Pydantic validation)
             parsed = self.parse_output(json.dumps(merged))
             return StageResult(
                 stage_name=self.name,

@@ -127,7 +127,11 @@ class ContextStage(PipelineStage):
                 )
                 merged.update(partial)
 
-            # 4. Parse through existing parse_output (handles defaults + Pydantic validation)
+            # 4. Post-extraction validators
+            from fitz_graveyard.planning.pipeline.validators import ensure_min_existing_files
+            merged = ensure_min_existing_files(merged, prior_outputs)
+
+            # 5. Parse through existing parse_output (handles defaults + Pydantic validation)
             parsed = self.parse_output(json.dumps(merged))
             return StageResult(
                 stage_name=self.name,
