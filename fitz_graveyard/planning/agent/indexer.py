@@ -155,15 +155,23 @@ def _extract_python(content: str) -> str:
     if functions:
         lines.append(f"functions: {', '.join(functions)}")
 
-    # Imports (deduplicated top-level module names)
+    # Imports — walk full tree to catch TYPE_CHECKING and conditional imports.
+    # Show full dotted paths for intra-project imports so the LLM can trace
+    # architectural connections (e.g. "fitz_ai.llm.providers.base" not "fitz_ai").
+    # External packages still use top-level name only.
     imports: set[str] = set()
-    for node in ast.iter_child_nodes(tree):
+    for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                imports.add(alias.name.split(".")[0])
+                imports.add(alias.name)
         elif isinstance(node, ast.ImportFrom):
             if node.module:
-                imports.add(node.module.split(".")[0])
+                # Keep full path for multi-segment (intra-project) imports,
+                # top-level only for stdlib/external (single segment).
+                if "." in node.module:
+                    imports.add(node.module)
+                else:
+                    imports.add(node.module)
     if imports:
         lines.append(f"imports: {', '.join(sorted(imports))}")
 
