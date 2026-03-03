@@ -166,17 +166,17 @@ def ensure_phase_zero(
 
     # Bump existing phase numbers +1 and adjust dependencies
     for phase in phases:
-        phase["number"] = phase.get("number", 0) + 1
-        phase["dependencies"] = [d + 1 for d in phase.get("dependencies", [])]
+        phase["number"] = int(phase.get("number", 0)) + 1
+        phase["dependencies"] = [int(d) + 1 for d in phase.get("dependencies", [])]
 
     merged["phases"] = [phase_zero] + phases
 
     # Update scheduling fields
     if "critical_path" in merged:
-        merged["critical_path"] = [0] + [p + 1 for p in merged.get("critical_path", [])]
+        merged["critical_path"] = [0] + [int(p) + 1 for p in merged.get("critical_path", [])]
     if "parallel_opportunities" in merged:
         merged["parallel_opportunities"] = [
-            [p + 1 for p in group]
+            [int(p) + 1 for p in group]
             for group in merged.get("parallel_opportunities", [])
         ]
     if "total_phases" in merged:
