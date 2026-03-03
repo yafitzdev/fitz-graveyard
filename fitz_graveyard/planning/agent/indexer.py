@@ -62,6 +62,7 @@ def build_structural_index(
     source_dir: str,
     file_list: list[str],
     max_file_bytes: int = 50_000,
+    connection_counts: dict[str, int] | None = None,
 ) -> str:
     """
     Build a compact structural index of all files in the codebase.
@@ -70,6 +71,9 @@ def build_structural_index(
         source_dir: Absolute path to source directory root.
         file_list: List of relative file paths (posix-style) to index.
         max_file_bytes: Maximum bytes to read per file.
+        connection_counts: Optional mapping of file path to import
+            connection count. Used to prioritize truncation — files
+            with fewer connections lose detail first.
 
     Returns:
         Multi-line text index with structural info per file.
@@ -99,7 +103,7 @@ def build_structural_index(
             entries.append((rel_path, "(no structural info)"))
 
     # Format and apply size budget
-    return _format_index(entries)
+    return _format_index(entries, connection_counts)
 
 
 def _extract_structure(suffix: str, content: str, rel_path: str) -> str:
@@ -339,14 +343,17 @@ def _extract_generic_code(content: str) -> str:
     return "\n".join(lines)
 
 
-def _format_index(entries: list[tuple[str, str]]) -> str:
+def _format_index(
+    entries: list[tuple[str, str]],
+    connection_counts: dict[str, int] | None = None,
+) -> str:
     """Format entries into the final index text, truncating if over budget.
 
     Strategy: never drop files entirely.  If over budget, progressively
     reduce detail — first strip imports, then strip function lists — from
-    the *shallowest* (least specific) files, preserving full detail on
-    deeper (more architecturally specific) files.  As a last resort,
-    reduce deep files too.
+    the *least connected* files first.  Files with more import connections
+    are architecturally central and keep their structural info.
+    Falls back to depth-based ordering when connection data is unavailable.
     """
     parts: list[str] = []
     for rel_path, info in entries:
@@ -357,36 +364,36 @@ def _format_index(entries: list[tuple[str, str]]) -> str:
     if len(full) <= _MAX_INDEX_CHARS:
         return full
 
-    # Over budget — strip detail from deepest (most specific) files first,
-    # preserving structural info on shallow core files (services, engines,
-    # providers) that the LLM needs for architectural reasoning.
+    # Over budget — strip detail from least-connected files first.
+    # Files with more imports to/from other files are architecturally
+    # central and should keep their structural info.
     mutable = list(entries)  # preserve original order for output
-    by_depth = sorted(
+    conns = connection_counts or {}
+    by_priority = sorted(
         range(len(mutable)),
-        key=lambda i: mutable[i][0].count("/"),
-        reverse=True,
+        key=lambda i: conns.get(mutable[i][0], 0),
     )
 
-    # Pass 1: strip imports lines from shallowest files first
-    for idx in by_depth:
+    # Pass 1: strip imports lines from least-connected files first
+    for idx in by_priority:
         rel_path, info = mutable[idx]
         lines = [ln for ln in info.splitlines() if not ln.startswith("imports:")]
         mutable[idx] = (rel_path, "\n".join(lines))
         if _estimate_size(mutable) <= _MAX_INDEX_CHARS:
             break
 
-    # Pass 2: strip functions lines from shallowest files first
+    # Pass 2: strip functions lines from least-connected files first
     if _estimate_size(mutable) > _MAX_INDEX_CHARS:
-        for idx in by_depth:
+        for idx in by_priority:
             rel_path, info = mutable[idx]
             lines = [ln for ln in info.splitlines() if not ln.startswith("functions:")]
             mutable[idx] = (rel_path, "\n".join(lines))
             if _estimate_size(mutable) <= _MAX_INDEX_CHARS:
                 break
 
-    # Pass 3: last resort — reduce to path-only for shallowest files
+    # Pass 3: last resort — reduce to path-only for least-connected files
     if _estimate_size(mutable) > _MAX_INDEX_CHARS:
-        for idx in by_depth:
+        for idx in by_priority:
             mutable[idx] = (mutable[idx][0], "")
             if _estimate_size(mutable) <= _MAX_INDEX_CHARS:
                 break

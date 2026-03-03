@@ -317,6 +317,18 @@ class TestParseStructuralIndex:
 # ---------------------------------------------------------------------------
 # Pass 4: _expand_graph
 # ---------------------------------------------------------------------------
+
+def _build_maps(source_dir, file_paths):
+    """Build forward and reverse import maps for tests."""
+    from fitz_graveyard.planning.agent.indexer import build_import_graph
+    fwd, _ = build_import_graph(source_dir, file_paths)
+    rev = {}
+    for caller, targets in fwd.items():
+        for target in targets:
+            rev.setdefault(target, set()).add(caller)
+    return fwd, rev
+
+
 class TestExpandGraph:
     def test_finds_direct_importers(self, tmp_path):
         (tmp_path / "base.py").write_text("class Base: pass")
@@ -326,8 +338,9 @@ class TestExpandGraph:
         gatherer = AgentContextGatherer(
             config=_make_config(), source_dir=str(tmp_path)
         )
+        fwd, rev = _build_maps(str(tmp_path), ["base.py", "impl.py"])
         candidates = gatherer._expand_graph(
-            seeds=["base.py"], file_paths=["base.py", "impl.py"],
+            seeds=["base.py"], forward=fwd, reverse=rev,
         )
         paths = [p for p, _ in candidates]
         assert "impl.py" in paths
@@ -340,8 +353,9 @@ class TestExpandGraph:
         gatherer = AgentContextGatherer(
             config=_make_config(), source_dir=str(tmp_path)
         )
+        fwd, rev = _build_maps(str(tmp_path), ["main.py", "utils.py"])
         candidates = gatherer._expand_graph(
-            seeds=["main.py"], file_paths=["main.py", "utils.py"],
+            seeds=["main.py"], forward=fwd, reverse=rev,
         )
         paths = [p for p, _ in candidates]
         assert "utils.py" in paths
@@ -352,8 +366,9 @@ class TestExpandGraph:
         gatherer = AgentContextGatherer(
             config=_make_config(), source_dir=str(tmp_path)
         )
+        fwd, rev = _build_maps(str(tmp_path), ["a.py", "b.py"])
         candidates = gatherer._expand_graph(
-            seeds=["a.py", "b.py"], file_paths=["a.py", "b.py"],
+            seeds=["a.py", "b.py"], forward=fwd, reverse=rev,
         )
         assert [p for p, _ in candidates] == []
 
@@ -364,8 +379,9 @@ class TestExpandGraph:
         gatherer = AgentContextGatherer(
             config=_make_config(), source_dir=str(tmp_path)
         )
+        fwd, rev = _build_maps(str(tmp_path), ["a.py", "b.py", "c.py"])
         candidates = gatherer._expand_graph(
-            seeds=["a.py"], file_paths=["a.py", "b.py", "c.py"],
+            seeds=["a.py"], forward=fwd, reverse=rev,
         )
         paths = [p for p, _ in candidates]
         assert "b.py" in paths
@@ -378,8 +394,9 @@ class TestExpandGraph:
         gatherer = AgentContextGatherer(
             config=_make_config(), source_dir=str(tmp_path)
         )
+        fwd, rev = _build_maps(str(tmp_path), ["a.py", "b.py", "c.py"])
         candidates = gatherer._expand_graph(
-            seeds=["a.py"], file_paths=["a.py", "b.py", "c.py"],
+            seeds=["a.py"], forward=fwd, reverse=rev,
             max_depth=1,
         )
         paths = [p for p, _ in candidates]
@@ -392,8 +409,9 @@ class TestExpandGraph:
         gatherer = AgentContextGatherer(
             config=_make_config(), source_dir=str(tmp_path)
         )
+        fwd, rev = _build_maps(str(tmp_path), ["base.py", "caller.py"])
         candidates = gatherer._expand_graph(
-            seeds=["base.py"], file_paths=["base.py", "caller.py"],
+            seeds=["base.py"], forward=fwd, reverse=rev,
         )
         path, conns = candidates[0]
         assert path == "caller.py"
@@ -406,9 +424,9 @@ class TestExpandGraph:
         gatherer = AgentContextGatherer(
             config=_make_config(), source_dir=str(tmp_path)
         )
+        fwd, rev = _build_maps(str(tmp_path), ["dep.py", "seed.py", "caller.py"])
         candidates = gatherer._expand_graph(
-            seeds=["seed.py"],
-            file_paths=["dep.py", "seed.py", "caller.py"],
+            seeds=["seed.py"], forward=fwd, reverse=rev,
         )
         paths = [p for p, _ in candidates]
         assert "dep.py" in paths
@@ -419,8 +437,9 @@ class TestExpandGraph:
         gatherer = AgentContextGatherer(
             config=_make_config(), source_dir=str(tmp_path)
         )
+        fwd, rev = _build_maps(str(tmp_path), ["isolated.py"])
         candidates = gatherer._expand_graph(
-            seeds=["isolated.py"], file_paths=["isolated.py"],
+            seeds=["isolated.py"], forward=fwd, reverse=rev,
         )
         assert candidates == []
 
@@ -430,8 +449,9 @@ class TestExpandGraph:
         gatherer = AgentContextGatherer(
             config=_make_config(), source_dir=str(tmp_path)
         )
+        fwd, rev = _build_maps(str(tmp_path), ["a.py", "b.py"])
         candidates = gatherer._expand_graph(
-            seeds=["a.py"], file_paths=["a.py", "b.py"],
+            seeds=["a.py"], forward=fwd, reverse=rev,
         )
         paths = [p for p, _ in candidates]
         assert "b.py" in paths
@@ -444,9 +464,9 @@ class TestExpandGraph:
         gatherer = AgentContextGatherer(
             config=_make_config(), source_dir=str(tmp_path)
         )
+        fwd, rev = _build_maps(str(tmp_path), ["seed.py", "direct.py", "transitive.py"])
         candidates = gatherer._expand_graph(
-            seeds=["seed.py"],
-            file_paths=["seed.py", "direct.py", "transitive.py"],
+            seeds=["seed.py"], forward=fwd, reverse=rev,
         )
         paths = [p for p, _ in candidates]
         assert paths.index("direct.py") < paths.index("transitive.py")
@@ -462,9 +482,9 @@ class TestExpandGraph:
         gatherer = AgentContextGatherer(
             config=_make_config(), source_dir=str(tmp_path)
         )
+        fwd, rev = _build_maps(str(tmp_path), ["pkg/__init__.py", "pkg/base.py", "pkg/impl.py"])
         candidates = gatherer._expand_graph(
-            seeds=["pkg/base.py"],
-            file_paths=["pkg/__init__.py", "pkg/base.py", "pkg/impl.py"],
+            seeds=["pkg/base.py"], forward=fwd, reverse=rev,
         )
         paths = [p for p, _ in candidates]
         assert "pkg/impl.py" in paths

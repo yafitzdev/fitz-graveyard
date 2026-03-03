@@ -113,9 +113,25 @@ class AgentContextGatherer:
                 logger.info("AgentContextGatherer: empty or invalid source dir")
                 return empty
 
-            # Pass 2: Index (pure Python)
+            # Pass 2a: Import graph (pure Python — needed for index priority)
+            await self._report(progress_callback, 0.061, "agent:graphing")
+            forward_map, _module_lookup = build_import_graph(
+                self._source_dir, file_paths, self._config.max_file_bytes,
+            )
+            reverse_map: dict[str, set[str]] = {}
+            for caller, targets in forward_map.items():
+                for target in targets:
+                    reverse_map.setdefault(target, set()).add(caller)
+            connection_counts = {
+                p: len(forward_map.get(p, set())) + len(reverse_map.get(p, set()))
+                for p in file_paths
+            }
+
+            # Pass 2b: Index (pure Python, uses connection counts for truncation)
             await self._report(progress_callback, 0.062, "agent:indexing")
-            structural_index = self._build_index(file_paths)
+            structural_index = self._build_index(
+                file_paths, connection_counts=connection_counts,
+            )
             logger.info(
                 f"AgentContextGatherer: indexed {len(file_paths)} files "
                 f"({len(structural_index)} chars)"
@@ -140,7 +156,7 @@ class AgentContextGatherer:
             await self._report(
                 progress_callback, 0.066, "agent:expanding_graph"
             )
-            candidates = self._expand_graph(seeds, file_paths)
+            candidates = self._expand_graph(seeds, forward_map, reverse_map)
             logger.info(
                 f"AgentContextGatherer: graph expansion found "
                 f"{len(candidates)} candidates from {len(seeds)} seeds"
@@ -295,10 +311,15 @@ class AgentContextGatherer:
     # Pass 2: Index
     # ------------------------------------------------------------------
 
-    def _build_index(self, file_paths: list[str]) -> str:
+    def _build_index(
+        self,
+        file_paths: list[str],
+        connection_counts: dict[str, int] | None = None,
+    ) -> str:
         """Build structural index of all files using pure Python extraction."""
         return build_structural_index(
             self._source_dir, file_paths, self._config.max_file_bytes,
+            connection_counts=connection_counts,
         )
 
     # ------------------------------------------------------------------
@@ -414,7 +435,8 @@ class AgentContextGatherer:
     def _expand_graph(
         self,
         seeds: list[str],
-        file_paths: list[str],
+        forward: dict[str, set[str]],
+        reverse: dict[str, set[str]],
         max_depth: int = 2,
     ) -> list[tuple[str, list[str]]]:
         """Expand seeds via import graph in both directions.
@@ -426,15 +448,6 @@ class AgentContextGatherer:
             List of (candidate_path, [connection_descriptions, ...])
             sorted by depth then connection count. Excludes seeds.
         """
-        forward, _module_lookup = build_import_graph(
-            self._source_dir, file_paths, self._config.max_file_bytes,
-        )
-
-        # Build reverse map
-        reverse: dict[str, set[str]] = {}
-        for caller, targets in forward.items():
-            for target in targets:
-                reverse.setdefault(target, set()).add(caller)
 
         seed_set = set(seeds)
         # (depth, connections, seed_connection_count)
