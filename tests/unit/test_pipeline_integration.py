@@ -257,8 +257,6 @@ async def test_plan_output_creation_and_rendering():
                 )
             ]
         ),
-        section_scores={"context": 0.9, "architecture": 0.85},
-        overall_quality_score=0.87,
         git_sha="abc1234",
         generated_at=datetime.now(),
     )
@@ -271,7 +269,6 @@ async def test_plan_output_creation_and_rendering():
     assert "---" in markdown  # Frontmatter
     assert "generated_at:" in markdown
     assert "git_sha:" in markdown
-    assert "overall_quality_score:" in markdown
     assert "# Project:" in markdown
     assert "## Context" in markdown
     assert "## Architecture" in markdown

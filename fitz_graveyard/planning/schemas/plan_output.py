@@ -46,17 +46,6 @@ class PlanOutput(BaseModel):
         description="Risk analysis stage output",
     )
 
-    # Quality metadata
-    section_scores: dict[str, float] = Field(
-        default_factory=dict,
-        description="Quality scores per stage (0.0-1.0), if available",
-    )
-
-    overall_quality_score: float = Field(
-        default=0.0,
-        description="Aggregate quality score for the entire plan (0.0-1.0)",
-    )
-
     # Provenance
     git_sha: str = Field(
         default="",

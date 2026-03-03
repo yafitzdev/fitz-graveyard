@@ -19,29 +19,11 @@ class PlanRenderer:
         ---
         generated_at: ISO timestamp
         git_sha: commit hash
-        overall_quality_score: float
-        section_scores:
-          context: float
-          architecture: float
-          ...
         ---
 
         # Project: {project_name}
 
-        ## Context
-        ...
-
-        ## Architecture
-        ...
-
-        ## Design
-        ...
-
-        ## Roadmap
-        ...
-
-        ## Risk Analysis
-        ...
+        ## Context / Architecture / Design / Roadmap / Risk Analysis
     """
 
     def render(self, plan: PlanOutput, head_advanced: bool = False) -> str:
@@ -254,9 +236,7 @@ class PlanRenderer:
                     sections.append("### Section Feedback")
                     sections.append("")
                     for section_name, feedback in plan.api_review_feedback.items():
-                        # Get confidence score for section if available
-                        score = plan.section_scores.get(section_name, 0.0)
-                        sections.append(f"#### {section_name.title()} (score: {score:.2f})")
+                        sections.append(f"#### {section_name.title()}")
                         sections.append(feedback)
                         sections.append("")
             elif plan.api_review_cost and plan.api_review_cost.get("sections_reviewed", 0) == 0:
@@ -297,12 +277,6 @@ class PlanRenderer:
         lines = ["---"]
         lines.append(f'generated_at: "{plan.generated_at.isoformat()}"')
         lines.append(f'git_sha: "{plan.git_sha}"')
-        lines.append(f"overall_quality_score: {plan.overall_quality_score}")
-
-        if plan.section_scores:
-            lines.append("section_scores:")
-            for section, score in plan.section_scores.items():
-                lines.append(f"  {section}: {score}")
 
         # API Review metadata
         lines.append(f"api_review_requested: {str(plan.api_review_requested).lower()}")

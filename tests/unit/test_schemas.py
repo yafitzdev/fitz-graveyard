@@ -356,8 +356,8 @@ class TestPlanOutput:
         assert plan.architecture.recommended == "Monolith"
         assert isinstance(plan.generated_at, datetime)
 
-    def test_with_quality_metadata(self):
-        """Test creation with quality scores and provenance."""
+    def test_with_provenance(self):
+        """Test creation with provenance metadata."""
         plan = PlanOutput(
             context=ContextOutput(project_description="Test project"),
             architecture=ArchitectureOutput(
@@ -367,17 +367,9 @@ class TestPlanOutput:
             design=DesignOutput(),
             roadmap=RoadmapOutput(),
             risk=RiskOutput(),
-            section_scores={
-                "context": 0.95,
-                "architecture": 0.88,
-                "design": 0.92,
-            },
-            overall_quality_score=0.91,
             git_sha="abc123def456",
         )
-        assert plan.overall_quality_score == 0.91
         assert plan.git_sha == "abc123def456"
-        assert len(plan.section_scores) == 3
 
     def test_extra_fields_ignored(self):
         """Test that extra fields are ignored (not rejected)."""

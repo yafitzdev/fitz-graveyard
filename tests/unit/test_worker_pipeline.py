@@ -44,8 +44,6 @@ async def test_worker_uses_pipeline(store: SQLiteJobStore, tmp_path: Path):
     # Create mock OllamaClient
     mock_client = AsyncMock()
     mock_client.health_check = AsyncMock(return_value=True)
-    mock_client.generate = AsyncMock(return_value="yes")  # For confidence scorer
-
     # Mock pipeline result (outputs are dicts from model_dump())
     mock_pipeline_result = MagicMock()
     mock_pipeline_result.success = True
@@ -127,7 +125,7 @@ async def test_worker_uses_pipeline(store: SQLiteJobStore, tmp_path: Path):
     assert result.progress == 1.0
     assert result.file_path is not None
     assert ".md" in result.file_path
-    assert result.quality_score is not None
+    assert result.file_path.endswith(".md")
 
 
 @pytest.mark.asyncio
@@ -140,8 +138,6 @@ async def test_worker_progress_updates(store: SQLiteJobStore, tmp_path: Path):
     # Create mock OllamaClient
     mock_client = AsyncMock()
     mock_client.health_check = AsyncMock(return_value=True)
-    mock_client.generate = AsyncMock(return_value="yes")  # For confidence scorer
-
     # Mock pipeline that calls progress callback
     async def mock_execute(client, job_id, job_description, resume, progress_callback, **kwargs):
         # Simulate stage progress updates

@@ -17,8 +17,6 @@ from fitz_graveyard.llm.lm_studio import LMStudioClient
 from fitz_graveyard.llm.memory import MemoryMonitor
 from fitz_graveyard.models.jobs import JobState
 from fitz_graveyard.models.store import JobStore
-from fitz_graveyard.planning.confidence.flagging import SectionFlagger
-from fitz_graveyard.planning.confidence.scorer import ConfidenceScorer
 from fitz_graveyard.planning.pipeline.checkpoint import CheckpointManager
 from fitz_graveyard.planning.pipeline.orchestrator import PlanningPipeline
 from fitz_graveyard.planning.pipeline.output import PlanRenderer
@@ -73,8 +71,6 @@ class BackgroundWorker:
         # Initialize pipeline components if config provided
         self._pipeline: PlanningPipeline | None = None
         self._checkpoint_mgr: CheckpointManager | None = None
-        self._scorer: ConfidenceScorer | None = None
-        self._flagger: SectionFlagger | None = None
         self._renderer: PlanRenderer | None = None
 
         if ollama_client:
@@ -91,10 +87,6 @@ class BackgroundWorker:
             # Create pipeline with stages
             stages = create_stages()
             self._pipeline = PlanningPipeline(stages, self._checkpoint_mgr)
-
-            # Create confidence scorer and flagger
-            self._scorer = ConfidenceScorer(ollama_client)
-            self._flagger = SectionFlagger.from_config(self._config.confidence)
 
             # Create plan renderer
             self._renderer = PlanRenderer()
@@ -313,53 +305,31 @@ class BackgroundWorker:
             result = PipelineResult(**state_data)
             logger.info(f"Loaded pipeline state for API review continuation (job {job.job_id})")
 
-        # Step 3: Score sections with confidence scorer (skip on second pass - use stored scores)
+        # Step 3: API review (if requested and configured)
         if not is_review_confirmed:
-            await self._store.update(job.job_id, progress=0.96, current_phase="scoring")
-            # Get codebase context for grounded scoring
-            scoring_context = result.outputs.get("_gathered_context", "")
-            section_scores = {}
-            if self._scorer:
-                for stage_name, stage_output in result.outputs.items():
-                    if stage_name.startswith("_"):
-                        continue
-                    # Score based on stage output (simplified: score description if available)
-                    content = str(stage_output)
-                    score = await self._scorer.score_section(
-                        stage_name, content, codebase_context=scoring_context,
-                    )
-                    section_scores[stage_name] = score
+            api_review_cost_dict = None
+            api_review_feedback = None
 
-            # Compute overall quality score
-            overall_score = 0.0
-            if self._flagger and section_scores:
-                overall_score = self._flagger.compute_overall_score(section_scores)
-
-            # Step 3a: Check for API review and flag sections
-            flagged_sections = []
-            if job.api_review and self._flagger:
-                for section_name, score in section_scores.items():
-                    is_flagged, reason = self._flagger.flag_section(section_name, score)
-                    if is_flagged:
-                        flagged_sections.append(ReviewRequest(
-                            section_name=section_name,
-                            section_type=section_name,
-                            content=str(result.outputs[section_name]),
-                            confidence_score=score,
-                            flag_reason=reason,
-                        ))
-
-            # Step 3b: If flagged sections exist, estimate cost and pause at AWAITING_REVIEW
-            if flagged_sections and job.api_review:
-                # Check if Anthropic API key is configured
+            if job.api_review:
                 if self._config.anthropic.api_key is None:
                     logger.warning(
                         f"API review requested for job {job.job_id} but no Anthropic API key configured. "
                         "Skipping review and completing normally."
                     )
-                    # Fall through to normal completion
                 else:
-                    # Create review client and estimate cost
+                    # Flag all non-internal sections for review
+                    flagged_sections = [
+                        ReviewRequest(
+                            section_name=stage_name,
+                            section_type=stage_name,
+                            content=str(stage_output),
+                            confidence_score=0.0,
+                            flag_reason="API review requested",
+                        )
+                        for stage_name, stage_output in result.outputs.items()
+                        if not stage_name.startswith("_")
+                    ]
+
                     review_client = AnthropicReviewClient(
                         api_key=self._config.anthropic.api_key,
                         model=self._config.anthropic.model
@@ -370,7 +340,6 @@ class BackgroundWorker:
                         model=self._config.anthropic.model
                     )
 
-                    # Store cost estimate and pipeline state
                     import json
                     await self._store.update(
                         job.job_id,
@@ -388,26 +357,6 @@ class BackgroundWorker:
                     )
                     return  # EARLY RETURN - wait for user confirmation
 
-            # Step 3c: If api_review=True but NO flagged sections, continue normally
-            if job.api_review and not flagged_sections:
-                logger.info(f"Job {job.job_id}: All sections above confidence threshold, no API review needed")
-                # Create zero-cost breakdown
-                api_review_cost = CostBreakdown(
-                    estimate=None,
-                    actual_input_tokens=0,
-                    actual_output_tokens=0,
-                    actual_cost_usd=0.0,
-                    actual_cost_eur=0.0,
-                    sections_reviewed=0,
-                    sections_failed=0,
-                )
-                api_review_cost_dict = api_review_cost.model_dump()
-                api_review_feedback = {}
-            else:
-                # No API review requested or not configured
-                api_review_cost_dict = None
-                api_review_feedback = None
-
         else:
             # Second pass: execute API review
             import json
@@ -415,66 +364,44 @@ class BackgroundWorker:
 
             await self._store.update(job.job_id, progress=0.96, current_phase="executing_review")
 
-            # Load flagged sections from cost estimate
             cost_estimate = CostEstimate.model_validate_json(job.cost_estimate_json)
 
-            # Reconstruct flagged sections from stored pipeline state
-            scoring_context = result.outputs.get("_gathered_context", "")
-            section_scores = {}
-            flagged_sections = []
-            if self._scorer and self._flagger:
-                for stage_name, stage_output in result.outputs.items():
-                    if stage_name.startswith("_"):
-                        continue
-                    content = str(stage_output)
-                    score = await self._scorer.score_section(
-                        stage_name, content, codebase_context=scoring_context,
-                    )
-                    section_scores[stage_name] = score
+            flagged_sections = [
+                ReviewRequest(
+                    section_name=stage_name,
+                    section_type=stage_name,
+                    content=str(stage_output),
+                    confidence_score=0.0,
+                    flag_reason="API review requested",
+                )
+                for stage_name, stage_output in result.outputs.items()
+                if not stage_name.startswith("_")
+            ]
 
-                    is_flagged, reason = self._flagger.flag_section(stage_name, score)
-                    if is_flagged:
-                        flagged_sections.append(ReviewRequest(
-                            section_name=stage_name,
-                            section_type=stage_name,
-                            content=content,
-                            confidence_score=score,
-                            flag_reason=reason,
-                        ))
-
-            # Execute actual review
             review_client = AnthropicReviewClient(
                 api_key=self._config.anthropic.api_key,
                 model=self._config.anthropic.model
             )
             review_results = await review_client.review_sections(flagged_sections)
 
-            # Calculate actual cost
             cost_calculator = review_client.get_cost_calculator()
             actual_cost = cost_calculator.calculate_actual_cost(
                 review_results,
                 model=self._config.anthropic.model
             )
-            actual_cost.estimate = cost_estimate  # Attach original estimate
+            actual_cost.estimate = cost_estimate
             api_review_cost_dict = actual_cost.model_dump()
 
-            # Extract feedback for successful reviews
             api_review_feedback = {
-                result.section_name: result.feedback
-                for result in review_results
-                if result.success and result.feedback
+                r.section_name: r.feedback
+                for r in review_results
+                if r.success and r.feedback
             }
 
-            # Store review result
             await self._store.update(
                 job.job_id,
                 review_result_json=json.dumps([r.model_dump() for r in review_results])
             )
-
-            # Compute overall quality score from section scores
-            overall_score = 0.0
-            if self._flagger and section_scores:
-                overall_score = self._flagger.compute_overall_score(section_scores)
 
             logger.info(
                 f"Job {job.job_id}: API review complete. "
@@ -510,8 +437,6 @@ class BackgroundWorker:
             design=DesignOutput(**result.outputs["design"]),
             roadmap=RoadmapOutput(**result.outputs["roadmap"]),
             risk=RiskOutput(**result.outputs["risk"]),
-            section_scores=section_scores,
-            overall_quality_score=overall_score,
             git_sha=result.git_sha or "",
             generated_at=datetime.now(),
             api_review_requested=job.api_review,
@@ -542,19 +467,15 @@ class BackgroundWorker:
 
         file_path.write_text(markdown, encoding="utf-8")
 
-        # Step 7: Update job with file path and quality score
+        # Step 7: Update job with file path
         await self._store.update(
             job.job_id,
             progress=0.99,
             current_phase="finalizing",
             file_path=str(file_path),
-            quality_score=overall_score,
         )
 
-        logger.info(
-            f"Job {job.job_id} completed: plan written to {file_path} "
-            f"(quality={overall_score:.2f})"
-        )
+        logger.info(f"Job {job.job_id} completed: plan written to {file_path}")
 
     async def process_job_direct(
         self, job_id: str, pre_gathered_context: str | None = None,
