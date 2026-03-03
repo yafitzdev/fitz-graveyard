@@ -438,6 +438,7 @@ class AgentContextGatherer:
             response = await client.generate(
                 messages=[{"role": "user", "content": prompt}],
                 model=model,
+                temperature=0,
             )
             selected = self._parse_file_list(response)
         except Exception as e:
@@ -481,6 +482,7 @@ class AgentContextGatherer:
             response = await client.generate(
                 messages=[{"role": "user", "content": prompt}],
                 model=model,
+                temperature=0,
             )
             selected = self._parse_file_list(response)
         except Exception as e:
@@ -616,6 +618,7 @@ class AgentContextGatherer:
             return await client.generate(
                 messages=[{"role": "user", "content": prompt}],
                 model=model,
+                temperature=0,
             )
         except Exception as e:
             logger.warning(f"AgentContextGatherer: summarize failed for {rel_path}: {e}")
@@ -641,6 +644,7 @@ class AgentContextGatherer:
             response = await client.generate(
                 messages=[{"role": "user", "content": prompt}],
                 model=model,
+                temperature=0,
             )
             rewritten = response.strip()
             if len(rewritten) >= 20:
@@ -692,6 +696,7 @@ class AgentContextGatherer:
             response = await client.generate(
                 messages=[{"role": "user", "content": prompt}],
                 model=model,
+                temperature=0,
             )
             new_files = self._parse_file_list(response)
         except Exception as e:
@@ -733,7 +738,7 @@ class AgentContextGatherer:
         summaries: list[str],
         structural_index: str,
         job_description: str,
-        max_discover: int = 5,
+        max_discover: int = 10,
     ) -> list[str]:
         """Discover additional relevant files after summarization.
 
@@ -753,6 +758,7 @@ class AgentContextGatherer:
             response = await client.generate(
                 messages=[{"role": "user", "content": prompt}],
                 model=model,
+                temperature=0,
             )
             discovered = self._parse_file_list(response)
         except Exception as e:
@@ -809,6 +815,7 @@ class AgentContextGatherer:
             return await client.generate(
                 messages=[{"role": "user", "content": prompt}],
                 model=model,
+                temperature=0,
             )
         except Exception as e:
             logger.warning(f"AgentContextGatherer: synthesize failed: {e}")

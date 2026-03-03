@@ -85,13 +85,19 @@ class OllamaClient:
             return False
 
     @ollama_retry
-    async def generate(self, messages: list[dict], model: str | None = None) -> str:
+    async def generate(
+        self,
+        messages: list[dict],
+        model: str | None = None,
+        temperature: float | None = None,
+    ) -> str:
         """
         Generate a response from Ollama with streaming.
 
         Args:
             messages: Chat messages in format [{"role": "user", "content": "..."}]
             model: Model to use (defaults to self.model)
+            temperature: Sampling temperature (0.0 = deterministic). None = server default.
 
         Returns:
             Full accumulated response text.
@@ -105,8 +111,12 @@ class OllamaClient:
         # Stream response and accumulate
         t0 = time.monotonic()
         accumulated = []
+        options = {}
+        if temperature is not None:
+            options["temperature"] = temperature
         async for chunk in await self.client.chat(
-            model=model, messages=messages, stream=True
+            model=model, messages=messages, stream=True,
+            options=options if options else None,
         ):
             if content := chunk.get("message", {}).get("content"):
                 accumulated.append(content)

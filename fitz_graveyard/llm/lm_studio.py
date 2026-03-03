@@ -127,13 +127,19 @@ class LMStudioClient:
             return False
 
     @lm_studio_retry
-    async def generate(self, messages: list[dict], model: str | None = None) -> str:
+    async def generate(
+        self,
+        messages: list[dict],
+        model: str | None = None,
+        temperature: float | None = None,
+    ) -> str:
         """
         Generate a streaming response from LM Studio.
 
         Args:
             messages: Chat messages in format [{"role": "user", "content": "..."}]
             model:    Model override (defaults to self.model)
+            temperature: Sampling temperature (0.0 = deterministic). None = server default.
 
         Returns:
             Full accumulated response text.
@@ -143,14 +149,17 @@ class LMStudioClient:
 
         t0 = time.monotonic()
         accumulated = []
-        stream = await self._client.chat.completions.create(
-            model=model,
-            messages=messages,
-            stream=True,
-            extra_body={
+        kwargs: dict = {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+            "extra_body": {
                 "chat_template_kwargs": {"enable_thinking": False},
             },
-        )
+        }
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        stream = await self._client.chat.completions.create(**kwargs)
         async for chunk in stream:
             delta = chunk.choices[0].delta if chunk.choices else None
             if delta and delta.content:
