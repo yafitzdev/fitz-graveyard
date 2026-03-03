@@ -23,5 +23,5 @@ Exclude:
 - Ingestion/indexing pipeline files unless the task involves ingestion
 - Files that share imports but serve an unrelated purpose
 
-Select at most {max_files} files. Return ONLY a JSON array of relative file paths, no explanation:
+Return ONLY a JSON array of relative file paths, no explanation:
 ["path/to/file1.py", "path/to/file2.py"]

@@ -487,7 +487,6 @@ class TestFilterCandidates:
             candidates=[("candidate.py", ["imports seed.py"])],
 
             job_description="task",
-            max_files=10,
         )
         assert result == ["candidate.py"]
 
@@ -508,29 +507,9 @@ class TestFilterCandidates:
             ],
 
             job_description="task",
-            max_files=10,
         )
         assert "seed.py" not in result
         assert "other.py" in result
-
-    @pytest.mark.asyncio
-    async def test_caps_at_max_files(self, tmp_path, mock_client):
-        for i in range(5):
-            (tmp_path / f"c{i}.py").write_text("code")
-        file_list = [f'"c{i}.py"' for i in range(5)]
-        mock_client.generate.return_value = f'[{", ".join(file_list)}]'
-        gatherer = AgentContextGatherer(
-            config=_make_config(), source_dir=str(tmp_path)
-        )
-        result = await gatherer._filter_candidates(
-            mock_client, "m",
-            seeds=["seed.py"],
-            candidates=[(f"c{i}.py", ["imports seed.py"]) for i in range(5)],
-
-            job_description="task",
-            max_files=2,
-        )
-        assert len(result) == 2
 
     @pytest.mark.asyncio
     async def test_fallback_on_llm_failure(self, tmp_path, mock_client):
@@ -549,7 +528,6 @@ class TestFilterCandidates:
             ],
 
             job_description="task",
-            max_files=10,
         )
         assert "a.py" in result
         assert "b.py" in result
@@ -567,7 +545,6 @@ class TestFilterCandidates:
             candidates=[("c.py", ["imports seed.py"])],
 
             job_description="task",
-            max_files=10,
         )
         assert "c.py" in result
 
@@ -587,24 +564,9 @@ class TestFilterCandidates:
             ],
 
             job_description="task",
-            max_files=10,
         )
         assert result == ["real.py"]
 
-    @pytest.mark.asyncio
-    async def test_zero_budget_returns_empty(self, tmp_path, mock_client):
-        gatherer = AgentContextGatherer(
-            config=_make_config(), source_dir=str(tmp_path)
-        )
-        result = await gatherer._filter_candidates(
-            mock_client, "m",
-            seeds=["seed.py"],
-            candidates=[("c.py", ["imports seed.py"])],
-
-            job_description="task",
-            max_files=0,
-        )
-        assert result == []
 
 
 # ---------------------------------------------------------------------------
@@ -623,7 +585,6 @@ class TestScanIndex:
             structural_index="## answer.py\nclasses: Answer",
             job_description="add token usage to answer metadata",
             already_found={"provider.py"},
-            max_files=5,
         )
         assert result == ["answer.py"]
 
@@ -640,7 +601,6 @@ class TestScanIndex:
             structural_index="## a.py\nclasses: A\n\n## b.py\nclasses: B",
             job_description="task",
             already_found={"a.py"},
-            max_files=5,
         )
         assert "a.py" not in result
         assert "b.py" in result
@@ -658,7 +618,6 @@ class TestScanIndex:
             structural_index="## found.py\nclasses: F\n\n## new.py\nclasses: N",
             job_description="task",
             already_found={"found.py"},
-            max_files=5,
         )
         prompt_sent = mock_client.generate.call_args[1]["messages"][0]["content"]
         assert "## found.py" not in prompt_sent
@@ -675,7 +634,6 @@ class TestScanIndex:
             structural_index="## x.py\nclasses: X",
             job_description="task",
             already_found=set(),
-            max_files=5,
         )
         assert result == []
 
@@ -690,7 +648,6 @@ class TestScanIndex:
             structural_index="## x.py\nclasses: X",
             job_description="task",
             already_found=set(),
-            max_files=5,
         )
         assert result == []
 
@@ -707,25 +664,10 @@ class TestScanIndex:
             structural_index="## code.py\nclasses: C\n\n## doc.md\nheadings: D",
             job_description="task",
             already_found=set(),
-            max_files=5,
         )
         assert "code.py" in result
         assert "doc.md" not in result
 
-    @pytest.mark.asyncio
-    async def test_zero_budget_returns_empty(self, tmp_path, mock_client):
-        gatherer = AgentContextGatherer(
-            config=_make_config(), source_dir=str(tmp_path)
-        )
-        result = await gatherer._scan_index(
-            mock_client, "m",
-            structural_index="## x.py\nclasses: X",
-            job_description="task",
-            already_found=set(),
-            max_files=0,
-        )
-        assert result == []
-        mock_client.generate.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

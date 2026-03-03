@@ -151,31 +151,22 @@ class AgentContextGatherer:
                 await self._report(
                     progress_callback, 0.068, "agent:filtering"
                 )
-                filter_budget = max(
-                    0, self._config.max_summary_files - len(seeds)
-                )
                 filtered = await self._filter_candidates(
                     client, model, seeds, candidates,
-                    job_description, filter_budget,
+                    job_description,
                 )
             else:
                 filtered = []
 
             # Pass 5b: LLM scan for graph-unreachable files (1 LLM call)
             already_found = set(seeds) | set(filtered)
-            scan_budget = max(
-                0, self._config.max_summary_files - len(already_found)
+            await self._report(
+                progress_callback, 0.072, "agent:scanning"
             )
-            if scan_budget > 0:
-                await self._report(
-                    progress_callback, 0.072, "agent:scanning"
-                )
-                scanned = await self._scan_index(
-                    client, model, structural_index,
-                    job_description, already_found, scan_budget,
-                )
-            else:
-                scanned = []
+            scanned = await self._scan_index(
+                client, model, structural_index,
+                job_description, already_found,
+            )
 
             selected = seeds + filtered + scanned
 
@@ -184,6 +175,14 @@ class AgentContextGatherer:
                 f"({len(seeds)} seeds + {len(filtered)} filtered "
                 f"+ {len(scanned)} scanned): " + ", ".join(selected)
             )
+
+            # Cap at max_summary_files for summarization (the expensive part)
+            if len(selected) > self._config.max_summary_files:
+                logger.info(
+                    f"AgentContextGatherer: capping {len(selected)} selected "
+                    f"to {self._config.max_summary_files} for summarization"
+                )
+                selected = selected[:self._config.max_summary_files]
 
             # Pass 6: Summarize (N LLM calls)
             summaries: list[str] = []
@@ -535,15 +534,12 @@ class AgentContextGatherer:
         seeds: list[str],
         candidates: list[tuple[str, list[str]]],
         job_description: str,
-        max_files: int,
     ) -> list[str]:
         """Filter graph candidates using LLM relevance judgment.
 
         Falls back to top candidates by connection count on failure.
+        No artificial budget — the LLM picks all files it deems relevant.
         """
-        if max_files <= 0:
-            return []
-
         entries: list[str] = []
         for path, connections in candidates:
             conn_str = "; ".join(connections)
@@ -553,7 +549,6 @@ class AgentContextGatherer:
             job_description=job_description,
             seed_list="\n".join(f"- {s}" for s in seeds),
             candidate_entries="\n\n".join(entries),
-            max_files=max_files,
         )
 
         try:
@@ -561,6 +556,10 @@ class AgentContextGatherer:
                 messages=[{"role": "user", "content": prompt}],
                 model=model,
                 temperature=0,
+            )
+            logger.info(
+                f"AgentContextGatherer: filter raw response "
+                f"({len(response)} chars): {response[:500]}"
             )
             selected = self._parse_file_list(response)
         except Exception as e:
@@ -574,7 +573,7 @@ class AgentContextGatherer:
                 "AgentContextGatherer: filter fallback — "
                 "using top candidates by connection count"
             )
-            selected = [path for path, _ in candidates[:max_files]]
+            selected = [path for path, _ in candidates]
 
         root = Path(self._source_dir).resolve()
         seed_set = set(seeds)
@@ -582,8 +581,6 @@ class AgentContextGatherer:
         for rel_path in selected:
             if rel_path in seed_set:
                 continue
-            if len(valid) >= max_files:
-                break
             full = root / rel_path
             if full.is_file():
                 try:
@@ -609,7 +606,6 @@ class AgentContextGatherer:
         structural_index: str,
         job_description: str,
         already_found: set[str],
-        max_files: int,
     ) -> list[str]:
         """Scan structural index for files the import graph can't reach.
 
@@ -617,10 +613,9 @@ class AgentContextGatherer:
         architecturally relevant files with no import link to seeds —
         e.g. data classes, utility patterns, protocols.
 
+        No artificial budget — the LLM picks all files it deems relevant.
         Falls back to empty list on failure (the graph results are enough).
         """
-        if max_files <= 0:
-            return []
 
         # Strip files already found so the LLM focuses on the gap
         lines: list[str] = []
@@ -647,7 +642,6 @@ class AgentContextGatherer:
             job_description=job_description,
             already_found="\n".join(f"- {f}" for f in sorted(already_found)),
             structural_index=remaining_index,
-            max_files=max_files,
         )
 
         try:
@@ -655,6 +649,10 @@ class AgentContextGatherer:
                 messages=[{"role": "user", "content": prompt}],
                 model=model,
                 temperature=0,
+            )
+            logger.info(
+                f"AgentContextGatherer: scan raw response "
+                f"({len(response)} chars): {response[:500]}"
             )
             selected = self._parse_file_list(response)
         except Exception as e:
@@ -664,6 +662,7 @@ class AgentContextGatherer:
             return []
 
         if not selected:
+            logger.info("AgentContextGatherer: scan returned no files")
             return []
 
         root = Path(self._source_dir).resolve()
@@ -675,8 +674,6 @@ class AgentContextGatherer:
             ext = PurePosixPath(rel_path).suffix.lower()
             if ext not in _SOURCE_EXTS:
                 continue
-            if len(valid) >= max_files:
-                break
             full = root / rel_path
             if full.is_file():
                 try:

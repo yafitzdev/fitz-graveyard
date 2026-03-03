@@ -23,8 +23,10 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Maximum total index size in characters before truncation
-_MAX_INDEX_CHARS = 80_000
+# Maximum total index size in characters before truncation.
+# At ~4 chars/token this is ~30K tokens — fits comfortably in 32K+ context
+# windows while leaving room for the rest of the prompt.
+_MAX_INDEX_CHARS = 120_000
 
 # Extension → extractor mapping.
 # INDEXABLE_EXTENSIONS is the union — used by the tree walker to skip files
@@ -355,10 +357,15 @@ def _format_index(entries: list[tuple[str, str]]) -> str:
     if len(full) <= _MAX_INDEX_CHARS:
         return full
 
-    # Over budget — strip detail from shallowest files first.
-    # Work on a mutable copy sorted shallowest-first.
+    # Over budget — strip detail from deepest (most specific) files first,
+    # preserving structural info on shallow core files (services, engines,
+    # providers) that the LLM needs for architectural reasoning.
     mutable = list(entries)  # preserve original order for output
-    by_depth = sorted(range(len(mutable)), key=lambda i: mutable[i][0].count("/"))
+    by_depth = sorted(
+        range(len(mutable)),
+        key=lambda i: mutable[i][0].count("/"),
+        reverse=True,
+    )
 
     # Pass 1: strip imports lines from shallowest files first
     for idx in by_depth:
