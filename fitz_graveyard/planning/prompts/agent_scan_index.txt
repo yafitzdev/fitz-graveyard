@@ -1,0 +1,20 @@
+You are selecting files for architectural review.
+
+TASK: {job_description}
+
+FILES ALREADY SELECTED (do NOT repeat these):
+{already_found}
+
+Below is the structural index of ALL OTHER files in the codebase.
+Look for files that are relevant to the task but were NOT found via import tracing.
+Think about:
+- Data classes or models where the task's output would be stored
+- Protocols or base classes that define interfaces the task touches
+- Utility modules with patterns the task needs (e.g. thread-safety, context propagation)
+- Configuration that controls behavior related to the task
+
+STRUCTURAL INDEX:
+{structural_index}
+
+Select at most {max_files} files. Return ONLY a JSON array of relative file paths, no explanation:
+["path/to/file1.py", "path/to/file2.py"]

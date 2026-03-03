@@ -4,13 +4,19 @@ AgentContextGatherer — multi-pass pipeline to explore the codebase
 and produce a structured markdown context document.
 
 Pipeline:
-  Pass 1: Map        (pure Python — pathlib walk, build file list)
-  Pass 2: Index      (pure Python — structural extraction per file)
-  Pass 3: Navigate   (1 LLM call — select files using structural index)
-  Pass 4: Summarize  (N LLM calls — one per selected file)
-  Pass 5: Synthesize (1 LLM call — combine summaries into context doc)
+  Pass 1:  Map        (pure Python — pathlib walk, build file list)
+  Pass 2:  Index      (pure Python — structural extraction per file)
+  Pass 3:  Match      (pure Python — keyword match task against index content)
+  Pass 4:  Expand     (pure Python — BFS import graph both directions)
+  Pass 5a: Filter     (1 LLM call — LLM judges relevance of graph candidates)
+  Pass 5b: Scan       (1 LLM call — LLM finds graph-unreachable files)
+  Pass 6:  Summarize  (N LLM calls — one per selected file)
+  Pass 7:  Synthesize (1 LLM call — combine summaries into context doc)
 
-Every LLM call uses generate() (plain text), not generate_with_tools().
+Two parallel selection strategies fused:
+  - Graph path (passes 3-5a): deterministic keyword+import selection
+  - LLM scan (pass 5b): catches architecturally relevant files with
+    no import connection to seeds (data classes, protocols, utilities)
 """
 
 import json
@@ -22,8 +28,6 @@ from typing import TYPE_CHECKING, Any
 
 from fitz_graveyard.planning.agent.indexer import (
     INDEXABLE_EXTENSIONS,
-    _CLUSTERING_THRESHOLD,
-    build_directory_clusters,
     build_import_graph,
     build_structural_index,
 )
@@ -37,7 +41,22 @@ logger = logging.getLogger(__name__)
 
 _MAX_TREE_FILES = 2000
 
-# Words too generic to be useful for caller scoring.
+# Directories that are never source code in any project.
+_SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv"}
+
+# Extensions that are actual source code (not docs/configs).
+_SOURCE_EXTS = frozenset({
+    ".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".go", ".rs", ".rb",
+    ".c", ".cpp", ".h", ".hpp", ".cs", ".swift", ".kt", ".scala",
+    ".pyx", ".pxd",
+})
+
+# Directories unlikely to contain task-relevant source code.
+_NON_SOURCE_DIRS = frozenset({
+    "docs", "doc", ".github", ".fitz-graveyard", ".planning",
+})
+
+# Words too generic to be useful for keyword matching.
 _STOPWORDS = frozenset({
     "a", "an", "the", "is", "are", "was", "were", "be", "been",
     "to", "of", "in", "for", "on", "with", "at", "by", "from",
@@ -47,22 +66,19 @@ _STOPWORDS = frozenset({
     "will", "would", "should", "may", "might", "must",
     "add", "create", "build", "make", "implement", "write",
     "want", "need", "like", "how", "what", "when", "where",
+    "new", "use", "using", "used", "all", "each", "every",
+    "also", "just", "into", "about", "than", "then", "them",
+    "its", "other", "some", "such", "only", "over", "after",
 })
-
-# Directories that are never source code in any project.
-# Intentionally minimal — the real filter is INDEXABLE_EXTENSIONS.
-_SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv"}
 
 
 class AgentContextGatherer:
     """
     Multi-pass pipeline to gather codebase context.
 
-    Pass 1: Map       — pure Python pathlib walk, builds file list
-    Pass 2: Index     — pure Python structural extraction (AST, regex, parsers)
-    Pass 3: Navigate  — 1 LLM call selects files using structural index
-    Pass 4: Summarize — N LLM calls, one per file
-    Pass 5: Synthesize — 1 LLM call combines summaries
+    Passes 1-4 are pure Python (deterministic). The LLM is only used
+    for relevance filtering (pass 5), summarization (pass 6), and
+    synthesis (pass 7).
     """
 
     def __init__(self, config: "AgentConfig", source_dir: str) -> None:
@@ -78,14 +94,8 @@ class AgentContextGatherer:
         """
         Run the multi-pass pipeline and return context dict.
 
-        Args:
-            client:            LLM client (OllamaClient/LMStudioClient)
-            job_description:   The user's planning request
-            progress_callback: Optional (progress: float, phase: str) callback
-
         Returns:
-            Dict with "synthesized" (concise context doc) and "raw_summaries"
-            (detailed per-file summaries). Both "" on failure/disabled.
+            Dict with "synthesized" and "raw_summaries". Both "" on failure.
         """
         empty = {"synthesized": "", "raw_summaries": ""}
 
@@ -96,72 +106,92 @@ class AgentContextGatherer:
         model = self._config.agent_model or client.model
 
         try:
-            # Pass 1: Map (pure Python, instant)
+            # Pass 1: Map (pure Python)
             await self._report(progress_callback, 0.06, "agent:mapping")
-            file_tree, file_paths = self._build_file_tree()
+            _file_tree, file_paths = self._build_file_tree()
             if not file_paths:
                 logger.info("AgentContextGatherer: empty or invalid source dir")
                 return empty
 
-            # Two-tier vs single-pass decision based on file count
-            if len(file_paths) >= _CLUSTERING_THRESHOLD:
-                # Two-tier: cluster → select dirs → focused index → navigate
-                await self._report(progress_callback, 0.061, "agent:indexing")
-                cluster_text, groups = build_directory_clusters(
-                    self._source_dir, file_paths,
-                    max_file_bytes=self._config.max_file_bytes,
-                )
-
-                await self._report(
-                    progress_callback, 0.063, "agent:selecting_dirs"
-                )
-                selected_dirs = await self._select_directories(
-                    client, model, cluster_text, groups, job_description
-                )
-
-                # Filter file_paths to only files in selected directories
-                focused_paths = []
-                for d in selected_dirs:
-                    focused_paths.extend(groups.get(d, []))
-
-                await self._report(progress_callback, 0.064, "agent:indexing")
-                structural_index = self._build_index(focused_paths)
-                logger.info(
-                    f"AgentContextGatherer: two-tier — "
-                    f"{len(selected_dirs)}/{len(groups)} dirs, "
-                    f"{len(focused_paths)}/{len(file_paths)} files, "
-                    f"index {len(structural_index)} chars"
-                )
-            else:
-                # Single-pass: index all files directly
-                await self._report(progress_callback, 0.063, "agent:indexing")
-                structural_index = self._build_index(file_paths)
-                logger.info(
-                    f"AgentContextGatherer: indexed {len(file_paths)} files "
-                    f"({len(structural_index)} chars)"
-                )
-
-            # Navigate (1 LLM call with structural index)
-            await self._report(progress_callback, 0.065, "agent:navigating")
-            selected = await self._navigate_files(
-                client, model, structural_index, job_description
+            # Pass 2: Index (pure Python)
+            await self._report(progress_callback, 0.062, "agent:indexing")
+            structural_index = self._build_index(file_paths)
+            logger.info(
+                f"AgentContextGatherer: indexed {len(file_paths)} files "
+                f"({len(structural_index)} chars)"
             )
-            if not selected:
-                logger.info("AgentContextGatherer: no files selected")
+
+            # Pass 3: Keyword match (pure Python — deterministic seed selection)
+            await self._report(progress_callback, 0.064, "agent:matching")
+            seed_cap = min(10, self._config.max_summary_files)
+            seeds = self._keyword_match(
+                structural_index, job_description, seed_cap,
+            )
+            if not seeds:
+                logger.info("AgentContextGatherer: no keyword matches")
                 return empty
 
-            # Expand with callers (pure Python, no LLM)
-            selected = self._expand_with_callers(
-                selected, file_paths, self._config.max_summary_files,
-                job_description,
+            logger.info(
+                f"AgentContextGatherer: keyword matched {len(seeds)} seeds: "
+                + ", ".join(seeds)
             )
 
-            # Pass 4: Summarize (N LLM calls)
-            summaries = []
-            for i, rel_path in enumerate(selected):
-                progress = 0.065 + 0.02 * ((i + 1) / len(selected))
+            # Pass 4: Graph expansion (pure Python)
+            await self._report(
+                progress_callback, 0.066, "agent:expanding_graph"
+            )
+            candidates = self._expand_graph(seeds, file_paths)
+            logger.info(
+                f"AgentContextGatherer: graph expansion found "
+                f"{len(candidates)} candidates from {len(seeds)} seeds"
+            )
+
+            # Pass 5a: Filter graph candidates (1 LLM call)
+            if candidates:
                 await self._report(
-                    progress_callback, progress, f"agent:summarizing:{rel_path}"
+                    progress_callback, 0.068, "agent:filtering"
+                )
+                filter_budget = max(
+                    0, self._config.max_summary_files - len(seeds)
+                )
+                filtered = await self._filter_candidates(
+                    client, model, seeds, candidates,
+                    job_description, filter_budget,
+                )
+            else:
+                filtered = []
+
+            # Pass 5b: LLM scan for graph-unreachable files (1 LLM call)
+            already_found = set(seeds) | set(filtered)
+            scan_budget = max(
+                0, self._config.max_summary_files - len(already_found)
+            )
+            if scan_budget > 0:
+                await self._report(
+                    progress_callback, 0.072, "agent:scanning"
+                )
+                scanned = await self._scan_index(
+                    client, model, structural_index,
+                    job_description, already_found, scan_budget,
+                )
+            else:
+                scanned = []
+
+            selected = seeds + filtered + scanned
+
+            logger.info(
+                f"AgentContextGatherer: selected {len(selected)} files "
+                f"({len(seeds)} seeds + {len(filtered)} filtered "
+                f"+ {len(scanned)} scanned): " + ", ".join(selected)
+            )
+
+            # Pass 6: Summarize (N LLM calls)
+            summaries: list[str] = []
+            for i, rel_path in enumerate(selected):
+                progress = 0.069 + 0.019 * ((i + 1) / len(selected))
+                await self._report(
+                    progress_callback, progress,
+                    f"agent:summarizing:{rel_path}",
                 )
                 summary = await self._summarize_file(
                     client, model, rel_path, job_description
@@ -173,60 +203,6 @@ class AgentContextGatherer:
                 logger.warning("AgentContextGatherer: all summaries failed")
                 return empty
 
-            # Discovery pass (1 LLM call)
-            await self._report(progress_callback, 0.083, "agent:discovering")
-            discovered = await self._discover_additional(
-                client, model, selected, summaries,
-                structural_index, job_description,
-            )
-
-            # Summarize discovered files
-            if discovered:
-                for i, rel_path in enumerate(discovered):
-                    progress = 0.083 + 0.002 * ((i + 1) / len(discovered))
-                    await self._report(
-                        progress_callback, progress,
-                        f"agent:summarizing:{rel_path}",
-                    )
-                    summary = await self._summarize_file(
-                        client, model, rel_path, job_description,
-                    )
-                    if summary:
-                        summaries.append(f"### {rel_path}\n{summary}")
-                selected = selected + discovered
-
-            # Re-query pass: rewrite query + re-navigate (2 LLM calls)
-            await self._report(
-                progress_callback, 0.084, "agent:rewriting_query"
-            )
-            rewritten_query = await self._rewrite_query(
-                client, model, job_description, summaries,
-            )
-
-            await self._report(
-                progress_callback, 0.085, "agent:re_navigating"
-            )
-            re_navigated = await self._re_navigate(
-                client, model, structural_index, rewritten_query,
-                already_selected=selected,
-                max_files=self._config.max_summary_files,
-            )
-
-            # Summarize re-navigated files
-            if re_navigated:
-                for i, rel_path in enumerate(re_navigated):
-                    progress = 0.085 + 0.003 * ((i + 1) / len(re_navigated))
-                    await self._report(
-                        progress_callback, progress,
-                        f"agent:summarizing:{rel_path}",
-                    )
-                    summary = await self._summarize_file(
-                        client, model, rel_path, job_description,
-                    )
-                    if summary:
-                        summaries.append(f"### {rel_path}\n{summary}")
-                selected = selected + re_navigated
-
             raw_summaries = "\n\n".join(summaries)
 
             logger.info(
@@ -235,7 +211,7 @@ class AgentContextGatherer:
                 + ", ".join(selected)
             )
 
-            # Pass 5: Synthesize (1 LLM call)
+            # Pass 7: Synthesize (1 LLM call)
             await self._report(progress_callback, 0.088, "agent:synthesizing")
             synthesized = await self._synthesize(
                 client, model, summaries, job_description
@@ -245,20 +221,28 @@ class AgentContextGatherer:
                 f"AgentContextGatherer: synthesized={len(synthesized)} chars, "
                 f"raw_summaries={len(raw_summaries)} chars"
             )
-            return {"synthesized": synthesized, "raw_summaries": raw_summaries}
+            return {
+                "synthesized": synthesized,
+                "raw_summaries": raw_summaries,
+                "agent_files": {
+                    "seeds": seeds,
+                    "graph_candidates": [c[0] for c in candidates],
+                    "filtered": filtered,
+                    "scanned": scanned,
+                    "selected": selected,
+                },
+            }
 
         except Exception:
             logger.exception("AgentContextGatherer: pipeline failed")
             return empty
 
+    # ------------------------------------------------------------------
+    # Pass 1: Map
+    # ------------------------------------------------------------------
+
     def _build_file_tree(self) -> tuple[str, list[str]]:
         """Build a file tree string and path list from the source directory.
-
-        Only includes files whose extension is in INDEXABLE_EXTENSIONS —
-        this is the primary filter that keeps junk out regardless of
-        directory names.  A minimal _SKIP_DIRS set handles the few
-        directories that are universally non-source (.git, __pycache__,
-        .venv, node_modules).
 
         Returns:
             Tuple of (tree_string, list_of_relative_posix_paths).
@@ -274,8 +258,6 @@ class AgentContextGatherer:
             for path in sorted(root.rglob("*")):
                 if not path.is_file():
                     continue
-
-                # Only include files the indexer can extract structure from
                 if path.suffix.lower() not in INDEXABLE_EXTENSIONS:
                     continue
 
@@ -295,7 +277,9 @@ class AgentContextGatherer:
                 paths.append(rel_posix)
 
                 if len(entries) >= _MAX_TREE_FILES:
-                    entries.append(f"... (truncated at {_MAX_TREE_FILES} files)")
+                    entries.append(
+                        f"... (truncated at {_MAX_TREE_FILES} files)"
+                    )
                     break
         except OSError as e:
             logger.warning(f"AgentContextGatherer: tree walk error: {e}")
@@ -308,173 +292,267 @@ class AgentContextGatherer:
         """Check if a directory name should be skipped."""
         return name in _SKIP_DIRS
 
+    # ------------------------------------------------------------------
+    # Pass 2: Index
+    # ------------------------------------------------------------------
+
     def _build_index(self, file_paths: list[str]) -> str:
         """Build structural index of all files using pure Python extraction."""
         return build_structural_index(
             self._source_dir, file_paths, self._config.max_file_bytes,
         )
 
+    # ------------------------------------------------------------------
+    # Pass 3: Keyword match (deterministic seed selection)
+    # ------------------------------------------------------------------
+
     @staticmethod
-    def _extract_task_keywords(job_description: str) -> set[str]:
-        """Extract meaningful keywords from task description for caller scoring."""
-        words = re.findall(r"[a-z][a-z0-9_]*", job_description.lower())
+    def _extract_keywords(text: str) -> set[str]:
+        """Extract meaningful keywords from text for matching."""
+        words = re.findall(r"[a-zA-Z][a-zA-Z0-9_]*", text.lower())
         return {w for w in words if len(w) >= 3 and w not in _STOPWORDS}
 
     @staticmethod
-    def _score_by_keywords(path: str, keywords: set[str]) -> int:
-        """Score a file path by keyword matches in its components."""
-        parts = PurePosixPath(path)
-        components = list(parts.parent.parts) + [parts.stem]
-        text = " ".join(components).lower()
-        return sum(1 for kw in keywords if kw in text)
+    def _parse_structural_index(index_text: str) -> dict[str, str]:
+        """Parse structural index into per-file lookup.
 
-    def _expand_with_callers(
+        Returns dict mapping file path -> structural info text.
+        """
+        lookup: dict[str, str] = {}
+        current_path: str | None = None
+        current_lines: list[str] = []
+
+        for line in index_text.splitlines():
+            if line.startswith("## "):
+                if current_path is not None:
+                    lookup[current_path] = "\n".join(current_lines)
+                current_path = line[3:].strip()
+                current_lines = []
+            elif current_path is not None:
+                if line.strip():
+                    current_lines.append(line)
+
+        if current_path is not None:
+            lookup[current_path] = "\n".join(current_lines)
+
+        return lookup
+
+    def _keyword_match(
         self,
-        selected: list[str],
-        file_paths: list[str],
-        max_files: int,
+        structural_index: str,
         job_description: str,
+        max_seeds: int,
     ) -> list[str]:
-        """Add files that import from selected files (transitive).
+        """Score every file in the structural index against task keywords.
 
-        BFS over the reverse import graph. Callers are ranked by task keyword
-        relevance rather than alphabetically. Keyword-matching callers get
-        additional slots beyond max_files (up to len(selected) extra).
-        Pure Python. Preserves LLM order, appends callers at the end.
+        Matches keywords against file path components AND structural content
+        (class names, function names, imports, exports). Returns top-scoring
+        files, excluding test files unless the task mentions testing.
+
+        Pure Python, deterministic, instant.
+        """
+        keywords = self._extract_keywords(job_description)
+        if not keywords:
+            return []
+
+        task_mentions_tests = any(
+            w in keywords for w in ("test", "tests", "testing")
+        )
+
+        # Parse index into per-file entries
+        file_lookup = self._parse_structural_index(structural_index)
+
+        scored: list[tuple[str, int]] = []
+        for path, info in file_lookup.items():
+            # Seeds must be source code, not docs/configs
+            ext = PurePosixPath(path).suffix.lower()
+            if ext not in _SOURCE_EXTS:
+                continue
+
+            # Skip non-source directories
+            first_dir = path.split("/")[0] if "/" in path else ""
+            if first_dir in _NON_SOURCE_DIRS:
+                continue
+
+            # Skip test files unless task is about testing
+            if not task_mentions_tests and (
+                path.startswith("tests/")
+                or path.startswith("test/")
+                or "/test_" in path
+                or "/tests/" in path
+            ):
+                continue
+
+            # Score against path + structural content
+            searchable = (path + " " + info).lower()
+            score = sum(1 for kw in keywords if kw in searchable)
+            if score > 0:
+                scored.append((path, score))
+
+        # Sort by score desc, then path depth asc (prefer central files)
+        scored.sort(key=lambda x: (-x[1], x[0].count("/"), x[0]))
+
+        # Validate paths exist
+        root = Path(self._source_dir).resolve()
+        valid: list[str] = []
+        for path, _score in scored:
+            if len(valid) >= max_seeds:
+                break
+            full = root / path
+            if full.is_file():
+                try:
+                    full.resolve().relative_to(root)
+                    valid.append(path)
+                except ValueError:
+                    continue
+
+        return valid
+
+    # ------------------------------------------------------------------
+    # Pass 4: Graph expansion (BFS both directions)
+    # ------------------------------------------------------------------
+
+    def _expand_graph(
+        self,
+        seeds: list[str],
+        file_paths: list[str],
+        max_depth: int = 2,
+    ) -> list[tuple[str, list[str]]]:
+        """Expand seeds via import graph in both directions.
+
+        Every file within max_depth hops of a seed is a candidate —
+        no artificial cap. The filter pass decides relevance.
+
+        Returns:
+            List of (candidate_path, [connection_descriptions, ...])
+            sorted by depth then connection count. Excludes seeds.
         """
         forward, _module_lookup = build_import_graph(
             self._source_dir, file_paths, self._config.max_file_bytes,
         )
 
-        # Build reverse map: target_file -> {caller_files}
+        # Build reverse map
         reverse: dict[str, set[str]] = {}
         for caller, targets in forward.items():
             for target in targets:
                 reverse.setdefault(target, set()).add(caller)
 
-        # BFS: collect ALL reachable callers (no cap during traversal)
-        seen = set(selected)
-        frontier = list(selected)
-        all_callers: list[str] = []
+        seed_set = set(seeds)
+        # (depth, connections, seed_connection_count)
+        found: dict[str, tuple[int, list[str], int]] = {}
+
+        frontier: list[tuple[str, int]] = [(s, 0) for s in seeds]
+        visited: set[str] = set(seeds)
 
         while frontier:
-            next_frontier: list[str] = []
-            for src in frontier:
+            next_frontier: list[tuple[str, int]] = []
+            for src, depth in frontier:
+                if depth >= max_depth:
+                    continue
+                next_depth = depth + 1
+                src_is_seed = src in seed_set
+
+                # Forward: files that src imports
+                for dep in forward.get(src, set()):
+                    if dep in seed_set:
+                        continue
+                    conn = f"imported by {src}"
+                    if dep in found:
+                        existing_depth, conns, sc = found[dep]
+                        if conn not in conns:
+                            conns.append(conn)
+                        found[dep] = (
+                            min(existing_depth, next_depth),
+                            conns,
+                            sc + (1 if src_is_seed else 0),
+                        )
+                    else:
+                        found[dep] = (
+                            next_depth, [conn],
+                            1 if src_is_seed else 0,
+                        )
+                    if dep not in visited:
+                        visited.add(dep)
+                        next_frontier.append((dep, next_depth))
+
+                # Reverse: files that import src
                 for caller in reverse.get(src, set()):
-                    if caller not in seen:
-                        seen.add(caller)
-                        all_callers.append(caller)
-                        next_frontier.append(caller)
+                    if caller in seed_set:
+                        continue
+                    conn = f"imports {src}"
+                    if caller in found:
+                        existing_depth, conns, sc = found[caller]
+                        if conn not in conns:
+                            conns.append(conn)
+                        found[caller] = (
+                            min(existing_depth, next_depth),
+                            conns,
+                            sc + (1 if src_is_seed else 0),
+                        )
+                    else:
+                        found[caller] = (
+                            next_depth, [conn],
+                            1 if src_is_seed else 0,
+                        )
+                    if caller not in visited:
+                        visited.add(caller)
+                        next_frontier.append((caller, next_depth))
+
             frontier = next_frontier
 
-        if not all_callers:
-            return selected
+        if not found:
+            return []
 
-        # Score by keyword relevance
-        keywords = self._extract_task_keywords(job_description)
-        scored = [(c, self._score_by_keywords(c, keywords)) for c in all_callers]
-
-        # Partition: keyword-matching vs non-matching
-        relevant = [(c, s) for c, s in scored if s > 0]
-        irrelevant = [(c, s) for c, s in scored if s == 0]
-
-        # Sort: relevant by score desc, irrelevant alphabetically
-        relevant.sort(key=lambda x: (-x[1], x[0]))
-        irrelevant.sort(key=lambda x: x[0])
-
-        # Budget: non-matching callers fill up to max_files total.
-        # Keyword-matching callers get bonus slots proportional to LLM selection.
-        base_room = max(0, max_files - len(selected))
-        bonus_room = len(selected)
-
-        callers_to_add: list[str] = []
-
-        # Fill with relevant callers first (base_room + bonus_room)
-        relevant_cap = base_room + bonus_room
-        for path, _score in relevant[:relevant_cap]:
-            callers_to_add.append(path)
-
-        # Fill remaining base_room with irrelevant callers
-        used_base = min(len(callers_to_add), base_room)
-        remaining_base = max(0, base_room - used_base)
-        for path, _ in irrelevant[:remaining_base]:
-            callers_to_add.append(path)
-
-        if callers_to_add:
-            relevant_count = sum(1 for _, s in relevant if s > 0)
-            added_relevant = min(relevant_count, relevant_cap)
-            logger.info(
-                f"AgentContextGatherer: expanded {len(selected)} files "
-                f"with {len(callers_to_add)} callers "
-                f"({added_relevant} keyword-matched): "
-                + ", ".join(callers_to_add)
+        # Sort by: depth asc, seed connections desc, total connections desc
+        result = [
+            (path, conns)
+            for path, (depth, conns, seed_conns) in sorted(
+                found.items(),
+                key=lambda item: (
+                    item[1][0],           # depth asc
+                    -item[1][2],          # seed connections desc
+                    -len(item[1][1]),      # total connections desc
+                    item[0],              # path alphabetical
+                ),
             )
-            return selected + callers_to_add
+            # Only source code files, skip tests and non-source dirs
+            if PurePosixPath(path).suffix.lower() in _SOURCE_EXTS
+            and not path.startswith("tests/")
+            and not path.startswith("test/")
+            and path.split("/")[0] not in _NON_SOURCE_DIRS
+        ]
 
-        return selected
+        return result
 
-    async def _select_directories(
+    # ------------------------------------------------------------------
+    # Pass 5: Filter candidates (1 LLM call)
+    # ------------------------------------------------------------------
+
+    async def _filter_candidates(
         self,
         client: Any,
         model: str,
-        cluster_text: str,
-        groups: dict[str, list[str]],
+        seeds: list[str],
+        candidates: list[tuple[str, list[str]]],
         job_description: str,
+        max_files: int,
     ) -> list[str]:
-        """Ask LLM to select relevant directories from cluster summaries.
+        """Filter graph candidates using LLM relevance judgment.
 
-        1 LLM call. Falls back to all directories on failure.
+        Falls back to top candidates by connection count on failure.
         """
-        valid_dirs = set(groups.keys())
-        example_dir = next(iter(sorted(valid_dirs)), "(root)")
+        if max_files <= 0:
+            return []
 
-        prompt = load_prompt("agent_select_dirs").format(
+        entries: list[str] = []
+        for path, connections in candidates:
+            conn_str = "; ".join(connections)
+            entries.append(f"- {path}  [{conn_str}]")
+
+        prompt = load_prompt("agent_filter_candidates").format(
             job_description=job_description,
-            directory_clusters=cluster_text,
-            example_dir=example_dir,
-        )
-
-        try:
-            response = await client.generate(
-                messages=[{"role": "user", "content": prompt}],
-                model=model,
-                temperature=0,
-            )
-            selected = self._parse_file_list(response)
-        except Exception as e:
-            logger.warning(f"AgentContextGatherer: dir selection LLM failed: {e}")
-            selected = None
-
-        if selected:
-            # Validate against actual directory names
-            validated = [d for d in selected if d in valid_dirs]
-            if validated:
-                logger.info(
-                    f"AgentContextGatherer: selected {len(validated)}/{len(valid_dirs)} dirs"
-                )
-                return validated
-
-        # Fallback: use all directories
-        logger.info("AgentContextGatherer: dir selection fallback — using all dirs")
-        return list(valid_dirs)
-
-    async def _navigate_files(
-        self,
-        client: Any,
-        model: str,
-        structural_index: str,
-        job_description: str,
-    ) -> list[str]:
-        """Ask LLM to select relevant files using the structural index.
-
-        1 LLM call via generate(). Parses JSON array from response.
-        Falls back to _heuristic_select() on parse failure.
-        """
-        max_files = self._config.max_summary_files
-
-        prompt = load_prompt("agent_navigate").format(
-            structural_index=structural_index,
-            job_description=job_description,
+            seed_list="\n".join(f"- {s}" for s in seeds),
+            candidate_entries="\n\n".join(entries),
             max_files=max_files,
         )
 
@@ -486,17 +564,24 @@ class AgentContextGatherer:
             )
             selected = self._parse_file_list(response)
         except Exception as e:
-            logger.warning(f"AgentContextGatherer: navigate LLM failed: {e}")
+            logger.warning(
+                f"AgentContextGatherer: filter LLM failed: {e}"
+            )
             selected = None
 
         if not selected:
-            logger.info("AgentContextGatherer: falling back to heuristic select")
-            selected = self._heuristic_select(structural_index, job_description)
+            logger.info(
+                "AgentContextGatherer: filter fallback — "
+                "using top candidates by connection count"
+            )
+            selected = [path for path, _ in candidates[:max_files]]
 
-        # Validate paths exist, stay in source_dir, and cap at max_files
         root = Path(self._source_dir).resolve()
-        valid = []
+        seed_set = set(seeds)
+        valid: list[str] = []
         for rel_path in selected:
+            if rel_path in seed_set:
+                continue
             if len(valid) >= max_files:
                 break
             full = root / rel_path
@@ -508,22 +593,115 @@ class AgentContextGatherer:
                     continue
 
         logger.info(
-            f"AgentContextGatherer: navigate selected {len(valid)} files: "
+            f"AgentContextGatherer: filtered to {len(valid)} files: "
             + ", ".join(valid)
         )
         return valid
 
+    # ------------------------------------------------------------------
+    # Pass 5b: LLM scan for graph-unreachable files
+    # ------------------------------------------------------------------
+
+    async def _scan_index(
+        self,
+        client: Any,
+        model: str,
+        structural_index: str,
+        job_description: str,
+        already_found: set[str],
+        max_files: int,
+    ) -> list[str]:
+        """Scan structural index for files the import graph can't reach.
+
+        The graph approach finds import-connected files. This pass catches
+        architecturally relevant files with no import link to seeds —
+        e.g. data classes, utility patterns, protocols.
+
+        Falls back to empty list on failure (the graph results are enough).
+        """
+        if max_files <= 0:
+            return []
+
+        # Strip files already found so the LLM focuses on the gap
+        lines: list[str] = []
+        current_path: str | None = None
+        current_lines: list[str] = []
+        for line in structural_index.splitlines():
+            if line.startswith("## "):
+                if current_path and current_path not in already_found:
+                    lines.append(f"## {current_path}")
+                    lines.extend(current_lines)
+                current_path = line[3:].strip()
+                current_lines = []
+            elif current_path is not None and line.strip():
+                current_lines.append(line)
+        if current_path and current_path not in already_found:
+            lines.append(f"## {current_path}")
+            lines.extend(current_lines)
+
+        remaining_index = "\n".join(lines)
+        if not remaining_index.strip():
+            return []
+
+        prompt = load_prompt("agent_scan_index").format(
+            job_description=job_description,
+            already_found="\n".join(f"- {f}" for f in sorted(already_found)),
+            structural_index=remaining_index,
+            max_files=max_files,
+        )
+
+        try:
+            response = await client.generate(
+                messages=[{"role": "user", "content": prompt}],
+                model=model,
+                temperature=0,
+            )
+            selected = self._parse_file_list(response)
+        except Exception as e:
+            logger.warning(
+                f"AgentContextGatherer: scan LLM failed: {e}"
+            )
+            return []
+
+        if not selected:
+            return []
+
+        root = Path(self._source_dir).resolve()
+        valid: list[str] = []
+        for rel_path in selected:
+            if rel_path in already_found:
+                continue
+            # Only source code
+            ext = PurePosixPath(rel_path).suffix.lower()
+            if ext not in _SOURCE_EXTS:
+                continue
+            if len(valid) >= max_files:
+                break
+            full = root / rel_path
+            if full.is_file():
+                try:
+                    full.resolve().relative_to(root)
+                    valid.append(rel_path)
+                except ValueError:
+                    continue
+
+        logger.info(
+            f"AgentContextGatherer: scan found {len(valid)} additional files: "
+            + ", ".join(valid)
+        )
+        return valid
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
     @staticmethod
     def _parse_file_list(response: str) -> list[str] | None:
-        """Extract a list of file paths from LLM response.
-
-        Handles:
-        - Plain JSON array: ["a.py", "b.py"]
-        - JSON object: {"files": ["a.py", "b.py"]}
-        - Markdown fenced JSON: ```json\\n[...]\\n```
-        """
+        """Extract a list of file paths from LLM response."""
         text = response.strip()
-        fence_match = re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", text, re.DOTALL)
+        fence_match = re.search(
+            r"```(?:json)?\s*\n?(.*?)\n?\s*```", text, re.DOTALL,
+        )
         if fence_match:
             text = fence_match.group(1).strip()
 
@@ -541,42 +719,9 @@ class AgentContextGatherer:
 
         return None
 
-    @staticmethod
-    def _heuristic_select(index_or_tree: str, job_description: str) -> list[str]:
-        """Fallback file selection when LLM fails.
-
-        Extracts file paths from the structural index (## path lines),
-        prioritizes project roots (README, pyproject.toml), then sorts
-        by path depth (shorter = more central).
-        """
-        # Extract paths from ## headers in structural index
-        paths = re.findall(r'^## (.+)$', index_or_tree, re.MULTILINE)
-
-        if not paths:
-            # Fallback: try parsing as file tree ("path (size)" format)
-            for line in index_or_tree.strip().splitlines():
-                if line.startswith("..."):
-                    continue
-                match = re.match(r"^(.+?)\s+\(", line)
-                if match:
-                    paths.append(match.group(1))
-
-        priority = []
-        rest = []
-
-        for p in paths:
-            name = PurePosixPath(p).name.lower()
-            if name in ("readme.md", "readme.rst", "readme.txt", "readme",
-                        "pyproject.toml", "setup.py", "setup.cfg",
-                        "package.json", "cargo.toml"):
-                priority.append(p)
-            elif name == "__init__.py" and p.count("/") <= 1:
-                priority.append(p)
-            else:
-                rest.append(p)
-
-        rest.sort(key=lambda p: (p.count("/"), len(p)))
-        return priority + rest
+    # ------------------------------------------------------------------
+    # Pass 6: Summarize
+    # ------------------------------------------------------------------
 
     async def _summarize_file(
         self,
@@ -585,10 +730,7 @@ class AgentContextGatherer:
         rel_path: str,
         job_description: str,
     ) -> str | None:
-        """Read and summarize a single file.
-
-        1 LLM call. Returns None on any failure.
-        """
+        """Read and summarize a single file. 1 LLM call."""
         try:
             resolved = sanitize_agent_path(rel_path, self._source_dir)
         except ValueError as e:
@@ -602,7 +744,9 @@ class AgentContextGatherer:
             raw = resolved.read_bytes()[: self._config.max_file_bytes]
             content = raw.decode("utf-8", errors="replace")
         except OSError as e:
-            logger.warning(f"AgentContextGatherer: can't read {rel_path}: {e}")
+            logger.warning(
+                f"AgentContextGatherer: can't read {rel_path}: {e}"
+            )
             return None
 
         if not content.strip():
@@ -621,178 +765,14 @@ class AgentContextGatherer:
                 temperature=0,
             )
         except Exception as e:
-            logger.warning(f"AgentContextGatherer: summarize failed for {rel_path}: {e}")
+            logger.warning(
+                f"AgentContextGatherer: summarize failed for {rel_path}: {e}"
+            )
             return None
 
-    async def _rewrite_query(
-        self,
-        client: Any,
-        model: str,
-        job_description: str,
-        summaries: list[str],
-    ) -> str:
-        """Rewrite the task description using knowledge from summaries.
-
-        1 LLM call. Falls back to original job_description on failure.
-        """
-        prompt = load_prompt("agent_rewrite_query").format(
-            job_description=job_description,
-            summaries="\n\n".join(summaries),
-        )
-
-        try:
-            response = await client.generate(
-                messages=[{"role": "user", "content": prompt}],
-                model=model,
-                temperature=0,
-            )
-            rewritten = response.strip()
-            if len(rewritten) >= 20:
-                logger.info(
-                    f"AgentContextGatherer: rewrote query "
-                    f"({len(job_description)} → {len(rewritten)} chars): "
-                    f"{rewritten[:200]}"
-                )
-                return rewritten
-        except Exception as e:
-            logger.warning(f"AgentContextGatherer: query rewrite failed: {e}")
-
-        return job_description
-
-    async def _re_navigate(
-        self,
-        client: Any,
-        model: str,
-        structural_index: str,
-        rewritten_query: str,
-        already_selected: list[str],
-        max_files: int = 10,
-    ) -> list[str]:
-        """Second navigation pass with rewritten query.
-
-        1 LLM call. Annotates already-analyzed files in the structural index
-        so the LLM can use them for context but won't re-select them.
-        Falls back to empty list on failure.
-        """
-        already_set = set(already_selected)
-        annotated_lines = []
-        for line in structural_index.splitlines():
-            if line.startswith("## "):
-                path = line[3:].strip()
-                if path in already_set:
-                    annotated_lines.append(f"## {path}  [ALREADY ANALYZED]")
-                    continue
-            annotated_lines.append(line)
-        annotated_index = "\n".join(annotated_lines)
-
-        prompt = load_prompt("agent_re_navigate").format(
-            rewritten_query=rewritten_query,
-            analyzed_files="\n".join(f"- {p}" for p in already_selected),
-            structural_index_annotated=annotated_index,
-            max_files=max_files,
-        )
-
-        try:
-            response = await client.generate(
-                messages=[{"role": "user", "content": prompt}],
-                model=model,
-                temperature=0,
-            )
-            new_files = self._parse_file_list(response)
-        except Exception as e:
-            logger.warning(f"AgentContextGatherer: re-navigate failed: {e}")
-            return []
-
-        if not new_files:
-            return []
-
-        root = Path(self._source_dir).resolve()
-        valid: list[str] = []
-        for rel_path in new_files:
-            if rel_path in already_set:
-                continue
-            if len(valid) >= max_files:
-                break
-            full = root / rel_path
-            if full.is_file():
-                try:
-                    full.resolve().relative_to(root)
-                    valid.append(rel_path)
-                except ValueError:
-                    continue
-
-        if valid:
-            logger.info(
-                f"AgentContextGatherer: re-navigate found {len(valid)} new files: "
-                + ", ".join(valid)
-            )
-        else:
-            logger.info("AgentContextGatherer: re-navigate found no new files")
-        return valid
-
-    async def _discover_additional(
-        self,
-        client: Any,
-        model: str,
-        selected: list[str],
-        summaries: list[str],
-        structural_index: str,
-        job_description: str,
-        max_discover: int = 10,
-    ) -> list[str]:
-        """Discover additional relevant files after summarization.
-
-        1 LLM call. Uses summaries + structural index to find files
-        the initial navigation missed. Returns new file paths only.
-        Falls back to empty list on failure.
-        """
-        prompt = load_prompt("agent_discover").format(
-            job_description=job_description,
-            analyzed_files="\n".join(f"- {p}" for p in selected),
-            summaries="\n\n".join(summaries),
-            structural_index=structural_index,
-            max_discover=max_discover,
-        )
-
-        try:
-            response = await client.generate(
-                messages=[{"role": "user", "content": prompt}],
-                model=model,
-                temperature=0,
-            )
-            discovered = self._parse_file_list(response)
-        except Exception as e:
-            logger.warning(f"AgentContextGatherer: discovery LLM failed: {e}")
-            return []
-
-        if not discovered:
-            return []
-
-        # Validate: exists, in source_dir, not already selected
-        root = Path(self._source_dir).resolve()
-        already = set(selected)
-        valid: list[str] = []
-        for rel_path in discovered:
-            if rel_path in already:
-                continue
-            if len(valid) >= max_discover:
-                break
-            full = root / rel_path
-            if full.is_file():
-                try:
-                    full.resolve().relative_to(root)
-                    valid.append(rel_path)
-                except ValueError:
-                    continue
-
-        if valid:
-            logger.info(
-                f"AgentContextGatherer: discovered {len(valid)} additional files: "
-                + ", ".join(valid)
-            )
-        else:
-            logger.info("AgentContextGatherer: discovery found no new files")
-        return valid
+    # ------------------------------------------------------------------
+    # Pass 7: Synthesize
+    # ------------------------------------------------------------------
 
     async def _synthesize(
         self,
@@ -801,10 +781,7 @@ class AgentContextGatherer:
         summaries: list[str],
         job_description: str,
     ) -> str:
-        """Combine all file summaries into a structured context document.
-
-        1 LLM call. Falls back to concatenation if LLM fails.
-        """
+        """Combine all file summaries into a structured context document."""
         combined = "\n\n".join(summaries)
         prompt = load_prompt("agent_synthesize").format(
             summaries=combined,
