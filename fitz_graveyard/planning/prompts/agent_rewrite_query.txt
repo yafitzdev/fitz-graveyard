@@ -1,0 +1,16 @@
+You explored a codebase for this task and summarized key files.
+
+ORIGINAL TASK: {job_description}
+
+WHAT YOU FOUND:
+{summaries}
+
+Based on what you learned, rewrite the task description to be more specific. Include:
+- Exact class names, method names, and module paths you discovered
+- Specific integration points and patterns (e.g., "ThreadPoolExecutor", "chat_factory")
+- Components that consume or orchestrate the files you analyzed
+- Technical terms from the codebase that relate to the task
+
+Write a single paragraph (3-5 sentences) that a codebase analyst could use to find ALL remaining relevant files. Focus on what you HAVEN'T seen yet but now know to look for.
+
+Return ONLY the rewritten task description, no explanation or formatting.
