@@ -49,7 +49,7 @@ class AgentConfig(BaseModel):
         default=None, description="Model for agent tool calls (None = use ollama.model)"
     )
     max_summary_files: int = Field(
-        default=15,
+        default=25,
         ge=1,
         le=50,
         description="Maximum number of files to summarize during context gathering",
