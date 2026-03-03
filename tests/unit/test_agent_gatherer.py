@@ -361,6 +361,9 @@ class TestGatherEndToEnd:
             '["main.py", "utils.py"]',        # navigate
             "**Purpose:** Entry point.",       # summarize main.py
             "**Purpose:** Helpers.",            # summarize utils.py
+            '[]',                              # discover
+            "Refined: build REST API with main and utils",  # rewrite query
+            '[]',                              # re-navigate
             "## Project Overview\nFull doc.",   # synthesize
         ]
 
@@ -368,7 +371,7 @@ class TestGatherEndToEnd:
         result = await gatherer.gather(mock_client, "build a REST API")
         assert "## Project Overview" in result["synthesized"]
         assert "Entry point" in result["raw_summaries"]
-        assert mock_client.generate.call_count == 4
+        assert mock_client.generate.call_count == 7
 
     @pytest.mark.asyncio
     async def test_empty_dir_returns_empty(self, tmp_path, mock_client):
@@ -396,6 +399,9 @@ class TestGatherEndToEnd:
         mock_client.generate.side_effect = [
             '["app.py"]',
             "summary",
+            '[]',                              # discover
+            "Refined task for special model",   # rewrite query
+            '[]',                              # re-navigate
             "## Overview\nDone.",
         ]
 
@@ -414,6 +420,9 @@ class TestGatherEndToEnd:
         mock_client.generate.side_effect = [
             '["app.py"]',
             "summary",
+            '[]',                              # discover
+            "Refined task description here",    # rewrite query
+            '[]',                              # re-navigate
             "## Overview\nDone.",
         ]
 
@@ -446,6 +455,9 @@ class TestProgressCallback:
         mock_client.generate.side_effect = [
             '["app.py"]',
             "summary",
+            '[]',                              # discover
+            "Refined task description here",    # rewrite query
+            '[]',                              # re-navigate
             "## Overview\nDone.",
         ]
 
@@ -461,6 +473,9 @@ class TestProgressCallback:
         assert "agent:indexing" in phases
         assert "agent:navigating" in phases
         assert any(p.startswith("agent:summarizing:") for p in phases)
+        assert "agent:discovering" in phases
+        assert "agent:rewriting_query" in phases
+        assert "agent:re_navigating" in phases
         assert "agent:synthesizing" in phases
 
     @pytest.mark.asyncio
@@ -469,6 +484,9 @@ class TestProgressCallback:
         mock_client.generate.side_effect = [
             '["app.py"]',
             "summary",
+            '[]',                              # discover
+            "Refined task description here",    # rewrite query
+            '[]',                              # re-navigate
             "## Overview\nDone.",
         ]
 
@@ -479,7 +497,7 @@ class TestProgressCallback:
 
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
         await gatherer.gather(mock_client, "task", progress_callback=async_callback)
-        assert len(phases) >= 5  # mapping, indexing, navigating, summarizing, synthesizing
+        assert len(phases) >= 8  # mapping, indexing, navigating, summarizing, discovering, rewriting, re-navigating, synthesizing
 
 
 # ---------------------------------------------------------------------------
@@ -521,6 +539,9 @@ class TestTwoTierSelection:
             '["mod0.py", "mod1.py"]',           # navigate
             "summary 0",                         # summarize mod0
             "summary 1",                         # summarize mod1
+            '[]',                                # discover
+            "Refined task description here",     # rewrite query
+            '[]',                                # re-navigate
             "## Overview\nSynthesized.",          # synthesize
         ]
 
@@ -532,8 +553,8 @@ class TestTwoTierSelection:
         result = await gatherer.gather(mock_client, "task", progress_callback=callback)
         assert result["synthesized"] != ""
         assert "agent:selecting_dirs" not in phases
-        # 4 LLM calls: navigate + 2 summarize + synthesize
-        assert mock_client.generate.call_count == 4
+        # 7 LLM calls: navigate + 2 summarize + discover + rewrite + re-nav + synthesize
+        assert mock_client.generate.call_count == 7
 
     @pytest.mark.asyncio
     async def test_large_codebase_triggers_clustering(self, tmp_path, mock_client):
@@ -548,6 +569,9 @@ class TestTwoTierSelection:
             '["pkg0/"]',                          # select dirs
             '["pkg0/mod0.py"]',                   # navigate
             "summary 0",                          # summarize
+            '[]',                                 # discover
+            "Refined task description here",      # rewrite query
+            '[]',                                 # re-navigate
             "## Overview\nSynthesized.",           # synthesize
         ]
 
@@ -572,6 +596,9 @@ class TestTwoTierSelection:
             "not valid json",                     # dir selection fails
             '["pkg0/mod0.py"]',                   # navigate (with all dirs)
             "summary",                            # summarize
+            '[]',                                 # discover
+            "Refined task description here",      # rewrite query
+            '[]',                                 # re-navigate
             "## Overview\nDone.",                  # synthesize
         ]
 
@@ -593,14 +620,17 @@ class TestTwoTierSelection:
             '["pkg/governor.py"]',              # navigate — only picks governor
             "**Purpose:** Governance decisions.", # summarize governor
             "**Purpose:** Engine.",              # summarize engine (added by expansion)
+            '[]',                               # discover
+            "Refined task description here",    # rewrite query
+            '[]',                               # re-navigate
             "## Overview\nDone.",                # synthesize
         ]
 
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
         result = await gatherer.gather(mock_client, "add webhook to governance")
         assert result["synthesized"] != ""
-        # Should have 4 calls: navigate + 2 summarize (governor + engine) + synthesize
-        assert mock_client.generate.call_count == 4
+        # Should have 7 calls: navigate + 2 summarize + discover + rewrite + re-nav + synthesize
+        assert mock_client.generate.call_count == 7
 
     @pytest.mark.asyncio
     async def test_dir_selection_validates_names(self, tmp_path, mock_client):
@@ -614,6 +644,9 @@ class TestTwoTierSelection:
             '["pkg0/", "nonexistent/"]',          # dir selection — one valid, one not
             '["pkg0/mod0.py"]',                   # navigate
             "summary",                            # summarize
+            '[]',                                 # discover
+            "Refined task description here",      # rewrite query
+            '[]',                                 # re-navigate
             "## Overview\nDone.",                  # synthesize
         ]
 
@@ -625,6 +658,310 @@ class TestTwoTierSelection:
 # ---------------------------------------------------------------------------
 # _expand_with_callers
 # ---------------------------------------------------------------------------
+class TestExtractTaskKeywords:
+    def test_extracts_meaningful_words(self):
+        keywords = AgentContextGatherer._extract_task_keywords(
+            "add token usage tracking to LLM calls"
+        )
+        assert "token" in keywords
+        assert "usage" in keywords
+        assert "tracking" in keywords
+        assert "llm" in keywords
+        assert "calls" in keywords
+
+    def test_filters_stopwords(self):
+        keywords = AgentContextGatherer._extract_task_keywords(
+            "build a REST API for the users"
+        )
+        assert "rest" in keywords
+        assert "api" in keywords
+        assert "users" in keywords
+        # Stopwords excluded
+        assert "build" not in keywords
+        assert "the" not in keywords
+        assert "for" not in keywords
+
+    def test_filters_short_words(self):
+        keywords = AgentContextGatherer._extract_task_keywords("do it on db")
+        assert "do" not in keywords
+        assert "it" not in keywords
+        assert "on" not in keywords
+        assert "db" not in keywords
+
+    def test_handles_underscores(self):
+        keywords = AgentContextGatherer._extract_task_keywords(
+            "track token_usage across queries"
+        )
+        assert "token_usage" in keywords
+
+    def test_empty_description(self):
+        assert AgentContextGatherer._extract_task_keywords("") == set()
+
+
+class TestScoreByKeywords:
+    def test_path_component_match(self):
+        score = AgentContextGatherer._score_by_keywords(
+            "llm/providers/ollama.py", {"llm", "ollama"}
+        )
+        assert score == 2
+
+    def test_no_match_scores_zero(self):
+        score = AgentContextGatherer._score_by_keywords(
+            "ingestion/loader.py", {"token", "llm"}
+        )
+        assert score == 0
+
+    def test_stem_match(self):
+        score = AgentContextGatherer._score_by_keywords(
+            "metrics/token_tracker.py", {"token"}
+        )
+        assert score == 1
+
+    def test_empty_keywords(self):
+        score = AgentContextGatherer._score_by_keywords("any/path.py", set())
+        assert score == 0
+
+    def test_substring_match_in_component(self):
+        """Keyword 'governance' matches directory 'governance'."""
+        score = AgentContextGatherer._score_by_keywords(
+            "fitz_ai/governance/conflict_aware.py", {"governance"}
+        )
+        assert score == 1
+
+# ---------------------------------------------------------------------------
+# Discovery pass: _discover_additional
+# ---------------------------------------------------------------------------
+class TestDiscoverAdditional:
+    @pytest.mark.asyncio
+    async def test_discovers_new_files(self, tmp_path, mock_client):
+        """Returns validated paths not already in selected."""
+        (tmp_path / "selected.py").write_text("x = 1\n")
+        (tmp_path / "discovered.py").write_text("y = 2\n")
+
+        mock_client.generate.return_value = '["discovered.py"]'
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        result = await gatherer._discover_additional(
+            mock_client, "m",
+            selected=["selected.py"],
+            summaries=["### selected.py\nSome summary"],
+            structural_index="## selected.py\n## discovered.py\n",
+            job_description="task",
+        )
+        assert result == ["discovered.py"]
+
+    @pytest.mark.asyncio
+    async def test_skips_already_selected(self, tmp_path, mock_client):
+        """Paths already in selected are filtered out."""
+        (tmp_path / "a.py").write_text("x = 1\n")
+        (tmp_path / "b.py").write_text("y = 2\n")
+
+        mock_client.generate.return_value = '["a.py", "b.py"]'
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        result = await gatherer._discover_additional(
+            mock_client, "m",
+            selected=["a.py"],
+            summaries=["### a.py\nSummary"],
+            structural_index="## a.py\n## b.py\n",
+            job_description="task",
+        )
+        assert result == ["b.py"]
+
+    @pytest.mark.asyncio
+    async def test_respects_max_discover(self, tmp_path, mock_client):
+        """Caps at max_discover even if LLM returns more."""
+        for i in range(10):
+            (tmp_path / f"file{i}.py").write_text(f"x = {i}\n")
+
+        paths = [f"file{i}.py" for i in range(10)]
+        mock_client.generate.return_value = str(paths).replace("'", '"')
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        result = await gatherer._discover_additional(
+            mock_client, "m",
+            selected=[],
+            summaries=[],
+            structural_index="index",
+            job_description="task",
+            max_discover=3,
+        )
+        assert len(result) == 3
+
+    @pytest.mark.asyncio
+    async def test_fallback_on_llm_failure(self, tmp_path, mock_client):
+        """LLM exception returns empty list."""
+        mock_client.generate.side_effect = RuntimeError("timeout")
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        result = await gatherer._discover_additional(
+            mock_client, "m",
+            selected=[],
+            summaries=[],
+            structural_index="index",
+            job_description="task",
+        )
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_validates_paths_exist(self, tmp_path, mock_client):
+        """Non-existent paths filtered out."""
+        (tmp_path / "real.py").write_text("x = 1\n")
+
+        mock_client.generate.return_value = '["real.py", "fake.py"]'
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        result = await gatherer._discover_additional(
+            mock_client, "m",
+            selected=[],
+            summaries=[],
+            structural_index="index",
+            job_description="task",
+        )
+        assert result == ["real.py"]
+
+    @pytest.mark.asyncio
+    async def test_invalid_json_returns_empty(self, tmp_path, mock_client):
+        """Invalid JSON from LLM returns empty list."""
+        mock_client.generate.return_value = "not json at all"
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        result = await gatherer._discover_additional(
+            mock_client, "m",
+            selected=[],
+            summaries=[],
+            structural_index="index",
+            job_description="task",
+        )
+        assert result == []
+
+
+# ---------------------------------------------------------------------------
+# Re-query pass: _rewrite_query + _re_navigate
+# ---------------------------------------------------------------------------
+class TestRewriteQuery:
+    @pytest.mark.asyncio
+    async def test_returns_rewritten_text(self, mock_client):
+        rewritten = "Track token usage in ChatProvider.chat() across ThreadPoolExecutor workers"
+        mock_client.generate.return_value = rewritten
+
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir="/tmp")
+        result = await gatherer._rewrite_query(
+            mock_client, "m", "track LLM tokens",
+            summaries=["### base.py\nDefines ChatProvider protocol"],
+        )
+        assert result == rewritten
+        mock_client.generate.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_fallback_on_failure(self, mock_client):
+        mock_client.generate.side_effect = RuntimeError("timeout")
+
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir="/tmp")
+        result = await gatherer._rewrite_query(
+            mock_client, "m", "original task", summaries=[],
+        )
+        assert result == "original task"
+
+    @pytest.mark.asyncio
+    async def test_fallback_on_short_response(self, mock_client):
+        mock_client.generate.return_value = "too short"
+
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir="/tmp")
+        result = await gatherer._rewrite_query(
+            mock_client, "m", "original task", summaries=[],
+        )
+        assert result == "original task"
+
+
+class TestReNavigate:
+    @pytest.mark.asyncio
+    async def test_finds_new_files(self, tmp_path, mock_client):
+        (tmp_path / "already.py").write_text("x = 1\n")
+        (tmp_path / "new_file.py").write_text("y = 2\n")
+
+        mock_client.generate.return_value = '["new_file.py"]'
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        result = await gatherer._re_navigate(
+            mock_client, "m",
+            structural_index="## already.py\n## new_file.py\n",
+            rewritten_query="refined task",
+            already_selected=["already.py"],
+        )
+        assert result == ["new_file.py"]
+
+    @pytest.mark.asyncio
+    async def test_skips_already_selected(self, tmp_path, mock_client):
+        (tmp_path / "a.py").write_text("x = 1\n")
+        (tmp_path / "b.py").write_text("y = 2\n")
+
+        mock_client.generate.return_value = '["a.py", "b.py"]'
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        result = await gatherer._re_navigate(
+            mock_client, "m",
+            structural_index="## a.py\n## b.py\n",
+            rewritten_query="refined task",
+            already_selected=["a.py"],
+        )
+        assert result == ["b.py"]
+
+    @pytest.mark.asyncio
+    async def test_annotates_index(self, tmp_path, mock_client):
+        """Verify structural index headers get [ALREADY ANALYZED] markers."""
+        (tmp_path / "new.py").write_text("x = 1\n")
+
+        mock_client.generate.return_value = '["new.py"]'
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        await gatherer._re_navigate(
+            mock_client, "m",
+            structural_index="## old.py\nfunctions: foo()\n\n## new.py\nfunctions: bar()\n",
+            rewritten_query="task",
+            already_selected=["old.py"],
+        )
+        # Check the prompt sent to the LLM contains the annotation
+        call_args = mock_client.generate.call_args
+        prompt = call_args[1]["messages"][0]["content"]
+        assert "[ALREADY ANALYZED]" in prompt
+        assert "## old.py  [ALREADY ANALYZED]" in prompt
+
+    @pytest.mark.asyncio
+    async def test_respects_max_files(self, tmp_path, mock_client):
+        for i in range(10):
+            (tmp_path / f"file{i}.py").write_text(f"x = {i}\n")
+
+        paths = [f"file{i}.py" for i in range(10)]
+        mock_client.generate.return_value = str(paths).replace("'", '"')
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        result = await gatherer._re_navigate(
+            mock_client, "m",
+            structural_index="index",
+            rewritten_query="task",
+            already_selected=[],
+            max_files=3,
+        )
+        assert len(result) == 3
+
+    @pytest.mark.asyncio
+    async def test_fallback_on_failure(self, tmp_path, mock_client):
+        mock_client.generate.side_effect = RuntimeError("timeout")
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        result = await gatherer._re_navigate(
+            mock_client, "m",
+            structural_index="index",
+            rewritten_query="task",
+            already_selected=[],
+        )
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_validates_paths_exist(self, tmp_path, mock_client):
+        (tmp_path / "real.py").write_text("x = 1\n")
+
+        mock_client.generate.return_value = '["real.py", "fake.py"]'
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        result = await gatherer._re_navigate(
+            mock_client, "m",
+            structural_index="index",
+            rewritten_query="task",
+            already_selected=[],
+        )
+        assert result == ["real.py"]
+
+
 class TestExpandWithCallers:
     def test_adds_importers(self, tmp_path):
         """Selected=[governor.py], engine imports governor -> engine added."""
@@ -635,20 +972,24 @@ class TestExpandWithCallers:
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
         result = gatherer._expand_with_callers(
             ["governor.py"], ["governor.py", "engine.py", "unrelated.py"], 15,
+            "add governance webhook",
         )
         assert "governor.py" in result
         assert "engine.py" in result
         assert "unrelated.py" not in result
 
-    def test_respects_max_files(self, tmp_path):
-        """Doesn't exceed cap."""
+    def test_respects_max_files_for_irrelevant(self, tmp_path):
+        """Irrelevant callers don't exceed max_files total."""
         (tmp_path / "base.py").write_text("x = 1\n")
         for i in range(10):
             (tmp_path / f"caller{i}.py").write_text("from base import x\n")
 
         files = ["base.py"] + [f"caller{i}.py" for i in range(10)]
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        result = gatherer._expand_with_callers(["base.py"], files, 5)
+        # No keyword matches, so only base_room (5-1=4) callers added
+        result = gatherer._expand_with_callers(
+            ["base.py"], files, 5, "unrelated task description",
+        )
         assert len(result) <= 5
         assert result[0] == "base.py"
 
@@ -659,7 +1000,7 @@ class TestExpandWithCallers:
 
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
         result = gatherer._expand_with_callers(
-            ["a.py", "b.py"], ["a.py", "b.py"], 15,
+            ["a.py", "b.py"], ["a.py", "b.py"], 15, "some task",
         )
         assert result == ["a.py", "b.py"]
 
@@ -670,7 +1011,7 @@ class TestExpandWithCallers:
 
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
         result = gatherer._expand_with_callers(
-            ["a.py"], ["a.py", "b.py"], 15,
+            ["a.py"], ["a.py", "b.py"], 15, "some task",
         )
         assert result == ["a.py"]
 
@@ -682,22 +1023,11 @@ class TestExpandWithCallers:
 
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
         result = gatherer._expand_with_callers(
-            ["b.py", "a.py"], ["a.py", "b.py", "c.py"], 15,
+            ["b.py", "a.py"], ["a.py", "b.py", "c.py"], 15, "some task",
         )
         assert result[0] == "b.py"
         assert result[1] == "a.py"
         assert "c.py" in result
-
-    def test_at_max_files_returns_unchanged(self, tmp_path):
-        """If already at max_files, no expansion."""
-        (tmp_path / "a.py").write_text("x = 1\n")
-        (tmp_path / "b.py").write_text("from a import x\n")
-
-        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        result = gatherer._expand_with_callers(
-            ["a.py"], ["a.py", "b.py"], 1,
-        )
-        assert result == ["a.py"]
 
     def test_multi_hop_transitive(self, tmp_path):
         """governor -> decider -> engine: selecting governor finds engine at 2 hops."""
@@ -707,7 +1037,9 @@ class TestExpandWithCallers:
 
         files = ["governor.py", "decider.py", "engine.py"]
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        result = gatherer._expand_with_callers(["governor.py"], files, 15)
+        result = gatherer._expand_with_callers(
+            ["governor.py"], files, 15, "add governance webhook",
+        )
         assert "decider.py" in result
         assert "engine.py" in result
 
@@ -720,12 +1052,14 @@ class TestExpandWithCallers:
 
         files = ["a.py", "b.py", "c.py", "d.py"]
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        result = gatherer._expand_with_callers(["a.py"], files, 15)
+        result = gatherer._expand_with_callers(
+            ["a.py"], files, 15, "some task",
+        )
         assert result[0] == "a.py"
         assert set(result) == {"a.py", "b.py", "c.py", "d.py"}
 
-    def test_multi_hop_stops_at_max_files(self, tmp_path):
-        """BFS stops when max_files is reached, even with more hops available."""
+    def test_multi_hop_stops_at_budget(self, tmp_path):
+        """Irrelevant callers capped by base_room budget."""
         (tmp_path / "a.py").write_text("x = 1\n")
         (tmp_path / "b.py").write_text("from a import x\n")
         (tmp_path / "c.py").write_text("from b import x\n")
@@ -733,11 +1067,13 @@ class TestExpandWithCallers:
 
         files = ["a.py", "b.py", "c.py", "d.py"]
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        result = gatherer._expand_with_callers(["a.py"], files, 3)
+        # max_files=3, selected=1 → base_room=2, bonus_room=1
+        # No keyword matches → only 2 irrelevant callers added
+        result = gatherer._expand_with_callers(
+            ["a.py"], files, 3, "unrelated task",
+        )
         assert len(result) <= 3
         assert result[0] == "a.py"
-        # Should have a.py + 2 hops max
-        assert "b.py" in result
 
     def test_multi_hop_lazy_imports(self, tmp_path):
         """Lazy imports inside methods are followed transitively."""
@@ -755,7 +1091,9 @@ class TestExpandWithCallers:
 
         files = ["pkg/governor.py", "pkg/decider.py", "engines/engine.py"]
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        result = gatherer._expand_with_callers(["pkg/governor.py"], files, 15)
+        result = gatherer._expand_with_callers(
+            ["pkg/governor.py"], files, 15, "governance webhook",
+        )
         assert "pkg/decider.py" in result
         assert "engines/engine.py" in result
 
@@ -766,7 +1104,89 @@ class TestExpandWithCallers:
 
         files = ["a.py", "b.py"]
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        result = gatherer._expand_with_callers(["a.py"], files, 15)
+        result = gatherer._expand_with_callers(
+            ["a.py"], files, 15, "some task",
+        )
         assert "b.py" in result
         # No duplicates
         assert len(result) == len(set(result))
+
+    def test_keyword_callers_ranked_first(self, tmp_path):
+        """Keyword-matching callers come before non-matching ones."""
+        (tmp_path / "base.py").write_text("x = 1\n")
+        # alpha_first.py would be first alphabetically
+        (tmp_path / "alpha_first.py").write_text("from base import x\n")
+        # llm_consumer.py matches keyword "llm"
+        llm_dir = tmp_path / "llm"
+        llm_dir.mkdir()
+        (llm_dir / "consumer.py").write_text("from base import x\n")
+
+        files = ["base.py", "alpha_first.py", "llm/consumer.py"]
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        result = gatherer._expand_with_callers(
+            ["base.py"], files, 15, "track LLM token usage",
+        )
+        assert result[0] == "base.py"
+        # llm/consumer.py should come before alpha_first.py (keyword match)
+        llm_idx = result.index("llm/consumer.py")
+        alpha_idx = result.index("alpha_first.py")
+        assert llm_idx < alpha_idx
+
+    def test_keyword_callers_get_bonus_slots(self, tmp_path):
+        """Keyword-matching callers can exceed base max_files."""
+        (tmp_path / "base.py").write_text("x = 1\n")
+        # 3 keyword-matching callers in llm/ directory
+        llm = tmp_path / "llm"
+        llm.mkdir()
+        for name in ["provider.py", "client.py", "tracker.py"]:
+            (llm / name).write_text("from base import x\n")
+        # 1 non-matching caller
+        (tmp_path / "unrelated.py").write_text("from base import x\n")
+
+        files = ["base.py", "llm/provider.py", "llm/client.py",
+                 "llm/tracker.py", "unrelated.py"]
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        # max_files=2, selected=1 → base_room=1, bonus_room=1
+        # 3 keyword-matching callers, cap at base_room+bonus_room=2
+        result = gatherer._expand_with_callers(
+            ["base.py"], files, 2, "track LLM usage",
+        )
+        # Should include base.py + 2 keyword-matching callers (exceeding max_files=2)
+        llm_callers = [r for r in result if r.startswith("llm/")]
+        assert len(llm_callers) == 2
+        assert len(result) == 3  # 1 selected + 2 keyword callers
+
+    def test_no_keyword_matches_uses_alphabetical(self, tmp_path):
+        """When no callers match keywords, fall back to alphabetical."""
+        (tmp_path / "base.py").write_text("x = 1\n")
+        (tmp_path / "zebra.py").write_text("from base import x\n")
+        (tmp_path / "alpha.py").write_text("from base import x\n")
+
+        files = ["base.py", "zebra.py", "alpha.py"]
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        result = gatherer._expand_with_callers(
+            ["base.py"], files, 15, "completely unrelated task xyz",
+        )
+        callers = result[1:]  # skip base.py
+        assert callers == sorted(callers)
+
+    def test_dynamic_budget_proportional(self, tmp_path):
+        """Bonus room scales with len(selected)."""
+        (tmp_path / "a.py").write_text("x = 1\n")
+        (tmp_path / "b.py").write_text("y = 2\n")
+        llm = tmp_path / "llm"
+        llm.mkdir()
+        for i in range(10):
+            (llm / f"caller{i}.py").write_text("from a import x\nfrom b import y\n")
+
+        files = ["a.py", "b.py"] + [f"llm/caller{i}.py" for i in range(10)]
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        # max_files=3, selected=2 → base_room=1, bonus_room=2
+        # 10 keyword-matching callers, capped at base_room+bonus_room=3
+        result = gatherer._expand_with_callers(
+            ["a.py", "b.py"], files, 3, "track LLM usage",
+        )
+        # 2 selected + 3 keyword callers = 5 total
+        assert len(result) == 5
+        assert result[0] == "a.py"
+        assert result[1] == "b.py"
