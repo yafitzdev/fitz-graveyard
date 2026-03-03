@@ -10,6 +10,7 @@ import logging
 import traceback
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from fitz_graveyard.config.schema import FitzPlannerConfig
 from fitz_graveyard.llm.client import OllamaClient
@@ -413,7 +414,7 @@ class BackgroundWorker:
         call_metrics = []
         if isinstance(self._ollama_client, (OllamaClient, LMStudioClient)):
             call_metrics = self._ollama_client.drain_call_metrics()
-        diagnostics = {
+        diagnostics: dict[str, Any] = {
             "provider": self._config.provider,
             "model": self._ollama_client.model,
             "agent_enabled": self._config.agent.enabled,
@@ -421,6 +422,9 @@ class BackgroundWorker:
             "total_llm_calls": len(call_metrics),
             "total_generation_s": round(sum(m["elapsed_s"] for m in call_metrics), 1),
         }
+        agent_ctx = result.outputs.get("_agent_context", {})
+        if isinstance(agent_ctx, dict) and "agent_files" in agent_ctx:
+            diagnostics["agent_files"] = agent_ctx["agent_files"]
 
         # Pipeline outputs are dicts from model_dump(), need to reconstruct Pydantic models
         await self._store.update(job.job_id, progress=0.97, current_phase="rendering")

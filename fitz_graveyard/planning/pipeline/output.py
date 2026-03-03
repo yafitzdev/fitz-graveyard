@@ -270,6 +270,40 @@ class PlanRenderer:
                 sections.append(f"| Stage: {key} | {val:.1f}s |")
             sections.append("")
 
+            agent_files = diag.get("agent_files")
+            if agent_files:
+                sections.append("### Agent File Selection")
+                sections.append("")
+                seeds = agent_files.get("seeds", [])
+                filtered = agent_files.get("filtered", [])
+                scanned = agent_files.get("scanned", [])
+                graph_candidates = agent_files.get("graph_candidates", [])
+                sections.append(f"**Seeds** ({len(seeds)} keyword-matched):")
+                for f in seeds:
+                    sections.append(f"- {f}")
+                sections.append("")
+                sections.append(
+                    f"**Graph expansion**: {len(graph_candidates)} candidates"
+                )
+                sections.append("")
+                if filtered:
+                    sections.append(
+                        f"**Filtered** ({len(filtered)} LLM-selected from graph):"
+                    )
+                    for f in filtered:
+                        sections.append(f"- {f}")
+                    sections.append("")
+                if scanned:
+                    sections.append(
+                        f"**Scanned** ({len(scanned)} LLM-found via index scan):"
+                    )
+                    for f in scanned:
+                        sections.append(f"- {f}")
+                    sections.append("")
+                selected = agent_files.get("selected", [])
+                sections.append(f"**Total selected**: {len(selected)} files")
+                sections.append("")
+
         return "\n".join(sections)
 
     def _render_frontmatter(self, plan: PlanOutput) -> str:
