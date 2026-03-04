@@ -462,9 +462,13 @@ class TestArchitectureDesignStage:
 
     @pytest.mark.asyncio
     async def test_execute_per_field(self, stage):
-        """Test per-field extraction: 1 reasoning + 1 critique + 6 field groups + 1 ADR validator = 9 LLM calls."""
+        """Test per-field extraction: 1 reasoning + 1 critique + 6 field groups + 1 ADR validator = 9 LLM calls.
+
+        Devil's advocate is skipped here because prior_outputs has no _gathered_context.
+        """
         mock_client = AsyncMock()
         # 1 reasoning + 1 critique + 6 field group extractions + 1 ensure_min_adrs
+        # (devil's advocate skipped — no krag_context)
         mock_client.generate.side_effect = [
             "Detailed reasoning about architecture and design...",
             "Reviewed and refined reasoning...",
@@ -512,7 +516,7 @@ class TestArchitectureDesignStage:
         assert "design" in result.output
         assert result.output["architecture"]["recommended"] == "Monolith"
         assert result.output["architecture"]["key_tradeoffs"] == {"simplicity": "vs scale"}
-        assert mock_client.generate.call_count == 9  # 1 reasoning + 1 critique + 6 groups + 1 ADR validator
+        assert mock_client.generate.call_count == 9  # 1 reasoning + 1 critique + 6 groups + 1 ADR validator (DA skipped, no context)
 
     @pytest.mark.asyncio
     async def test_execute_passes_krag_context_selectively(self, stage):
@@ -524,6 +528,7 @@ class TestArchitectureDesignStage:
         mock_client.generate.side_effect = [
             "Reasoning...",
             "Reviewed reasoning...",  # critique
+            "Challenged reasoning...",  # devil's advocate
             json.dumps({"approaches": [], "recommended": "", "reasoning": "", "scope_statement": ""}),
             json.dumps({"key_tradeoffs": {}, "technology_considerations": []}),
             json.dumps({"adrs": []}),
@@ -535,20 +540,21 @@ class TestArchitectureDesignStage:
         result = await stage.execute(mock_client, "Build API", prior)
         assert result.success is True
 
-        # Calls: [0]=reasoning, [1]=critique, [2]=approaches, [3]=tradeoffs, [4]=adrs,
-        #        [5]=components, [6]=integrations, [7]=artifacts
+        # Calls: [0]=reasoning, [1]=critique, [2]=devil's advocate,
+        #        [3]=approaches, [4]=tradeoffs, [5]=adrs,
+        #        [6]=components, [7]=integrations, [8]=artifacts
         calls = mock_client.generate.call_args_list
 
-        # approaches (call 2), adrs (call 4), components (call 5),
-        # integrations (call 6), artifacts (call 7) should have krag
-        assert "Codebase Summary" in calls[2].kwargs["messages"][1]["content"]
-        assert "Codebase Summary" in calls[4].kwargs["messages"][1]["content"]
+        # approaches (call 3), adrs (call 5), components (call 6),
+        # integrations (call 7), artifacts (call 8) should have krag
+        assert "Codebase Summary" in calls[3].kwargs["messages"][1]["content"]
         assert "Codebase Summary" in calls[5].kwargs["messages"][1]["content"]
         assert "Codebase Summary" in calls[6].kwargs["messages"][1]["content"]
         assert "Codebase Summary" in calls[7].kwargs["messages"][1]["content"]
+        assert "Codebase Summary" in calls[8].kwargs["messages"][1]["content"]
 
-        # tradeoffs (call 3) should NOT
-        assert "Codebase Summary" not in calls[3].kwargs["messages"][1]["content"]
+        # tradeoffs (call 4) should NOT
+        assert "Codebase Summary" not in calls[4].kwargs["messages"][1]["content"]
 
     @pytest.mark.asyncio
     async def test_execute_partial_failure(self, stage):
@@ -1192,5 +1198,91 @@ class TestSelfCritique:
 
         await stage._self_critique(mock_client, "Original.", "Build API")
         assert "context:critiquing" in reported
+
+
+class TestDevilAdvocate:
+    """Test the _devil_advocate method on PipelineStage."""
+
+    @pytest.mark.asyncio
+    async def test_returns_corrected_reasoning(self):
+        stage = ContextStage()
+        mock_client = AsyncMock()
+        mock_client.generate.return_value = "Corrected reasoning with fixed return types."
+
+        result = await stage._devil_advocate(
+            mock_client, "Original reasoning.", "Build API",
+            krag_context="## api.py\ndef chat() -> str: ...",
+        )
+        assert result == "Corrected reasoning with fixed return types."
+
+    @pytest.mark.asyncio
+    async def test_skips_when_no_context(self):
+        """Without codebase context, nothing to cross-reference — skip."""
+        stage = ContextStage()
+        mock_client = AsyncMock()
+
+        result = await stage._devil_advocate(
+            mock_client, "Original reasoning.", "Build API",
+        )
+        assert result == "Original reasoning."
+        mock_client.generate.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_prompt_includes_source_and_reasoning(self):
+        stage = ContextStage()
+        mock_client = AsyncMock()
+        mock_client.generate.return_value = "Corrected reasoning about chat()."
+
+        await stage._devil_advocate(
+            mock_client, "Use hook to capture dict response.", "Build API",
+            krag_context="def chat(prompt: str) -> str: ...",
+        )
+        prompt = mock_client.generate.call_args.kwargs["messages"][1]["content"]
+        assert "chat(prompt: str) -> str" in prompt
+        assert "hook to capture dict" in prompt
+        assert "METHOD SIGNATURES" in prompt
+
+    @pytest.mark.asyncio
+    async def test_falls_back_on_error(self):
+        stage = ContextStage()
+        mock_client = AsyncMock()
+        mock_client.generate.side_effect = RuntimeError("LLM crashed")
+
+        result = await stage._devil_advocate(
+            mock_client, "Original reasoning.", "Build API",
+            krag_context="some code",
+        )
+        assert result == "Original reasoning."
+
+    @pytest.mark.asyncio
+    async def test_falls_back_on_short_output(self):
+        stage = ContextStage()
+        mock_client = AsyncMock()
+        mock_client.generate.return_value = "OK"
+
+        original = "A" * 100
+        result = await stage._devil_advocate(
+            mock_client, original, "Build API",
+            krag_context="some code",
+        )
+        assert result == original
+
+    @pytest.mark.asyncio
+    async def test_reports_challenging_substep(self):
+        stage = ContextStage()
+        reported = []
+
+        async def track(phase: str) -> None:
+            reported.append(phase)
+
+        stage.set_substep_callback(track)
+        mock_client = AsyncMock()
+        mock_client.generate.return_value = "Corrected reasoning text here."
+
+        await stage._devil_advocate(
+            mock_client, "Original.", "Build API",
+            krag_context="some code",
+        )
+        assert "context:challenging" in reported
 
 

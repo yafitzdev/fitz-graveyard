@@ -16,10 +16,12 @@ from fitz_graveyard.planning.agent.indexer import (
     _extract_markdown,
     _extract_python,
     _extract_python_regex,
+    _extract_signatures_from_python,
     _group_by_directory,
     build_directory_clusters,
     build_import_graph,
     build_structural_index,
+    extract_interface_signatures,
 )
 
 
@@ -532,3 +534,111 @@ class TestBuildImportGraph:
         assert "pkg/decider.py" in forward.get("engines/engine.py", set())
         # decider.py has top-level import of pkg.governor -> should create edge
         assert "pkg/governor.py" in forward.get("pkg/decider.py", set())
+
+
+# ---------------------------------------------------------------------------
+# Interface signature extraction
+# ---------------------------------------------------------------------------
+class TestExtractSignaturesFromPython:
+    def test_class_with_typed_methods(self):
+        code = (
+            "class ChatProvider:\n"
+            "    def chat(self, prompt: str) -> str:\n"
+            "        pass\n"
+        )
+        result = _extract_signatures_from_python(code)
+        assert "class ChatProvider:" in result
+        assert "chat(prompt: str) -> str" in result
+
+    def test_class_with_bases(self):
+        code = (
+            "class OpenAIChat(ChatProvider):\n"
+            "    def chat(self, prompt: str) -> str:\n"
+            "        pass\n"
+        )
+        result = _extract_signatures_from_python(code)
+        assert "class OpenAIChat(ChatProvider):" in result
+
+    def test_async_method(self):
+        code = (
+            "class Engine:\n"
+            "    async def run(self, query: str) -> dict:\n"
+            "        pass\n"
+        )
+        result = _extract_signatures_from_python(code)
+        assert "async run(query: str) -> dict" in result
+
+    def test_no_annotations(self):
+        code = (
+            "class Foo:\n"
+            "    def bar(self, x, y):\n"
+            "        pass\n"
+        )
+        result = _extract_signatures_from_python(code)
+        assert "bar(x, y)" in result
+        assert "->" not in result
+
+    def test_top_level_function(self):
+        code = "def process(data: list[str]) -> bool:\n    pass\n"
+        result = _extract_signatures_from_python(code)
+        assert "process(data: list[str]) -> bool" in result
+
+    def test_skips_self(self):
+        code = (
+            "class Foo:\n"
+            "    def bar(self, x: int) -> None:\n"
+            "        pass\n"
+        )
+        result = _extract_signatures_from_python(code)
+        assert "self" not in result
+
+    def test_syntax_error_returns_empty(self):
+        result = _extract_signatures_from_python("def foo(:\n")
+        assert result == ""
+
+    def test_empty_class(self):
+        code = "class Empty:\n    pass\n"
+        result = _extract_signatures_from_python(code)
+        assert "class Empty:" in result
+
+
+class TestExtractInterfaceSignatures:
+    def test_extracts_from_python_files(self, tmp_path):
+        (tmp_path / "main.py").write_text(
+            "class Engine:\n"
+            "    def run(self, query: str) -> str:\n"
+            "        pass\n"
+        )
+        result = extract_interface_signatures(str(tmp_path), ["main.py"])
+        assert "## main.py" in result
+        assert "run(query: str) -> str" in result
+
+    def test_skips_non_python(self, tmp_path):
+        (tmp_path / "config.yaml").write_text("key: value\n")
+        result = extract_interface_signatures(str(tmp_path), ["config.yaml"])
+        assert result == ""
+
+    def test_budget_cap(self, tmp_path):
+        # Create many files — should stop at budget
+        for i in range(100):
+            (tmp_path / f"mod{i}.py").write_text(
+                f"class Class{i}:\n"
+                f"    def method(self, x: int) -> str:\n"
+                f"        pass\n"
+            )
+        files = [f"mod{i}.py" for i in range(100)]
+        result = extract_interface_signatures(str(tmp_path), files)
+        assert len(result) <= 8500  # ~8000 cap + some header tolerance
+
+    def test_missing_file_skipped(self, tmp_path):
+        result = extract_interface_signatures(str(tmp_path), ["nonexistent.py"])
+        assert result == ""
+
+    def test_multiple_files(self, tmp_path):
+        (tmp_path / "a.py").write_text("def foo() -> int:\n    pass\n")
+        (tmp_path / "b.py").write_text("def bar() -> str:\n    pass\n")
+        result = extract_interface_signatures(str(tmp_path), ["a.py", "b.py"])
+        assert "## a.py" in result
+        assert "## b.py" in result
+        assert "foo() -> int" in result
+        assert "bar() -> str" in result

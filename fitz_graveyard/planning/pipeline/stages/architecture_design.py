@@ -246,7 +246,12 @@ class ArchitectureDesignStage(PipelineStage):
                 client, reasoning, job_description, krag_context=krag_context,
             )
 
-            # 3. Per-field-group extraction
+            # 3. Devil's advocate pass
+            reasoning = await self._devil_advocate(
+                client, reasoning, job_description, krag_context=krag_context,
+            )
+
+            # 4. Per-field-group extraction
             # Selective context: only groups that need codebase evidence get it
             _CONTEXT_GROUPS = {"approaches", "adrs", "artifacts", "components", "integrations"}
 

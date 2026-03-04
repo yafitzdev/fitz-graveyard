@@ -514,6 +514,128 @@ def build_import_graph(
 
 
 # ---------------------------------------------------------------------------
+# Interface signature extraction (compact cheat sheet for planning context)
+# ---------------------------------------------------------------------------
+
+_MAX_SIGNATURES_CHARS = 8000
+
+
+def _format_annotation(node: ast.expr | None) -> str:
+    """Format a type annotation AST node to readable string."""
+    if node is None:
+        return ""
+    try:
+        return ast.unparse(node)
+    except Exception:
+        return "?"
+
+
+def _format_param(arg: ast.arg) -> str:
+    """Format a function parameter with optional type annotation."""
+    ann = _format_annotation(arg.annotation)
+    if ann:
+        return f"{arg.arg}: {ann}"
+    return arg.arg
+
+
+def _extract_signatures_from_python(content: str) -> str:
+    """Extract class/function signatures with type annotations from Python source.
+
+    Produces a compact representation showing:
+    - Classes with base classes and method signatures (params + return types)
+    - Top-level functions with params + return types
+    """
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        return ""
+
+    lines: list[str] = []
+
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.ClassDef):
+            bases = [_ast_name(b) for b in node.bases]
+            base_str = f"({', '.join(bases)})" if bases else ""
+            lines.append(f"class {node.name}{base_str}:")
+
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    params = [
+                        _format_param(a)
+                        for a in child.args.args
+                        if a.arg != "self"
+                    ]
+                    ret = _format_annotation(child.returns)
+                    ret_str = f" -> {ret}" if ret else ""
+                    async_prefix = "async " if isinstance(child, ast.AsyncFunctionDef) else ""
+                    lines.append(f"  {async_prefix}{child.name}({', '.join(params)}){ret_str}")
+
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            params = [
+                _format_param(a)
+                for a in node.args.args
+                if a.arg != "self"
+            ]
+            ret = _format_annotation(node.returns)
+            ret_str = f" -> {ret}" if ret else ""
+            async_prefix = "async " if isinstance(node, ast.AsyncFunctionDef) else ""
+            lines.append(f"{async_prefix}{node.name}({', '.join(params)}){ret_str}")
+
+    return "\n".join(lines)
+
+
+def extract_interface_signatures(
+    source_dir: str,
+    file_paths: list[str],
+    max_file_bytes: int = 50_000,
+) -> str:
+    """Extract compact interface signatures from Python files for planning context.
+
+    Produces a cheat sheet of class hierarchies, method signatures, and return
+    types that the LLM can reference without reading full source. Placed at the
+    top of the planning context so it's never truncated.
+
+    Args:
+        source_dir: Absolute path to source directory root.
+        file_paths: Relative posix-style paths to extract from.
+        max_file_bytes: Maximum bytes to read per file.
+
+    Returns:
+        Formatted signature block, or empty string if no signatures found.
+    """
+    root = Path(source_dir).resolve()
+    blocks: list[str] = []
+    used = 0
+
+    for rel_path in file_paths:
+        if not rel_path.endswith(".py"):
+            continue
+
+        full_path = root / rel_path
+        if not full_path.is_file():
+            continue
+
+        try:
+            raw = full_path.read_bytes()[:max_file_bytes]
+            content = raw.decode("utf-8", errors="replace")
+        except OSError:
+            continue
+
+        sigs = _extract_signatures_from_python(content)
+        if not sigs:
+            continue
+
+        block = f"## {rel_path}\n{sigs}"
+        if used + len(block) > _MAX_SIGNATURES_CHARS:
+            break
+
+        blocks.append(block)
+        used += len(block)
+
+    return "\n\n".join(blocks)
+
+
+# ---------------------------------------------------------------------------
 # Two-tier directory clustering (for large codebases, ≥100 files)
 # ---------------------------------------------------------------------------
 

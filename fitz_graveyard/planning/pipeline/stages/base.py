@@ -564,6 +564,72 @@ class PipelineStage(ABC):
             logger.warning(f"Stage '{self.name}': self-critique failed: {e}")
             return reasoning_text
 
+    async def _devil_advocate(
+        self,
+        client: Any,
+        reasoning_text: str,
+        job_description: str,
+        krag_context: str = "",
+    ) -> str:
+        """Run a devil's advocate pass that cross-references reasoning against source code.
+
+        Unlike self-critique (which checks for generic quality issues), this
+        specifically looks for factual contradictions between the reasoning's
+        claims and the actual source code. Catches errors like assuming a method
+        returns a dict when it actually returns str.
+
+        Returns corrected reasoning text. On failure, returns original unchanged.
+        """
+        if not krag_context:
+            return reasoning_text
+
+        await self._report_substep("challenging")
+
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    "You are a skeptical code reviewer. Your job is to find where the "
+                    "architectural reasoning makes claims that CONTRADICT the actual source code.\n\n"
+                    f"ORIGINAL REQUEST: {job_description}\n\n"
+                    "--- ACTUAL SOURCE CODE (ground truth) ---\n"
+                    f"{krag_context}\n\n"
+                    "--- ARCHITECTURAL REASONING TO CHALLENGE ---\n"
+                    f"{reasoning_text}\n\n"
+                    "--- VERIFICATION CHECKLIST ---\n"
+                    "For each claim in the reasoning, verify against the source code:\n"
+                    "1. METHOD SIGNATURES: Does the reasoning correctly state return types and parameters?\n"
+                    "2. DATA FLOW: Does data actually flow the way the reasoning claims?\n"
+                    "3. INTERFACE CONTRACTS: Do classes/protocols actually expose what the reasoning assumes?\n"
+                    "4. EXISTING PATTERNS: Does the reasoning correctly describe how the codebase works?\n"
+                    "5. ASSUMPTIONS: What implicit assumptions does the reasoning make that the code contradicts?\n\n"
+                    "List every factual error you find, citing the specific source code that disproves it.\n"
+                    "Then rewrite the reasoning with all factual errors corrected.\n\n"
+                    "Output ONLY the corrected reasoning — no preamble."
+                ),
+            },
+        ]
+
+        try:
+            t0 = time.monotonic()
+            refined = await client.generate(messages=messages)
+            t1 = time.monotonic()
+            logger.info(
+                f"Stage '{self.name}': devil's advocate took {t1 - t0:.1f}s "
+                f"({len(reasoning_text)} → {len(refined)} chars)"
+            )
+            if len(refined) > len(reasoning_text) * 0.3:
+                return refined
+            logger.warning(
+                f"Stage '{self.name}': devil's advocate output too short "
+                f"({len(refined)} chars), keeping original"
+            )
+            return reasoning_text
+        except Exception as e:
+            logger.warning(f"Stage '{self.name}': devil's advocate failed: {e}")
+            return reasoning_text
+
     _MAX_GATHERED_CONTEXT_CHARS = 32000
 
     def _get_gathered_context(self, prior_outputs: dict[str, Any]) -> str:

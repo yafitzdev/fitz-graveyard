@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any
 from fitz_graveyard.planning.agent.indexer import (
     INDEXABLE_EXTENSIONS,
     build_import_graph,
+    extract_interface_signatures,
 )
 from fitz_graveyard.planning.prompts import load_prompt
 from fitz_graveyard.validation.sanitize import sanitize_agent_path
@@ -446,6 +447,17 @@ class AgentContextGatherer:
             blocks.append(block)
             included.append(rel_path)
             used += len(block)
+
+        # Prepend interface signatures cheat sheet
+        signatures = extract_interface_signatures(
+            self._source_dir, included, self._config.max_file_bytes,
+        )
+        if signatures:
+            header = (
+                "--- INTERFACE SIGNATURES (auto-extracted, ground truth) ---\n"
+                + signatures
+            )
+            blocks.insert(0, header)
 
         return "\n\n".join(blocks), included
 

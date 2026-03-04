@@ -287,6 +287,21 @@ class TestReadRawSource:
         assert "```" in result
         assert included == ["main.py"]
 
+    def test_prepends_interface_signatures(self, tmp_path):
+        (tmp_path / "api.py").write_text(
+            "class ChatProvider:\n"
+            "    def chat(self, prompt: str) -> str:\n"
+            "        pass\n"
+        )
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        result, included = gatherer._read_raw_source(["api.py"], ["api.py"])
+        assert "INTERFACE SIGNATURES" in result
+        assert "chat(prompt: str) -> str" in result
+        # Signatures should come before the raw source
+        sig_pos = result.index("INTERFACE SIGNATURES")
+        source_pos = result.index("### api.py")
+        assert sig_pos < source_pos
+
     def test_budget_truncation(self, tmp_path):
         # Create 3 files, each ~5000 chars, with budget of 10000
         for name in ["a.py", "b.py", "c.py"]:
