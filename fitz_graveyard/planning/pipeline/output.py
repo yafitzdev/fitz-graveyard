@@ -274,34 +274,22 @@ class PlanRenderer:
             if agent_files:
                 sections.append("### Agent File Selection")
                 sections.append("")
-                seeds = agent_files.get("seeds", [])
-                filtered = agent_files.get("filtered", [])
-                scanned = agent_files.get("scanned", [])
-                graph_candidates = agent_files.get("graph_candidates", [])
-                sections.append(f"**Seeds** ({len(seeds)} keyword-matched):")
-                for f in seeds:
+                total = agent_files.get("total_screened", 0)
+                relevant = agent_files.get("relevant", [])
+                selected = agent_files.get("selected", [])
+                sections.append(
+                    f"**Screened**: {total} files"
+                )
+                sections.append("")
+                sections.append(
+                    f"**Relevant** ({len(relevant)} LLM-selected):"
+                )
+                for f in relevant:
                     sections.append(f"- {f}")
                 sections.append("")
                 sections.append(
-                    f"**Graph expansion**: {len(graph_candidates)} candidates"
+                    f"**Selected for summary**: {len(selected)} files"
                 )
-                sections.append("")
-                if filtered:
-                    sections.append(
-                        f"**Filtered** ({len(filtered)} LLM-selected from graph):"
-                    )
-                    for f in filtered:
-                        sections.append(f"- {f}")
-                    sections.append("")
-                if scanned:
-                    sections.append(
-                        f"**Scanned** ({len(scanned)} LLM-found via index scan):"
-                    )
-                    for f in scanned:
-                        sections.append(f"- {f}")
-                    sections.append("")
-                selected = agent_files.get("selected", [])
-                sections.append(f"**Total selected**: {len(selected)} files")
                 sections.append("")
 
         return "\n".join(sections)

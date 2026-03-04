@@ -1,0 +1,13 @@
+You are selecting files for an architectural review.
+
+TASK: {job_description}
+
+FILE: {file_path}
+
+CONTENT:
+{file_content}
+
+Is this file relevant to implementing the task above?
+A file is relevant if it would need to be read, modified, or understood to implement the task.
+
+Answer with exactly one word: YES or NO
