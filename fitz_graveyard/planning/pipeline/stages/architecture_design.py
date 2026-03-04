@@ -213,8 +213,19 @@ class ArchitectureDesignStage(PipelineStage):
         }
         # Ensure defaults for missing arch fields
         arch_data.setdefault("approaches", [])
-        arch_data.setdefault("key_tradeoffs", {})
         arch_data.setdefault("technology_considerations", [])
+
+        # Coerce key_tradeoffs: LLM sometimes returns list-of-dicts instead of dict
+        kt = arch_data.get("key_tradeoffs", {})
+        if isinstance(kt, list):
+            coerced = {}
+            for item in kt:
+                if isinstance(item, dict):
+                    name = item.get("tradeoff_name", item.get("name", f"tradeoff_{len(coerced)}"))
+                    desc = item.get("description", str(item))
+                    coerced[name] = desc
+            arch_data["key_tradeoffs"] = coerced
+        arch_data.setdefault("key_tradeoffs", {})
 
         design_data = {k: data.get(k, [] if k != "data_model" else {}) for k in _DESIGN_FIELDS}
         design_data.setdefault("adrs", [])
