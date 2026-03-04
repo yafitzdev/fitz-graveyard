@@ -790,6 +790,45 @@ def serve():
 
 
 @app.command()
+def replay(job_id: str = typer.Argument(..., help="Completed job ID to replay from")):
+    """Re-run planning stages using agent context from a completed job.
+
+    Skips the expensive codebase exploration (~15-20 min) and re-runs
+    only the planning stages (~10 min). Useful for testing pipeline
+    changes without re-gathering context.
+    """
+    from fitz_graveyard.config.loader import load_config
+    from fitz_graveyard.tools.replay_plan import replay_plan
+
+    async def _replay():
+        store = await _get_store()
+        config = load_config()
+
+        try:
+            result = await replay_plan(
+                source_job_id=job_id,
+                store=store,
+                db_path=store._db_path,
+            )
+            new_job_id = result["job_id"]
+            typer.echo(
+                f"Created replay job {new_job_id} from {job_id} "
+                f"(reusing agent context, re-running planning stages)",
+                err=True,
+            )
+
+            await _run_inline(new_job_id, store, config, result["description"], resume=True)
+        finally:
+            await store.close()
+
+    try:
+        _run(_replay())
+    except KeyboardInterrupt:
+        typer.echo("\nCancelled.", err=True)
+        raise typer.Exit(130)
+
+
+@app.command()
 def purge(
     include_complete: bool = typer.Option(False, "--all", help="Also remove completed jobs"),
 ):
