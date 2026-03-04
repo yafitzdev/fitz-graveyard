@@ -47,6 +47,20 @@ async def _get_store():
     return store
 
 
+async def _find_last_job(store) -> str | None:
+    """Find the most recently created job with agent context."""
+    import aiosqlite
+
+    async with aiosqlite.connect(store._db_path) as db:
+        cursor = await db.execute(
+            "SELECT id FROM jobs WHERE pipeline_state IS NOT NULL "
+            "AND pipeline_state LIKE '%_agent_context%' "
+            "ORDER BY created_at DESC LIMIT 1"
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else None
+
+
 def _state_color(state: str) -> str:
     """Return ANSI color for job state."""
     colors = {
@@ -790,12 +804,15 @@ def serve():
 
 
 @app.command()
-def replay(job_id: str = typer.Argument(..., help="Completed job ID to replay from")):
+def replay(job_id: str = typer.Argument("last", help="Job ID to replay from, or 'last' for most recent")):
     """Re-run planning stages using agent context from a completed job.
 
     Skips the expensive codebase exploration (~15-20 min) and re-runs
     only the planning stages (~10 min). Useful for testing pipeline
     changes without re-gathering context.
+
+    Use 'fitz-graveyard replay last' (or just 'fitz-graveyard replay')
+    to replay the most recent completed job.
     """
     from fitz_graveyard.config.loader import load_config
     from fitz_graveyard.tools.replay_plan import replay_plan
@@ -804,15 +821,22 @@ def replay(job_id: str = typer.Argument(..., help="Completed job ID to replay fr
         store = await _get_store()
         config = load_config()
 
+        resolved_id = job_id
+        if resolved_id == "last":
+            resolved_id = await _find_last_job(store)
+            if not resolved_id:
+                typer.echo("No completed jobs found.", err=True)
+                raise typer.Exit(1)
+
         try:
             result = await replay_plan(
-                source_job_id=job_id,
+                source_job_id=resolved_id,
                 store=store,
                 db_path=store._db_path,
             )
             new_job_id = result["job_id"]
             typer.echo(
-                f"Created replay job {new_job_id} from {job_id} "
+                f"Created replay job {new_job_id} from {resolved_id} "
                 f"(reusing agent context, re-running planning stages)",
                 err=True,
             )
