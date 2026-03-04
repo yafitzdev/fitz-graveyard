@@ -78,37 +78,35 @@ _FIELD_GROUPS = [
 ]
 
 
-def _coerce_int(value: object) -> int | None:
-    """Coerce a value to int, extracting digits from strings like 'Phase 1'."""
-    if isinstance(value, int):
-        return value
-    try:
-        return int(value)
-    except (ValueError, TypeError):
-        import re
-        m = re.search(r'\d+', str(value))
-        return int(m.group()) if m else None
-
-
 def _remove_dependency_cycles(phases: list[dict]) -> list[dict]:
     """Remove back-edges from phase dependencies.
 
     Dependencies should only point to earlier phases. Removes any dependency
     where dep_num >= phase_num or dep_num doesn't exist.
+
+    Phase number coercion (e.g. ``"Phase 1"`` → ``1``) is handled by
+    ``PhaseRef`` in the Pydantic schema, so this only needs to validate
+    dependency ordering on already-coerced ints.
     """
-    # Coerce phase numbers first (LLM may return "Phase 1" instead of 1)
+    from fitz_graveyard.planning.schemas.roadmap import _coerce_phase_number
+
     for phase in phases:
-        coerced = _coerce_int(phase.get("number"))
-        if coerced is not None:
-            phase["number"] = coerced
+        try:
+            phase["number"] = _coerce_phase_number(phase.get("number", 0))
+        except ValueError:
+            pass
     phase_nums = {p["number"] for p in phases}
     for phase in phases:
-        original = [x for x in (_coerce_int(d) for d in phase.get("dependencies", [])) if x is not None]
+        original = []
+        for d in phase.get("dependencies", []):
+            try:
+                original.append(_coerce_phase_number(d))
+            except ValueError:
+                continue
         cleaned = [d for d in original if d < phase["number"] and d in phase_nums]
         if cleaned != original:
             removed = set(original) - set(cleaned)
             logger.warning(f"Phase {phase['number']}: removed invalid deps {removed}")
-        # Always write back — normalizes string deps ("Phase 0") to ints (0)
         phase["dependencies"] = cleaned
     return phases
 

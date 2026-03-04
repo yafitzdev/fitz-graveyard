@@ -1,7 +1,7 @@
 # fitz_graveyard/planning/schemas/architecture.py
 """Schema for architecture exploration stage output."""
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 
 
 class Approach(BaseModel):
@@ -67,6 +67,23 @@ class ArchitectureOutput(BaseModel):
         default_factory=dict,
         description="Major tradeoffs being made (e.g., 'simplicity vs scalability')",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_key_tradeoffs(cls, data: dict) -> dict:
+        """Coerce key_tradeoffs from list-of-dicts to dict."""
+        if not isinstance(data, dict):
+            return data
+        kt = data.get("key_tradeoffs")
+        if isinstance(kt, list):
+            coerced: dict[str, str] = {}
+            for item in kt:
+                if isinstance(item, dict):
+                    name = item.get("tradeoff_name", item.get("name", f"tradeoff_{len(coerced)}"))
+                    desc = item.get("description", str(item))
+                    coerced[name] = desc
+            data["key_tradeoffs"] = coerced
+        return data
 
     technology_considerations: list[str] = Field(
         default_factory=list,

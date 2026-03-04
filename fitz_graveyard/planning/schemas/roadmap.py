@@ -2,8 +2,9 @@
 """Schema for implementation roadmap stage output."""
 
 import re
+from typing import Annotated
 
-from pydantic import BaseModel, Field, ConfigDict, model_validator
+from pydantic import BaseModel, Field, ConfigDict, BeforeValidator, model_validator
 
 
 def _coerce_phase_number(value: object) -> int:
@@ -19,12 +20,16 @@ def _coerce_phase_number(value: object) -> int:
     raise ValueError(f"Cannot extract phase number from {value!r}")
 
 
+PhaseRef = Annotated[int, BeforeValidator(_coerce_phase_number)]
+"""Int that auto-coerces LLM variants like ``"Phase 1"`` to ``1``."""
+
+
 class Phase(BaseModel):
     """A single implementation phase in the roadmap."""
 
     model_config = ConfigDict(extra="ignore")
 
-    number: int = Field(
+    number: PhaseRef = Field(
         ...,
         description="Phase number (1-indexed)",
     )
@@ -35,8 +40,6 @@ class Phase(BaseModel):
         """Handle LLM field name variations (e.g. 'num' instead of 'number')."""
         if isinstance(data, dict) and "num" in data and "number" not in data:
             data["number"] = data.pop("num")
-        if isinstance(data, dict) and "number" in data:
-            data["number"] = _coerce_phase_number(data["number"])
         return data
 
     name: str = Field(
@@ -54,7 +57,7 @@ class Phase(BaseModel):
         description="Concrete outputs from this phase",
     )
 
-    dependencies: list[int] = Field(
+    dependencies: list[PhaseRef] = Field(
         default_factory=list,
         description="Phase numbers that must complete before this one starts",
     )
@@ -80,17 +83,6 @@ class Phase(BaseModel):
     )
 
 
-def _coerce_int_list(values: list) -> list[int]:
-    """Coerce a list of LLM phase references to ints."""
-    result = []
-    for v in values:
-        try:
-            result.append(_coerce_phase_number(v))
-        except ValueError:
-            continue
-    return result
-
-
 class RoadmapOutput(BaseModel):
     """Output from implementation roadmap stage.
 
@@ -104,12 +96,12 @@ class RoadmapOutput(BaseModel):
         description="Ordered list of implementation phases",
     )
 
-    critical_path: list[int] = Field(
+    critical_path: list[PhaseRef] = Field(
         default_factory=list,
         description="Phase numbers that form the critical path (must be sequential)",
     )
 
-    parallel_opportunities: list[list[int]] = Field(
+    parallel_opportunities: list[list[PhaseRef]] = Field(
         default_factory=list,
         description="Groups of phase numbers that can be executed in parallel",
     )
@@ -118,18 +110,3 @@ class RoadmapOutput(BaseModel):
         default=0,
         description="Total number of phases in the roadmap",
     )
-
-    @model_validator(mode="before")
-    @classmethod
-    def _coerce_phase_refs(cls, data: dict) -> dict:
-        """Coerce string phase references like 'Phase 1' to ints."""
-        if not isinstance(data, dict):
-            return data
-        if "critical_path" in data and isinstance(data["critical_path"], list):
-            data["critical_path"] = _coerce_int_list(data["critical_path"])
-        if "parallel_opportunities" in data and isinstance(data["parallel_opportunities"], list):
-            data["parallel_opportunities"] = [
-                _coerce_int_list(group) if isinstance(group, list) else group
-                for group in data["parallel_opportunities"]
-            ]
-        return data

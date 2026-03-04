@@ -1,9 +1,9 @@
 # fitz_graveyard/planning/schemas/risk.py
 """Schema for risk analysis stage output."""
 
-import re
-
 from pydantic import BaseModel, Field, ConfigDict, model_validator
+
+from fitz_graveyard.planning.schemas.roadmap import PhaseRef
 
 
 class Risk(BaseModel):
@@ -46,17 +46,6 @@ class Risk(BaseModel):
             data["description"] = data.pop("desc")
         if "phases" in data and "affected_phases" not in data:
             data["affected_phases"] = data.pop("phases")
-        # Coerce "Phase 1" strings to ints in affected_phases
-        if "affected_phases" in data and isinstance(data["affected_phases"], list):
-            coerced = []
-            for v in data["affected_phases"]:
-                if isinstance(v, int):
-                    coerced.append(v)
-                else:
-                    m = re.search(r"\d+", str(v))
-                    if m:
-                        coerced.append(int(m.group()))
-            data["affected_phases"] = coerced
         return data
 
     contingency: str = Field(
@@ -64,7 +53,7 @@ class Risk(BaseModel):
         description="Backup plan if risk materializes despite mitigation",
     )
 
-    affected_phases: list[int] = Field(
+    affected_phases: list[PhaseRef] = Field(
         default_factory=list,
         description="Phase numbers most affected by this risk",
     )

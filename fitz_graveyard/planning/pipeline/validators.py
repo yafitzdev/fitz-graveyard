@@ -165,20 +165,40 @@ def ensure_phase_zero(
     }
 
     # Bump existing phase numbers +1 and adjust dependencies
+    from fitz_graveyard.planning.schemas.roadmap import _coerce_phase_number
+
     for phase in phases:
-        phase["number"] = int(phase.get("number", 0)) + 1
-        phase["dependencies"] = [int(d) + 1 for d in phase.get("dependencies", [])]
+        phase["number"] = _coerce_phase_number(phase.get("number", 0)) + 1
+        coerced_deps = []
+        for d in phase.get("dependencies", []):
+            try:
+                coerced_deps.append(_coerce_phase_number(d) + 1)
+            except ValueError:
+                continue
+        phase["dependencies"] = coerced_deps
 
     merged["phases"] = [phase_zero] + phases
 
     # Update scheduling fields
     if "critical_path" in merged:
-        merged["critical_path"] = [0] + [int(p) + 1 for p in merged.get("critical_path", [])]
+        coerced_cp = []
+        for p in merged.get("critical_path", []):
+            try:
+                coerced_cp.append(_coerce_phase_number(p) + 1)
+            except ValueError:
+                continue
+        merged["critical_path"] = [0] + coerced_cp
     if "parallel_opportunities" in merged:
-        merged["parallel_opportunities"] = [
-            [int(p) + 1 for p in group]
-            for group in merged.get("parallel_opportunities", [])
-        ]
+        result = []
+        for group in merged.get("parallel_opportunities", []):
+            coerced_group = []
+            for p in group:
+                try:
+                    coerced_group.append(_coerce_phase_number(p) + 1)
+                except ValueError:
+                    continue
+            result.append(coerced_group)
+        merged["parallel_opportunities"] = result
     if "total_phases" in merged:
         merged["total_phases"] = len(merged["phases"])
 
