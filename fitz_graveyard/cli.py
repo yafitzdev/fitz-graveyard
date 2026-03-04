@@ -296,7 +296,14 @@ async def _run_inline(
     from fitz_graveyard.background.worker import BackgroundWorker
     from fitz_graveyard.llm.factory import create_llm_client
 
+    from fitz_graveyard.llm.llama_cpp import LlamaCppClient
+
     client = create_llm_client(config)
+
+    # LlamaCppClient manages its own subprocess — start it before processing
+    if isinstance(client, LlamaCppClient):
+        await client.start()
+
     worker = BackgroundWorker(
         store,
         config=config,
@@ -308,7 +315,9 @@ async def _run_inline(
     start = time.monotonic()
 
     # Resolve display model name from active provider
-    if config.provider == "lm_studio":
+    if config.provider == "llama_cpp":
+        model_name = config.llama_cpp.fast_model.path
+    elif config.provider == "lm_studio":
         model_name = config.lm_studio.model
     else:
         model_name = config.ollama.model
@@ -387,7 +396,12 @@ async def _run_inline(
             await job_task
         except (asyncio.CancelledError, Exception):
             pass
+        if isinstance(client, LlamaCppClient):
+            await client.stop()
         raise KeyboardInterrupt
+    finally:
+        if isinstance(client, LlamaCppClient):
+            await client.stop()
 
     # Check result
     exc = job_task.exception()

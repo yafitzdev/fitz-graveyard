@@ -137,16 +137,53 @@ class LMStudioConfig(BaseModel):
     )
 
 
+class LlamaCppModelConfig(BaseModel):
+    """Settings for a single GGUF model used by llama-server."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    path: str = Field(default="", description="GGUF filename (relative to models_dir)")
+    context_size: int = Field(default=8192, description="Context window size")
+    gpu_layers: int = Field(default=-1, description="GPU layers to offload (-1 = all)")
+
+
+class LlamaCppConfig(BaseModel):
+    """llama.cpp server configuration with fast/smart model tiers."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    server_path: str = Field(
+        default="", description="Path to llama-server binary"
+    )
+    models_dir: str = Field(
+        default="", description="Directory containing GGUF model files"
+    )
+    fast_model: LlamaCppModelConfig = Field(
+        default_factory=LlamaCppModelConfig,
+        description="Small model for screening (fast YES/NO calls)",
+    )
+    smart_model: LlamaCppModelConfig | None = Field(
+        default=None,
+        description="Large model for reasoning (None = use fast_model for everything)",
+    )
+    port: int = Field(default=8012, description="llama-server port")
+    timeout: int = Field(default=300, description="Request timeout in seconds")
+    startup_timeout: int = Field(
+        default=120, description="Max seconds to wait for server startup"
+    )
+
+
 class FitzPlannerConfig(BaseModel):
     """Root configuration for fitz-graveyard."""
 
     model_config = ConfigDict(extra="ignore")
 
-    provider: Literal["ollama", "lm_studio"] = Field(
+    provider: Literal["ollama", "lm_studio", "llama_cpp"] = Field(
         default="ollama", description="LLM provider to use"
     )
     ollama: OllamaConfig = Field(default_factory=OllamaConfig)
     lm_studio: LMStudioConfig = Field(default_factory=LMStudioConfig)
+    llama_cpp: LlamaCppConfig = Field(default_factory=LlamaCppConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
     confidence: ConfidenceConfig = Field(default_factory=ConfidenceConfig)

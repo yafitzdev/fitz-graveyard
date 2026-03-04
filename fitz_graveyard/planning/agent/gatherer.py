@@ -3,10 +3,11 @@
 AgentContextGatherer — brute-force parallel file screening pipeline.
 
 Pipeline:
-  Pass 1:  Map         (pure Python — pathlib walk, build file list)
-  Pass 2:  Screen      (N parallel LLM calls — "is this file relevant?")
-  Pass 3:  Summarize   (N parallel LLM calls — one per relevant file)
-  Pass 4:  Synthesize  (1 LLM call — combine summaries into context doc)
+  Pass 1:  Map            (pure Python — pathlib walk, build file list)
+  Pass 2:  Screen         (N parallel LLM calls — "is this file relevant?")
+  Pass 3:  Import expand  (pure Python — trace forward imports from relevant files)
+  Pass 4:  Summarize      (N parallel LLM calls — one per selected file)
+  Pass 5:  Synthesize     (1 LLM call — combine summaries into context doc)
 
 Every file in the codebase is shown to the LLM individually for
 relevance screening. No heuristics, no graph traversal, no truncation.
@@ -22,7 +23,10 @@ from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
-from fitz_graveyard.planning.agent.indexer import INDEXABLE_EXTENSIONS
+from fitz_graveyard.planning.agent.indexer import (
+    INDEXABLE_EXTENSIONS,
+    build_import_graph,
+)
 from fitz_graveyard.planning.prompts import load_prompt
 from fitz_graveyard.validation.sanitize import sanitize_agent_path
 
@@ -69,7 +73,8 @@ class AgentContextGatherer:
             logger.info("Agent context gathering disabled by config")
             return empty
 
-        model = self._config.agent_model or client.model
+        fast = self._config.agent_model or client.fast_model
+        smart = self._config.agent_model or client.smart_model
 
         try:
             # Pass 1: Map (pure Python)
@@ -83,10 +88,10 @@ class AgentContextGatherer:
                 f"AgentContextGatherer: mapped {len(file_paths)} files"
             )
 
-            # Pass 2: Screen all files (parallel LLM calls)
+            # Pass 2: Screen all files (parallel LLM calls — fast model)
             await self._report(progress_callback, 0.062, "agent:screening")
             relevant = await self._screen_all(
-                client, model, file_paths, job_description,
+                client, fast, file_paths, job_description,
                 progress_callback,
             )
 
@@ -100,8 +105,17 @@ class AgentContextGatherer:
                 + ", ".join(relevant)
             )
 
+            # Pass 3: Import expansion (pure Python, depth 1)
+            expanded = self._import_expand(relevant, file_paths)
+            import_added = len(expanded) - len(relevant)
+            if import_added > 0:
+                logger.info(
+                    f"AgentContextGatherer: import expansion added "
+                    f"{import_added} files"
+                )
+
             # Cap at max_summary_files for summarization
-            selected = relevant
+            selected = expanded
             if len(selected) > self._config.max_summary_files:
                 logger.info(
                     f"AgentContextGatherer: capping {len(selected)} relevant "
@@ -109,10 +123,10 @@ class AgentContextGatherer:
                 )
                 selected = selected[:self._config.max_summary_files]
 
-            # Pass 3: Summarize (parallel LLM calls)
+            # Pass 4: Summarize (parallel LLM calls — smart model)
             await self._report(progress_callback, 0.074, "agent:summarizing")
             summaries = await self._summarize_all(
-                client, model, selected, job_description,
+                client, smart, selected, job_description,
                 progress_callback,
             )
 
@@ -126,10 +140,10 @@ class AgentContextGatherer:
                 f"AgentContextGatherer: summarized {len(summaries)} files"
             )
 
-            # Pass 4: Synthesize (1 LLM call)
+            # Pass 5: Synthesize (1 LLM call — smart model)
             await self._report(progress_callback, 0.088, "agent:synthesizing")
             synthesized = await self._synthesize(
-                client, model, summaries, job_description
+                client, smart, summaries, job_description
             )
 
             logger.info(
@@ -142,6 +156,7 @@ class AgentContextGatherer:
                 "agent_files": {
                     "total_screened": len(file_paths),
                     "relevant": relevant,
+                    "import_expanded": import_added,
                     "selected": selected,
                 },
             }
@@ -298,7 +313,40 @@ class AgentContextGatherer:
         return [path for path, relevant in results if relevant]
 
     # ------------------------------------------------------------------
-    # Pass 3: Summarize
+    # Pass 3: Import expansion
+    # ------------------------------------------------------------------
+
+    def _import_expand(
+        self, relevant: list[str], file_paths: list[str],
+    ) -> list[str]:
+        """Add direct imports of relevant files. Pure Python, depth 1.
+
+        Traces forward imports from each relevant file and adds any
+        new files not already in the relevant list. This catches
+        architecturally central files (e.g. base.py, protocols) that
+        are imported by every relevant file but contain no task keywords.
+
+        Args:
+            relevant: Paths the LLM marked as relevant.
+            file_paths: All file paths in the codebase.
+
+        Returns:
+            Merged list: relevant + newly discovered imports.
+        """
+        forward_map, _module_lookup = build_import_graph(
+            self._source_dir, file_paths, self._config.max_file_bytes,
+        )
+        relevant_set = set(relevant)
+        expanded: list[str] = list(relevant)
+        for rel_path in relevant:
+            for dep in forward_map.get(rel_path, set()):
+                if dep not in relevant_set:
+                    relevant_set.add(dep)
+                    expanded.append(dep)
+        return expanded
+
+    # ------------------------------------------------------------------
+    # Pass 4: Summarize
     # ------------------------------------------------------------------
 
     async def _summarize_file(

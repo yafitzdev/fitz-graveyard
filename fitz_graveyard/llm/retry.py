@@ -95,3 +95,34 @@ lm_studio_retry = retry(
     retry=retry_if_exception(is_lm_studio_retryable),
     before_sleep=before_sleep_log(logger, logging.WARNING),
 )
+
+
+def is_llama_cpp_retryable(exception: BaseException) -> bool:
+    """
+    Returns True if the llama.cpp exception should be retried.
+
+    Same as LM Studio retryable conditions, plus 503 (model loading/swapping).
+    """
+    # Reuse LM Studio logic for shared error types
+    if is_lm_studio_retryable(exception):
+        return True
+
+    # Additionally handle 500 from llama-server during model loading
+    try:
+        from openai import APIStatusError
+        if isinstance(exception, APIStatusError) and exception.status_code == 500:
+            return True
+    except ImportError:
+        pass
+
+    return False
+
+
+# Tenacity retry decorator for llama.cpp API calls
+# More attempts + shorter waits to handle model swap latency
+llama_cpp_retry = retry(
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=2, max=30),
+    retry=retry_if_exception(is_llama_cpp_retryable),
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+)

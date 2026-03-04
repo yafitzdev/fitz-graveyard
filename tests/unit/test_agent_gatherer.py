@@ -23,6 +23,8 @@ def _make_config(**kwargs):
 def mock_client():
     client = MagicMock()
     client.model = "test-model"
+    client.fast_model = "test-model"
+    client.smart_model = "test-model"
     client.generate = AsyncMock(return_value="LLM response")
     return client
 
@@ -401,6 +403,48 @@ class TestSynthesize:
 
 
 # ---------------------------------------------------------------------------
+# Pass 3: _import_expand
+# ---------------------------------------------------------------------------
+class TestImportExpand:
+    def test_adds_direct_imports(self, tmp_path):
+        """If a.py imports b.py, and a.py is relevant, b.py should be added."""
+        (tmp_path / "a.py").write_text("from b import helper")
+        (tmp_path / "b.py").write_text("def helper(): pass")
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        result = gatherer._import_expand(["a.py"], ["a.py", "b.py"])
+        assert "a.py" in result
+        assert "b.py" in result
+
+    def test_no_duplicates(self, tmp_path):
+        """If b.py is already relevant, import expand shouldn't duplicate it."""
+        (tmp_path / "a.py").write_text("from b import helper")
+        (tmp_path / "b.py").write_text("def helper(): pass")
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        result = gatherer._import_expand(["a.py", "b.py"], ["a.py", "b.py"])
+        assert result.count("a.py") == 1
+        assert result.count("b.py") == 1
+
+    def test_no_imports_returns_same(self, tmp_path):
+        """Files with no imports should return the same list."""
+        (tmp_path / "a.py").write_text("x = 1")
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        result = gatherer._import_expand(["a.py"], ["a.py"])
+        assert result == ["a.py"]
+
+    def test_depth_one_only(self, tmp_path):
+        """Import expansion should be depth 1 only (a→b, not a→b→c)."""
+        (tmp_path / "a.py").write_text("from b import x")
+        (tmp_path / "b.py").write_text("from c import y\nx = 1")
+        (tmp_path / "c.py").write_text("y = 2")
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        result = gatherer._import_expand(["a.py"], ["a.py", "b.py", "c.py"])
+        assert "a.py" in result
+        assert "b.py" in result
+        # c.py should NOT be added (depth 2)
+        assert "c.py" not in result
+
+
+# ---------------------------------------------------------------------------
 # E2E: gather()
 # ---------------------------------------------------------------------------
 class TestGatherEndToEnd:
@@ -433,6 +477,7 @@ class TestGatherEndToEnd:
         assert agent_files["total_screened"] == 2
         assert "main.py" in agent_files["relevant"]
         assert "util.py" not in agent_files["relevant"]
+        assert "import_expanded" in agent_files
 
     @pytest.mark.asyncio
     async def test_all_screened_out_returns_empty(self, tmp_path, mock_client):
@@ -484,6 +529,48 @@ class TestGatherEndToEnd:
         await gatherer.gather(mock_client, "task")
         for call in mock_client.generate.call_args_list:
             assert call[1]["model"] == "test-model"
+
+    @pytest.mark.asyncio
+    async def test_uses_fast_model_for_screening(self, tmp_path):
+        """Screening should use client.fast_model, summarize/synthesize use client.smart_model."""
+        client = MagicMock()
+        client.fast_model = "fast-3b"
+        client.smart_model = "smart-30b"
+        (tmp_path / "main.py").write_text("x = 1")
+        # screen=YES, summarize, synthesize
+        client.generate = AsyncMock(
+            side_effect=["YES", "Summary", "Synthesized"]
+        )
+        gatherer = AgentContextGatherer(
+            config=_make_config(), source_dir=str(tmp_path)
+        )
+        await gatherer.gather(client, "task")
+
+        calls = client.generate.call_args_list
+        # First call is screening → fast model
+        assert calls[0][1]["model"] == "fast-3b"
+        # Second call is summarize → smart model
+        assert calls[1][1]["model"] == "smart-30b"
+        # Third call is synthesize → smart model
+        assert calls[2][1]["model"] == "smart-30b"
+
+    @pytest.mark.asyncio
+    async def test_agent_model_overrides_tiers(self, tmp_path):
+        """When agent_model is set, it overrides both fast and smart tiers."""
+        client = MagicMock()
+        client.fast_model = "fast-3b"
+        client.smart_model = "smart-30b"
+        (tmp_path / "main.py").write_text("x = 1")
+        client.generate = AsyncMock(
+            side_effect=["YES", "Summary", "Synthesized"]
+        )
+        gatherer = AgentContextGatherer(
+            config=_make_config(agent_model="override-model"),
+            source_dir=str(tmp_path),
+        )
+        await gatherer.gather(client, "task")
+        for call in client.generate.call_args_list:
+            assert call[1]["model"] == "override-model"
 
     @pytest.mark.asyncio
     async def test_total_failure_returns_empty(self, tmp_path, mock_client):

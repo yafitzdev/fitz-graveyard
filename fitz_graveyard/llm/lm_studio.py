@@ -111,6 +111,16 @@ class LMStudioClient:
         self._client = AsyncOpenAI(base_url=base_url, api_key="lm-studio", timeout=timeout)
         self._call_metrics: list[dict] = []
 
+    @property
+    def fast_model(self) -> str:
+        """Model name for fast/screening tasks (same as primary for LM Studio)."""
+        return self.model
+
+    @property
+    def smart_model(self) -> str:
+        """Model name for smart/reasoning tasks (same as primary for LM Studio)."""
+        return self.model
+
     async def health_check(self) -> bool:
         """
         Check LM Studio server health by listing available models.

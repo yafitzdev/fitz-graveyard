@@ -14,6 +14,7 @@ from typing import Any
 
 from fitz_graveyard.config.schema import FitzPlannerConfig
 from fitz_graveyard.llm.client import OllamaClient
+from fitz_graveyard.llm.llama_cpp import LlamaCppClient
 from fitz_graveyard.llm.lm_studio import LMStudioClient
 from fitz_graveyard.llm.memory import MemoryMonitor
 from fitz_graveyard.models.jobs import JobState
@@ -46,7 +47,7 @@ class BackgroundWorker:
         store: JobStore,
         config: FitzPlannerConfig | None = None,
         poll_interval: float = 1.0,
-        ollama_client: OllamaClient | LMStudioClient | None = None,
+        ollama_client: OllamaClient | LMStudioClient | LlamaCppClient | None = None,
         memory_threshold: float = 80.0,
     ) -> None:
         """

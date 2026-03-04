@@ -52,6 +52,16 @@ class OllamaClient:
         self.client = AsyncClient(host=base_url, timeout=httpx.Timeout(timeout))
         self._call_metrics: list[dict] = []
 
+    @property
+    def fast_model(self) -> str:
+        """Model name for fast/screening tasks (same as primary for Ollama)."""
+        return self.model
+
+    @property
+    def smart_model(self) -> str:
+        """Model name for smart/reasoning tasks (same as primary for Ollama)."""
+        return self.model
+
     async def health_check(self) -> bool:
         """
         Check Ollama server health and model availability.

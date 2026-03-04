@@ -276,6 +276,7 @@ class PlanRenderer:
                 sections.append("")
                 total = agent_files.get("total_screened", 0)
                 relevant = agent_files.get("relevant", [])
+                import_expanded = agent_files.get("import_expanded", 0)
                 selected = agent_files.get("selected", [])
                 sections.append(
                     f"**Screened**: {total} files"
@@ -287,6 +288,11 @@ class PlanRenderer:
                 for f in relevant:
                     sections.append(f"- {f}")
                 sections.append("")
+                if import_expanded > 0:
+                    sections.append(
+                        f"**Import expansion**: +{import_expanded} added"
+                    )
+                    sections.append("")
                 sections.append(
                     f"**Selected for summary**: {len(selected)} files"
                 )

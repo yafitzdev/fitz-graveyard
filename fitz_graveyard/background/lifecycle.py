@@ -12,6 +12,7 @@ from fitz_graveyard.background.worker import BackgroundWorker
 from fitz_graveyard.config.schema import FitzPlannerConfig
 from fitz_graveyard.llm.client import OllamaClient
 from fitz_graveyard.llm.factory import create_llm_client
+from fitz_graveyard.llm.llama_cpp import LlamaCppClient
 from fitz_graveyard.llm.lm_studio import LMStudioClient
 from fitz_graveyard.models.sqlite_store import SQLiteJobStore
 
@@ -40,7 +41,7 @@ class ServerLifecycle:
         self._store = SQLiteJobStore(db_path)
 
         # Create LLM client if config provided
-        self._ollama_client: OllamaClient | LMStudioClient | None = None
+        self._ollama_client: OllamaClient | LMStudioClient | LlamaCppClient | None = None
         if config:
             self._ollama_client = create_llm_client(config)
 
@@ -64,7 +65,7 @@ class ServerLifecycle:
         return self._worker
 
     @property
-    def ollama_client(self) -> OllamaClient | LMStudioClient | None:
+    def ollama_client(self) -> OllamaClient | LMStudioClient | LlamaCppClient | None:
         """Get the LLM client (for inspection/testing)."""
         return self._ollama_client
 
@@ -81,6 +82,10 @@ class ServerLifecycle:
         Logs any interrupted jobs found during crash recovery.
         """
         logger.info("Starting server lifecycle...")
+
+        # Start llama-server subprocess if using llama_cpp provider
+        if isinstance(self._ollama_client, LlamaCppClient):
+            await self._ollama_client.start()
 
         # Initialize DB schema and run crash recovery
         await self._store.initialize()
@@ -118,6 +123,10 @@ class ServerLifecycle:
 
         # Stop worker
         await self._worker.stop()
+
+        # Stop llama-server if running
+        if isinstance(self._ollama_client, LlamaCppClient):
+            await self._ollama_client.stop()
 
         # Close DB
         await self._store.close()
