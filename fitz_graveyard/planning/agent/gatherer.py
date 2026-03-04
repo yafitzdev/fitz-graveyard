@@ -4,15 +4,16 @@ AgentContextGatherer — brute-force parallel file screening pipeline.
 
 Pipeline:
   Pass 1:  Map            (pure Python — pathlib walk, build file list)
-  Pass 2:  Screen         (N parallel LLM calls — "is this file relevant?")
+  Pass 2a: Broad screen   (N parallel LLM calls — fast model, "is this relevant?")
+  Pass 2b: Refine screen  (M parallel LLM calls — mid model on broad candidates)
   Pass 3:  Import expand  (pure Python — trace forward imports from relevant files)
   Pass 4:  Summarize      (N parallel LLM calls — one per selected file)
   Pass 5:  Synthesize     (1 LLM call — combine summaries into context doc)
 
-Every file in the codebase is shown to the LLM individually for
-relevance screening. No heuristics, no graph traversal, no truncation.
-Parallelized with asyncio.Semaphore for MoE models that handle
-concurrent requests efficiently.
+Two-stage screening cascade: fast model (4B) screens all files for broad
+relevance (high recall, many false positives), then mid model (30B MoE)
+re-screens the candidates for precise selection (high precision).
+Parallelized with asyncio.Semaphore.
 """
 
 import asyncio
@@ -89,20 +90,38 @@ class AgentContextGatherer:
                 f"AgentContextGatherer: mapped {len(file_paths)} files"
             )
 
-            # Pass 2: Screen all files (parallel LLM calls — fast model)
+            # Pass 2a: Broad screen (parallel LLM calls — fast model)
             await self._report(progress_callback, 0.062, "agent:screening")
-            relevant = await self._screen_all(
+            broad = await self._screen_all(
                 client, fast, file_paths, job_description,
                 progress_callback,
             )
 
-            if not relevant:
+            if not broad:
                 logger.info("AgentContextGatherer: no relevant files found")
                 return empty
 
             logger.info(
-                f"AgentContextGatherer: screening found {len(relevant)} "
-                f"relevant files out of {len(file_paths)}: "
+                f"AgentContextGatherer: broad screen found {len(broad)} "
+                f"candidates out of {len(file_paths)}"
+            )
+
+            # Pass 2b: Precise screen (parallel LLM calls — mid model)
+            await self._report(progress_callback, 0.068, "agent:refining")
+            relevant = await self._screen_all(
+                client, mid, broad, job_description,
+            )
+
+            if not relevant:
+                logger.info(
+                    "AgentContextGatherer: mid screen rejected all, "
+                    "falling back to broad results"
+                )
+                relevant = broad
+
+            logger.info(
+                f"AgentContextGatherer: refined to {len(relevant)} "
+                f"relevant files from {len(broad)} candidates: "
                 + ", ".join(relevant)
             )
 
@@ -156,6 +175,7 @@ class AgentContextGatherer:
                 "raw_summaries": raw_summaries,
                 "agent_files": {
                     "total_screened": len(file_paths),
+                    "broad": broad,
                     "relevant": relevant,
                     "import_expanded": import_added,
                     "selected": selected,

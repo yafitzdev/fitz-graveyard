@@ -40,13 +40,14 @@ class TestEnsureMinExistingFiles:
         paths = [e.split(" — ")[0].split(" - ")[0].strip() for e in result["existing_files"]]
         assert "src/e.py" in paths
 
-    def test_noop_when_enough(self):
-        """>= 6 files → unchanged."""
+    def test_backfills_even_when_enough(self):
+        """Always backfills missing summarized files, even if >= 6."""
         files = [f"src/{c}.py — does {c}" for c in "abcdefg"]
         merged = {"existing_files": files[:]}
         prior = {"_raw_summaries": self._make_summaries(["src/z.py"])}
         result = ensure_min_existing_files(merged, prior)
-        assert result["existing_files"] == files
+        paths = [e.split(" — ")[0].split(" - ")[0].strip() for e in result["existing_files"]]
+        assert "src/z.py" in paths
 
     def test_noop_without_summaries(self):
         """No raw summaries → unchanged."""
@@ -55,12 +56,12 @@ class TestEnsureMinExistingFiles:
         assert len(result["existing_files"]) == 1
 
     def test_max_cap(self):
-        """Never exceeds MAX_EXISTING_FILES (10)."""
+        """Never exceeds MAX_EXISTING_FILES (25)."""
         merged = {"existing_files": ["src/a.py — A"]}
-        paths = [f"src/{i}.py" for i in range(20)]
+        paths = [f"src/{i}.py" for i in range(30)]
         prior = {"_raw_summaries": self._make_summaries(paths)}
         result = ensure_min_existing_files(merged, prior)
-        assert len(result["existing_files"]) <= 10
+        assert len(result["existing_files"]) <= 25
 
 
 # ---------------------------------------------------------------------------

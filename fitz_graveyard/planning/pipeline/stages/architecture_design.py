@@ -232,7 +232,7 @@ class ArchitectureDesignStage(PipelineStage):
             "design": design.model_dump(),
         }
 
-    _MAX_VERIFY_FILES = 5
+    _MAX_VERIFY_FILES = 10
     _MAX_VERIFY_BYTES = 50_000
 
     async def _verify_with_source(
@@ -255,10 +255,19 @@ class ArchitectureDesignStage(PipelineStage):
 
         # Extract file paths from reasoning (e.g. fitz_ai/llm/providers/openai.py)
         raw_paths = re.findall(r'[\w./\-]+\.py\b', reasoning)
-        # Deduplicate preserving order
+        # Also include files from raw summaries — agent-selected files
+        # the reasoning may not have mentioned but that could challenge
+        # the proposed approach
+        raw_summaries = prior_outputs.get("_raw_summaries", "")
+        if raw_summaries:
+            summary_paths = re.findall(r"^###\s+(.+?)(?:\s*$)", raw_summaries, re.MULTILINE)
+            raw_paths = [p.strip() for p in summary_paths] + raw_paths
+
+        # Deduplicate preserving order (summary files first)
         seen: set[str] = set()
         unique_paths: list[str] = []
         for p in raw_paths:
+            p = p.strip()
             if p not in seen and "/" in p:  # Must have a directory component
                 seen.add(p)
                 unique_paths.append(p)

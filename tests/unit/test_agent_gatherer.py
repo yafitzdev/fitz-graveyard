@@ -522,10 +522,11 @@ class TestGatherEndToEnd:
         (tmp_path / "main.py").write_text("def run(): pass")
         (tmp_path / "util.py").write_text("def helper(): pass")
 
-        # Calls: screen(main.py)=YES, screen(util.py)=NO,
+        # Calls: broad_screen(main.py)=YES, broad_screen(util.py)=NO,
+        #        refine_screen(main.py)=YES,
         #        summarize(main.py), synthesize
         mock_client.generate = AsyncMock(
-            side_effect=["YES", "NO", "Summary of main", "Synthesized doc"]
+            side_effect=["YES", "NO", "YES", "Summary of main", "Synthesized doc"]
         )
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
         result = await gatherer.gather(mock_client, "add logging")
@@ -556,8 +557,9 @@ class TestGatherEndToEnd:
     @pytest.mark.asyncio
     async def test_all_summaries_fail_returns_empty(self, tmp_path, mock_client):
         (tmp_path / "main.py").write_text("x = 1")
+        # broad=YES, refine=YES, summarize=boom
         mock_client.generate = AsyncMock(
-            side_effect=["YES", RuntimeError("boom")]
+            side_effect=["YES", "YES", RuntimeError("boom")]
         )
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
         result = await gatherer.gather(mock_client, "task")
@@ -566,8 +568,9 @@ class TestGatherEndToEnd:
     @pytest.mark.asyncio
     async def test_uses_agent_model_config(self, tmp_path, mock_client):
         (tmp_path / "main.py").write_text("x = 1")
+        # broad=YES, refine=YES, summarize, synthesize
         mock_client.generate = AsyncMock(
-            side_effect=["YES", "Summary", "Synthesized"]
+            side_effect=["YES", "YES", "Summary", "Synthesized"]
         )
         gatherer = AgentContextGatherer(
             config=_make_config(agent_model="custom-model"),
@@ -580,8 +583,9 @@ class TestGatherEndToEnd:
     @pytest.mark.asyncio
     async def test_falls_back_to_client_model(self, tmp_path, mock_client):
         (tmp_path / "main.py").write_text("x = 1")
+        # broad=YES, refine=YES, summarize, synthesize
         mock_client.generate = AsyncMock(
-            side_effect=["YES", "Summary", "Synthesized"]
+            side_effect=["YES", "YES", "Summary", "Synthesized"]
         )
         gatherer = AgentContextGatherer(
             config=_make_config(), source_dir=str(tmp_path)
@@ -592,15 +596,15 @@ class TestGatherEndToEnd:
 
     @pytest.mark.asyncio
     async def test_uses_correct_tier_per_pass(self, tmp_path):
-        """Screening=fast, summarize=mid, synthesize=mid."""
+        """Broad screen=fast, refine=mid, summarize=mid, synthesize=mid."""
         client = MagicMock()
         client.fast_model = "fast-3b"
         client.mid_model = "mid-30b"
         client.smart_model = "smart-27b"
         (tmp_path / "main.py").write_text("x = 1")
-        # screen=YES, summarize, synthesize
+        # broad=YES, refine=YES, summarize, synthesize
         client.generate = AsyncMock(
-            side_effect=["YES", "Summary", "Synthesized"]
+            side_effect=["YES", "YES", "Summary", "Synthesized"]
         )
         gatherer = AgentContextGatherer(
             config=_make_config(), source_dir=str(tmp_path)
@@ -608,12 +612,14 @@ class TestGatherEndToEnd:
         await gatherer.gather(client, "task")
 
         calls = client.generate.call_args_list
-        # First call is screening → fast model
+        # First call is broad screening → fast model
         assert calls[0][1]["model"] == "fast-3b"
-        # Second call is summarize → mid model
+        # Second call is refine screening → mid model
         assert calls[1][1]["model"] == "mid-30b"
-        # Third call is synthesize → mid model
+        # Third call is summarize → mid model
         assert calls[2][1]["model"] == "mid-30b"
+        # Fourth call is synthesize → mid model
+        assert calls[3][1]["model"] == "mid-30b"
 
     @pytest.mark.asyncio
     async def test_agent_model_overrides_tiers(self, tmp_path):
@@ -622,8 +628,9 @@ class TestGatherEndToEnd:
         client.fast_model = "fast-3b"
         client.smart_model = "smart-30b"
         (tmp_path / "main.py").write_text("x = 1")
+        # broad=YES, refine=YES, summarize, synthesize
         client.generate = AsyncMock(
-            side_effect=["YES", "Summary", "Synthesized"]
+            side_effect=["YES", "YES", "Summary", "Synthesized"]
         )
         gatherer = AgentContextGatherer(
             config=_make_config(agent_model="override-model"),
@@ -648,7 +655,8 @@ class TestGatherEndToEnd:
         for i in range(5):
             (tmp_path / f"f{i}.py").write_text(f"x = {i}")
 
-        responses = ["YES"] * 5 + ["Summary"] * 2 + ["Synthesized"]
+        # broad=YES*5, refine=YES*5, summarize*2, synthesize
+        responses = ["YES"] * 5 + ["YES"] * 5 + ["Summary"] * 2 + ["Synthesized"]
         mock_client.generate = AsyncMock(side_effect=responses)
         gatherer = AgentContextGatherer(
             config=_make_config(max_summary_files=2),
@@ -667,8 +675,9 @@ class TestProgressCallback:
     @pytest.mark.asyncio
     async def test_all_phases_reported(self, tmp_path, mock_client):
         (tmp_path / "main.py").write_text("x = 1")
+        # broad=YES, refine=YES, summarize, synthesize
         mock_client.generate = AsyncMock(
-            side_effect=["YES", "Summary", "Synthesized"]
+            side_effect=["YES", "YES", "Summary", "Synthesized"]
         )
         phases = []
 
@@ -681,14 +690,16 @@ class TestProgressCallback:
         phase_prefixes = [p.split(":")[1] if ":" in p else p for p in phases]
         assert "mapping" in phase_prefixes
         assert "screening" in phase_prefixes or any("screening" in p for p in phases)
+        assert any("refining" in p for p in phases)
         assert any("summarizing" in p for p in phases)
         assert "synthesizing" in phase_prefixes
 
     @pytest.mark.asyncio
     async def test_async_callback_awaited(self, tmp_path, mock_client):
         (tmp_path / "main.py").write_text("x = 1")
+        # broad=YES, refine=YES, summarize, synthesize
         mock_client.generate = AsyncMock(
-            side_effect=["YES", "Summary", "Synthesized"]
+            side_effect=["YES", "YES", "Summary", "Synthesized"]
         )
         calls = []
 

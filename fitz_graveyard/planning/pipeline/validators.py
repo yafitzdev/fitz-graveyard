@@ -17,7 +17,7 @@ from fitz_graveyard.planning.pipeline.stages.base import SYSTEM_PROMPT, extract_
 logger = logging.getLogger(__name__)
 
 _MIN_EXISTING_FILES = 6
-_MAX_EXISTING_FILES = 10
+_MAX_EXISTING_FILES = 25
 _MIN_ADRS = 2
 _MIN_RISKS = 2
 
@@ -41,7 +41,7 @@ def ensure_min_existing_files(
     existing = merged.get("existing_files", [])
     raw_summaries = prior_outputs.get("_raw_summaries", "")
 
-    if len(existing) >= _MIN_EXISTING_FILES or not raw_summaries:
+    if not raw_summaries:
         return merged
 
     # Parse file paths from raw summary headers (### path/to/file.py)

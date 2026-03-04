@@ -18,7 +18,7 @@ Think through this carefully:
 
 6. Who are the real stakeholders and what do they specifically care about — not job titles, but concrete concerns?
 
-7. Existing files: These are files that ALREADY EXIST in the codebase. For each, briefly note what it does and why it matters to this task. List only files that will be read, modified, or whose contracts matter. If no codebase context was provided, say so.
+7. Existing files: These are files that ALREADY EXIST in the codebase. For each, briefly note what it does and why it matters to this task. Be comprehensive — list ALL files from the codebase context that are relevant: files that will change, files whose APIs constrain the design, files whose patterns should be followed, and files needed to understand the integration surface. If no codebase context was provided, say so.
 
 8. Needed artifacts: What files must be CREATED that don't exist yet? These are your concrete deliverables. Name exact filenames and what each one does. If the deliverable IS a single file, say so — the project scope is that file. Do NOT list existing files here.
 
