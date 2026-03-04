@@ -613,6 +613,11 @@ class PipelineStage(ABC):
             ctx = ctx[:self._MAX_RAW_SUMMARIES_CHARS] + "\n\n[... summaries trimmed for brevity]"
         return ctx
 
+    @staticmethod
+    def _get_source_dir(prior_outputs: dict[str, Any]) -> str | None:
+        """Get the codebase source directory for reading actual source files."""
+        return prior_outputs.get("_source_dir")
+
     def _get_implementation_check(self, prior_outputs: dict[str, Any]) -> str:
         """Format the implementation check result for injection into prompts.
 

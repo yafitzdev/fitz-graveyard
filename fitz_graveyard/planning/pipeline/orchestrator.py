@@ -184,6 +184,10 @@ class PlanningPipeline:
                 if hasattr(result_or_coro, '__await__'):
                     await result_or_coro
 
+        # Inject source_dir so stages can read actual source for verification
+        if agent is not None:
+            prior_outputs["_source_dir"] = agent._source_dir
+
         # Inject gathered context for stages to consume
         # _gathered_context = synthesized (concise, for extraction calls)
         # _raw_summaries = per-file detail (for reasoning passes)

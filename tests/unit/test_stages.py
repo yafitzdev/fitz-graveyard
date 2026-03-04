@@ -1192,3 +1192,114 @@ class TestSelfCritique:
 
         await stage._self_critique(mock_client, "Original.", "Build API")
         assert "context:critiquing" in reported
+
+
+class TestVerifyWithSource:
+    """Test architecture source verification step."""
+
+    @pytest.fixture
+    def stage(self):
+        return ArchitectureDesignStage()
+
+    @pytest.mark.asyncio
+    async def test_skips_when_no_source_dir(self, stage):
+        """Returns reasoning unchanged when _source_dir not in prior_outputs."""
+        original = "Use hook-based approach via fitz_ai/core/instrumentation.py"
+        result = await stage._verify_with_source(
+            AsyncMock(), original, "task", {},
+        )
+        assert result == original
+
+    @pytest.mark.asyncio
+    async def test_skips_when_no_file_refs(self, stage):
+        """Returns reasoning unchanged when no file paths found."""
+        original = "Use a simple approach with no specific files mentioned."
+        result = await stage._verify_with_source(
+            AsyncMock(), original, "task", {"_source_dir": "/tmp"},
+        )
+        assert result == original
+
+    @pytest.mark.asyncio
+    async def test_reads_source_and_calls_llm(self, stage, tmp_path):
+        """Reads referenced files and sends to LLM for verification."""
+        # Create a source file
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "api.py").write_text("def hello(): return 'world'")
+
+        client = AsyncMock()
+        client.generate.return_value = "Revised: approach works with api.py"
+
+        reasoning = "We should modify pkg/api.py to add tracking."
+        result = await stage._verify_with_source(
+            client, reasoning, "task",
+            {"_source_dir": str(tmp_path)},
+        )
+
+        assert result == "Revised: approach works with api.py"
+        # Verify LLM was called with source content
+        call_args = client.generate.call_args
+        prompt = call_args[1]["messages"][1]["content"]
+        assert "def hello()" in prompt
+        assert "pkg/api.py" in prompt
+
+    @pytest.mark.asyncio
+    async def test_reports_verifying_substep(self, stage, tmp_path):
+        """Reports 'verifying' substep for CLI progress display."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "api.py").write_text("x = 1")
+
+        reported = []
+
+        async def track(phase: str) -> None:
+            reported.append(phase)
+
+        stage.set_substep_callback(track)
+        client = AsyncMock()
+        client.generate.return_value = "Verified reasoning about pkg/api.py"
+
+        await stage._verify_with_source(
+            client, "Check pkg/api.py for issues.", "task",
+            {"_source_dir": str(tmp_path)},
+        )
+        assert "architecture_design:verifying" in reported
+
+    @pytest.mark.asyncio
+    async def test_graceful_on_llm_error(self, stage, tmp_path):
+        """Returns original reasoning if LLM call fails."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        (pkg / "api.py").write_text("x = 1")
+
+        client = AsyncMock()
+        client.generate.side_effect = RuntimeError("LLM crashed")
+
+        original = "Check pkg/api.py for the hook interface."
+        result = await stage._verify_with_source(
+            client, original, "task",
+            {"_source_dir": str(tmp_path)},
+        )
+        assert result == original
+
+    @pytest.mark.asyncio
+    async def test_caps_at_max_files(self, stage, tmp_path):
+        """Only reads up to _MAX_VERIFY_FILES files."""
+        pkg = tmp_path / "pkg"
+        pkg.mkdir()
+        for i in range(10):
+            (pkg / f"file{i}.py").write_text(f"x = {i}")
+
+        client = AsyncMock()
+        client.generate.return_value = "Verified all files"
+
+        refs = " ".join(f"pkg/file{i}.py" for i in range(10))
+        await stage._verify_with_source(
+            client, refs, "task",
+            {"_source_dir": str(tmp_path)},
+        )
+
+        prompt = client.generate.call_args[1]["messages"][1]["content"]
+        # Count how many file headers appear (### pkg/fileN.py)
+        file_headers = [l for l in prompt.split("\n") if l.startswith("### pkg/file")]
+        assert len(file_headers) == stage._MAX_VERIFY_FILES
