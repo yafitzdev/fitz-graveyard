@@ -51,7 +51,7 @@ class AgentConfig(BaseModel):
     max_summary_files: int = Field(
         default=25,
         ge=1,
-        le=50,
+        le=500,
         description="Maximum number of files to summarize during context gathering",
     )
     max_file_bytes: int = Field(
@@ -145,6 +145,9 @@ class LlamaCppModelConfig(BaseModel):
     path: str = Field(default="", description="GGUF filename (relative to models_dir)")
     context_size: int = Field(default=8192, description="Context window size")
     gpu_layers: int = Field(default=-1, description="GPU layers to offload (-1 = all)")
+    flash_attention: bool = Field(default=False, description="Enable flash attention")
+    cache_type_k: str | None = Field(default=None, description="KV cache type for keys (e.g. q4_0)")
+    cache_type_v: str | None = Field(default=None, description="KV cache type for values (e.g. q4_0)")
 
 
 class LlamaCppConfig(BaseModel):
@@ -161,6 +164,10 @@ class LlamaCppConfig(BaseModel):
     fast_model: LlamaCppModelConfig = Field(
         default_factory=LlamaCppModelConfig,
         description="Small model for screening (fast YES/NO calls)",
+    )
+    mid_model: LlamaCppModelConfig | None = Field(
+        default=None,
+        description="Mid-tier model for summarization (None = use fast_model)",
     )
     smart_model: LlamaCppModelConfig | None = Field(
         default=None,

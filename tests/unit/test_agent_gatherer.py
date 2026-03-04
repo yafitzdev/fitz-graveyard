@@ -24,6 +24,7 @@ def mock_client():
     client = MagicMock()
     client.model = "test-model"
     client.fast_model = "test-model"
+    client.mid_model = "test-model"
     client.smart_model = "test-model"
     client.generate = AsyncMock(return_value="LLM response")
     return client
@@ -445,6 +446,65 @@ class TestImportExpand:
 
 
 # ---------------------------------------------------------------------------
+# Prioritize for summary
+# ---------------------------------------------------------------------------
+class TestPrioritizeForSummary:
+    def test_code_before_docs(self):
+        paths = [
+            "docs/ARCHITECTURE.md",
+            "fitz_ai/llm/providers/openai.py",
+            "docs/CONFIG.md",
+            "fitz_ai/core/answer.py",
+        ]
+        result = AgentContextGatherer._prioritize_for_summary(paths)
+        assert result[:2] == [
+            "fitz_ai/llm/providers/openai.py",
+            "fitz_ai/core/answer.py",
+        ]
+        assert set(result[2:]) == {"docs/ARCHITECTURE.md", "docs/CONFIG.md"}
+
+    def test_tests_between_code_and_docs(self):
+        paths = [
+            "docs/README.md",
+            "tests/unit/test_foo.py",
+            "fitz_ai/engine.py",
+        ]
+        result = AgentContextGatherer._prioritize_for_summary(paths)
+        assert result[0] == "fitz_ai/engine.py"
+        assert result[1] == "tests/unit/test_foo.py"
+        assert result[2] == "docs/README.md"
+
+    def test_preserves_order_within_tier(self):
+        paths = [
+            "fitz_ai/b.py",
+            "fitz_ai/a.py",
+            "fitz_ai/c.py",
+        ]
+        result = AgentContextGatherer._prioritize_for_summary(paths)
+        assert result == ["fitz_ai/b.py", "fitz_ai/a.py", "fitz_ai/c.py"]
+
+    def test_examples_and_github_are_low_priority(self):
+        paths = [
+            "examples/01_quickstart.py",
+            ".github/workflows/ci.yml",
+            "fitz_ai/core.py",
+        ]
+        result = AgentContextGatherer._prioritize_for_summary(paths)
+        assert result[0] == "fitz_ai/core.py"
+
+    def test_config_files_between_code_and_tests(self):
+        paths = [
+            "tests/test_x.py",
+            "pyproject.toml",
+            "fitz_ai/main.py",
+        ]
+        result = AgentContextGatherer._prioritize_for_summary(paths)
+        assert result[0] == "fitz_ai/main.py"
+        assert result[1] == "pyproject.toml"
+        assert result[2] == "tests/test_x.py"
+
+
+# ---------------------------------------------------------------------------
 # E2E: gather()
 # ---------------------------------------------------------------------------
 class TestGatherEndToEnd:
@@ -531,11 +591,12 @@ class TestGatherEndToEnd:
             assert call[1]["model"] == "test-model"
 
     @pytest.mark.asyncio
-    async def test_uses_fast_model_for_screening(self, tmp_path):
-        """Screening should use client.fast_model, summarize/synthesize use client.smart_model."""
+    async def test_uses_correct_tier_per_pass(self, tmp_path):
+        """Screening=fast, summarize=mid, synthesize=mid."""
         client = MagicMock()
         client.fast_model = "fast-3b"
-        client.smart_model = "smart-30b"
+        client.mid_model = "mid-30b"
+        client.smart_model = "smart-27b"
         (tmp_path / "main.py").write_text("x = 1")
         # screen=YES, summarize, synthesize
         client.generate = AsyncMock(
@@ -549,10 +610,10 @@ class TestGatherEndToEnd:
         calls = client.generate.call_args_list
         # First call is screening → fast model
         assert calls[0][1]["model"] == "fast-3b"
-        # Second call is summarize → smart model
-        assert calls[1][1]["model"] == "smart-30b"
-        # Third call is synthesize → smart model
-        assert calls[2][1]["model"] == "smart-30b"
+        # Second call is summarize → mid model
+        assert calls[1][1]["model"] == "mid-30b"
+        # Third call is synthesize → mid model
+        assert calls[2][1]["model"] == "mid-30b"
 
     @pytest.mark.asyncio
     async def test_agent_model_overrides_tiers(self, tmp_path):

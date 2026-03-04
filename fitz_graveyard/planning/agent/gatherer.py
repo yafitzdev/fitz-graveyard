@@ -74,6 +74,7 @@ class AgentContextGatherer:
             return empty
 
         fast = self._config.agent_model or client.fast_model
+        mid = self._config.agent_model or client.mid_model
         smart = self._config.agent_model or client.smart_model
 
         try:
@@ -114,8 +115,8 @@ class AgentContextGatherer:
                     f"{import_added} files"
                 )
 
-            # Cap at max_summary_files for summarization
-            selected = expanded
+            # Prioritize code files over docs, then cap
+            selected = self._prioritize_for_summary(expanded)
             if len(selected) > self._config.max_summary_files:
                 logger.info(
                     f"AgentContextGatherer: capping {len(selected)} relevant "
@@ -123,10 +124,10 @@ class AgentContextGatherer:
                 )
                 selected = selected[:self._config.max_summary_files]
 
-            # Pass 4: Summarize (parallel LLM calls — smart model)
+            # Pass 4: Summarize (parallel LLM calls — mid model)
             await self._report(progress_callback, 0.074, "agent:summarizing")
             summaries = await self._summarize_all(
-                client, smart, selected, job_description,
+                client, mid, selected, job_description,
                 progress_callback,
             )
 
@@ -140,10 +141,10 @@ class AgentContextGatherer:
                 f"AgentContextGatherer: summarized {len(summaries)} files"
             )
 
-            # Pass 5: Synthesize (1 LLM call — smart model)
+            # Pass 5: Synthesize (1 LLM call — mid model)
             await self._report(progress_callback, 0.088, "agent:synthesizing")
             synthesized = await self._synthesize(
-                client, smart, summaries, job_description
+                client, mid, summaries, job_description
             )
 
             logger.info(
@@ -344,6 +345,33 @@ class AgentContextGatherer:
                     relevant_set.add(dep)
                     expanded.append(dep)
         return expanded
+
+    @staticmethod
+    def _prioritize_for_summary(paths: list[str]) -> list[str]:
+        """Sort paths so code files come before docs/tests/examples.
+
+        Priority tiers (lower = summarized first):
+          0: source code (.py under the main package)
+          1: config/build files (.yaml, .toml, .cfg, etc.)
+          2: tests
+          3: everything else (docs, examples, tools, .md, etc.)
+
+        Within each tier, original order is preserved.
+        """
+        _DOC_DIRS = {"docs", "examples", "tools", ".fitz-graveyard", ".github"}
+        _TEST_DIRS = {"tests", "test"}
+
+        def _tier(p: str) -> int:
+            first_dir = p.split("/")[0] if "/" in p else ""
+            if first_dir in _TEST_DIRS:
+                return 2
+            if first_dir in _DOC_DIRS or p.endswith(".md"):
+                return 3
+            if p.endswith(".py"):
+                return 0
+            return 1
+
+        return sorted(paths, key=_tier)
 
     # ------------------------------------------------------------------
     # Pass 4: Summarize

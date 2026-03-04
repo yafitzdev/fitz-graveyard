@@ -89,6 +89,7 @@ class LlamaCppClient:
         server_path: str,
         models_dir: str,
         fast_model: "LlamaCppModelConfig",
+        mid_model: "LlamaCppModelConfig | None" = None,
         smart_model: "LlamaCppModelConfig | None" = None,
         port: int = 8012,
         timeout: int = 300,
@@ -103,6 +104,7 @@ class LlamaCppClient:
         self._server_path = server_path
         self._models_dir = models_dir
         self._fast_model = fast_model
+        self._mid_model = mid_model or fast_model
         self._smart_model = smart_model or fast_model
         self._port = port
         self._timeout = timeout
@@ -128,9 +130,23 @@ class LlamaCppClient:
         return self._fast_model.path
 
     @property
+    def mid_model(self) -> str:
+        """Model name for mid-tier/summarization tasks."""
+        return self._mid_model.path
+
+    @property
     def smart_model(self) -> str:
         """Model name for smart/reasoning tasks."""
         return self._smart_model.path
+
+    @property
+    def active_model(self) -> str:
+        """Path of the model currently loaded in llama-server."""
+        if self._active_tier == "smart":
+            return self._smart_model.path
+        if self._active_tier == "mid":
+            return self._mid_model.path
+        return self._fast_model.path
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -140,9 +156,10 @@ class LlamaCppClient:
         """Start llama-server subprocess for the given tier.
 
         Args:
-            tier: "fast" or "smart" — determines which model config to use.
+            tier: "fast", "mid", or "smart" — determines which model config to use.
         """
-        model_cfg = self._fast_model if tier == "fast" else self._smart_model
+        tier_map = {"fast": self._fast_model, "mid": self._mid_model, "smart": self._smart_model}
+        model_cfg = tier_map.get(tier, self._fast_model)
         model_path = str(Path(self._models_dir) / model_cfg.path)
 
         cmd = [
@@ -153,6 +170,12 @@ class LlamaCppClient:
             "-c", str(model_cfg.context_size),
             "-ngl", str(model_cfg.gpu_layers),
         ]
+        if model_cfg.flash_attention:
+            cmd.extend(["--flash-attn", "on"])
+        if model_cfg.cache_type_k:
+            cmd.extend(["--cache-type-k", model_cfg.cache_type_k])
+        if model_cfg.cache_type_v:
+            cmd.extend(["--cache-type-v", model_cfg.cache_type_v])
 
         logger.info(
             f"Starting llama-server ({tier}): {' '.join(cmd)}"
@@ -199,13 +222,21 @@ class LlamaCppClient:
         self._client = None
         logger.info("llama-server stopped")
 
+    async def ensure_model(self, model_name: str) -> None:
+        """Switch to the tier for the given model name.
+
+        Public API for callers that need to pre-load a specific tier
+        (e.g. orchestrator switching from smart back to mid after agent
+        gathering).
+        """
+        await self._ensure_tier(model_name)
+
     async def _ensure_tier(self, model_name: str | None) -> None:
         """Restart server if the requested model needs a different tier.
 
         Args:
             model_name: Model name from generate() call.
-                        If it matches smart_model, ensures "smart" tier.
-                        Otherwise ensures "fast" tier.
+                        Resolved to tier by matching against model paths.
         """
         if model_name is None:
             # No override — use whatever is currently loaded
@@ -213,7 +244,16 @@ class LlamaCppClient:
                 await self.start("fast")
             return
 
-        needed = "smart" if model_name == self._smart_model.path else "fast"
+        # Resolve tier from model name. Check smart first, then mid,
+        # then fall back to fast. Skip mid if it has the same path as fast.
+        if model_name == self._smart_model.path:
+            needed = "smart"
+        elif (model_name == self._mid_model.path
+              and self._mid_model.path != self._fast_model.path):
+            needed = "mid"
+        else:
+            needed = "fast"
+
         if self._active_tier == needed:
             return
 

@@ -48,6 +48,7 @@ def create_llm_client(
             server_path=cfg.server_path,
             models_dir=cfg.models_dir,
             fast_model=cfg.fast_model,
+            mid_model=cfg.mid_model,
             smart_model=cfg.smart_model,
             port=cfg.port,
             timeout=cfg.timeout,

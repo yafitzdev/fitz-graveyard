@@ -117,9 +117,17 @@ class LMStudioClient:
         return self.model
 
     @property
+    def mid_model(self) -> str:
+        """Model name for mid-tier tasks (same as primary for LM Studio)."""
+        return self.model
+
+    @property
     def smart_model(self) -> str:
         """Model name for smart/reasoning tasks (same as primary for LM Studio)."""
         return self.model
+
+    async def ensure_model(self, model_name: str) -> None:
+        """No-op for LM Studio (single model, no tier switching)."""
 
     async def health_check(self) -> bool:
         """

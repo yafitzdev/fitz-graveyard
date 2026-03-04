@@ -315,10 +315,10 @@ async def _run_inline(
     start = time.monotonic()
 
     # Resolve display model name from active provider
-    if config.provider == "llama_cpp":
-        model_name = config.llama_cpp.fast_model.path
-    elif config.provider == "lm_studio":
+    if config.provider == "lm_studio":
         model_name = config.lm_studio.model
+    elif config.provider == "llama_cpp":
+        model_name = config.llama_cpp.fast_model.path
     else:
         model_name = config.ollama.model
 
@@ -363,6 +363,10 @@ async def _run_inline(
                         if desc:
                             log_lines.append(f"{time.strftime('%H:%M:%S')} {desc}")
                         last_phase = phase
+
+                    # Update model name dynamically for llama_cpp
+                    if isinstance(client, LlamaCppClient):
+                        model_name = client.active_model
 
                     live.update(_make_live_display(
                         description, progress, elapsed,
