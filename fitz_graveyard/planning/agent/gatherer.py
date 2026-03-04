@@ -7,12 +7,14 @@ Pipeline:
   Pass 2a: Broad screen   (N parallel LLM calls — fast model, "is this relevant?")
   Pass 2b: Refine screen  (M parallel LLM calls — mid model on broad candidates)
   Pass 3:  Import expand  (pure Python — trace forward imports from relevant files)
-  Pass 4:  Summarize      (N parallel LLM calls — one per selected file)
-  Pass 5:  Synthesize     (1 LLM call — combine summaries into context doc)
+  Pass 4:  Read raw source (pure Python — stuff actual source into context)
 
 Two-stage screening cascade: fast model (4B) screens all files for broad
 relevance (high recall, many false positives), then mid model (30B MoE)
 re-screens the candidates for precise selection (high precision).
+Raw source is stuffed directly into the planning context — no summarization
+or synthesis LLM calls. Files sorted by import connectivity; truncated at
+a char budget so they fit in the reasoning model's context window.
 Parallelized with asyncio.Semaphore.
 """
 
@@ -47,8 +49,9 @@ class AgentContextGatherer:
     """
     Brute-force parallel pipeline to gather codebase context.
 
-    Every file is individually screened by the LLM for relevance.
-    No keyword matching, no import graphs, no structural index truncation.
+    Every file is individually screened by the LLM for relevance,
+    then the raw source of selected files is stuffed into context.
+    No summarization, no synthesis — the planning stages see real code.
     """
 
     def __init__(self, config: "AgentConfig", source_dir: str) -> None:
@@ -143,42 +146,28 @@ class AgentContextGatherer:
                 )
                 selected = selected[:self._config.max_summary_files]
 
-            # Pass 4: Summarize (parallel LLM calls — mid model)
-            await self._report(progress_callback, 0.074, "agent:summarizing")
-            summaries = await self._summarize_all(
-                client, mid, selected, job_description,
-                progress_callback,
-            )
+            # Pass 4: Read raw source (pure Python, no LLM)
+            await self._report(progress_callback, 0.074, "agent:reading")
+            raw_source, included = self._read_raw_source(selected, file_paths)
 
-            if not summaries:
-                logger.warning("AgentContextGatherer: all summaries failed")
+            if not raw_source:
+                logger.warning("AgentContextGatherer: no readable source files")
                 return empty
 
-            raw_summaries = "\n\n".join(summaries)
-
             logger.info(
-                f"AgentContextGatherer: summarized {len(summaries)} files"
-            )
-
-            # Pass 5: Synthesize (1 LLM call — mid model)
-            await self._report(progress_callback, 0.088, "agent:synthesizing")
-            synthesized = await self._synthesize(
-                client, mid, summaries, job_description
-            )
-
-            logger.info(
-                f"AgentContextGatherer: synthesized={len(synthesized)} chars, "
-                f"raw_summaries={len(raw_summaries)} chars"
+                f"AgentContextGatherer: stuffed {len(included)}/{len(selected)} "
+                f"files ({len(raw_source)} chars) into context"
             )
             return {
-                "synthesized": synthesized,
-                "raw_summaries": raw_summaries,
+                "synthesized": raw_source,
+                "raw_summaries": raw_source,
                 "agent_files": {
                     "total_screened": len(file_paths),
                     "broad": broad,
                     "relevant": relevant,
                     "import_expanded": import_added,
                     "selected": selected,
+                    "included": included,
                 },
             }
 
@@ -394,119 +383,71 @@ class AgentContextGatherer:
         return sorted(paths, key=_tier)
 
     # ------------------------------------------------------------------
-    # Pass 4: Summarize
+    # Pass 4: Read raw source
     # ------------------------------------------------------------------
 
-    async def _summarize_file(
+    def _read_raw_source(
         self,
-        client: Any,
-        model: str,
-        rel_path: str,
-        job_description: str,
-    ) -> str | None:
-        """Read and summarize a single file. 1 LLM call."""
-        try:
-            resolved = sanitize_agent_path(rel_path, self._source_dir)
-        except ValueError as e:
-            logger.warning(f"AgentContextGatherer: path rejected: {e}")
-            return None
+        selected: list[str],
+        all_paths: list[str],
+    ) -> tuple[str, list[str]]:
+        """Read actual source code of selected files into a context string.
 
-        if not resolved.is_file():
-            return None
+        Files are sorted by import connectivity (most-connected first)
+        so that architecturally central files survive budget truncation.
 
-        try:
-            raw = resolved.read_bytes()[: self._config.max_file_bytes]
-            content = raw.decode("utf-8", errors="replace")
-        except OSError as e:
-            logger.warning(
-                f"AgentContextGatherer: can't read {rel_path}: {e}"
-            )
-            return None
-
-        if not content.strip():
-            return None
-
-        prompt = load_prompt("agent_summarize").format(
-            file_path=rel_path,
-            file_content=content,
-            job_description=job_description,
+        Returns:
+            (raw_source_string, list_of_included_paths)
+        """
+        # Compute import connectivity for prioritization
+        forward_map, _ = build_import_graph(
+            self._source_dir, all_paths, self._config.max_file_bytes,
         )
+        reverse_count: dict[str, int] = {}
+        for deps in forward_map.values():
+            for dep in deps:
+                reverse_count[dep] = reverse_count.get(dep, 0) + 1
 
-        try:
-            return await client.generate(
-                messages=[{"role": "user", "content": prompt}],
-                model=model,
-                temperature=0,
-            )
-        except Exception as e:
-            logger.warning(
-                f"AgentContextGatherer: summarize failed for {rel_path}: {e}"
-            )
-            return None
+        def _connectivity(path: str) -> int:
+            return len(forward_map.get(path, set())) + reverse_count.get(path, 0)
 
-    async def _summarize_all(
-        self,
-        client: Any,
-        model: str,
-        file_paths: list[str],
-        job_description: str,
-        progress_callback: Callable[[float, str], None] | None = None,
-    ) -> list[str]:
-        """Summarize all files in parallel. Returns formatted summaries."""
-        sem = asyncio.Semaphore(_CONCURRENCY)
-        completed = 0
-        total = len(file_paths)
+        # Sort: most-connected first (survives truncation)
+        sorted_files = sorted(selected, key=_connectivity, reverse=True)
 
-        async def _do_one(path: str) -> tuple[str, str | None]:
-            nonlocal completed
-            async with sem:
-                result = await self._summarize_file(
-                    client, model, path, job_description,
+        budget = self._config.max_context_chars
+        blocks: list[str] = []
+        included: list[str] = []
+        used = 0
+
+        for rel_path in sorted_files:
+            try:
+                resolved = sanitize_agent_path(rel_path, self._source_dir)
+            except ValueError:
+                continue
+            if not resolved.is_file():
+                continue
+            try:
+                raw = resolved.read_bytes()[:self._config.max_file_bytes]
+                content = raw.decode("utf-8", errors="replace")
+            except OSError:
+                continue
+            if not content.strip():
+                continue
+
+            block = f"### {rel_path}\n```\n{content}\n```"
+            if used + len(block) > budget:
+                logger.info(
+                    f"AgentContextGatherer: budget exhausted at "
+                    f"{len(included)} files ({used} chars), "
+                    f"dropping {len(sorted_files) - len(included)} remaining"
                 )
-                completed += 1
-                if progress_callback and total > 0:
-                    pct = 0.074 + 0.014 * (completed / total)
-                    await self._report(
-                        progress_callback, pct,
-                        f"agent:summarizing:{path}",
-                    )
-                return path, result
+                break
 
-        tasks = [_do_one(p) for p in file_paths]
-        results = await asyncio.gather(*tasks)
-        return [
-            f"### {path}\n{summary}"
-            for path, summary in results
-            if summary
-        ]
+            blocks.append(block)
+            included.append(rel_path)
+            used += len(block)
 
-    # ------------------------------------------------------------------
-    # Pass 4: Synthesize
-    # ------------------------------------------------------------------
-
-    async def _synthesize(
-        self,
-        client: Any,
-        model: str,
-        summaries: list[str],
-        job_description: str,
-    ) -> str:
-        """Combine all file summaries into a structured context document."""
-        combined = "\n\n".join(summaries)
-        prompt = load_prompt("agent_synthesize").format(
-            summaries=combined,
-            job_description=job_description,
-        )
-
-        try:
-            return await client.generate(
-                messages=[{"role": "user", "content": prompt}],
-                model=model,
-                temperature=0,
-            )
-        except Exception as e:
-            logger.warning(f"AgentContextGatherer: synthesize failed: {e}")
-            return f"## File Summaries\n\n{combined}"
+        return "\n\n".join(blocks), included
 
     # ------------------------------------------------------------------
     # Helpers

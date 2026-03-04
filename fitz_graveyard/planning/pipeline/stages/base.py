@@ -589,15 +589,15 @@ class PipelineStage(ABC):
             ctx = ctx[:self._MAX_GATHERED_CONTEXT_CHARS] + "\n\n[... context trimmed for brevity]"
         return ctx
 
-    _MAX_RAW_SUMMARIES_CHARS = 48000
+    _MAX_RAW_SUMMARIES_CHARS = 64000
 
     def _get_raw_summaries(self, prior_outputs: dict[str, Any]) -> str:
         """
-        Get raw per-file summaries from AgentContextGatherer output.
+        Get raw source code from AgentContextGatherer output.
 
-        More detailed than _get_gathered_context() — contains exact signatures,
-        field names, and import paths from each file. Use for reasoning passes
-        where detail matters. Falls back to _gathered_context if not available.
+        Contains actual source code of selected files (fenced code blocks).
+        Use for reasoning passes where seeing real code matters.
+        Falls back to _gathered_context if not available.
 
         Caps at _MAX_RAW_SUMMARIES_CHARS (higher limit than synthesized context
         since reasoning passes benefit from more detail).

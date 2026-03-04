@@ -10,9 +10,7 @@ schema that a small model can handle reliably.
 import difflib
 import json
 import logging
-import re
 import time
-from pathlib import Path
 from typing import Any
 
 from fitz_graveyard.planning.pipeline.stages.base import (
@@ -23,7 +21,6 @@ from fitz_graveyard.planning.pipeline.stages.base import (
 )
 from fitz_graveyard.planning.prompts import load_prompt
 from fitz_graveyard.planning.schemas import ArchitectureOutput, DesignOutput
-from fitz_graveyard.validation.sanitize import sanitize_agent_path
 
 logger = logging.getLogger(__name__)
 
@@ -233,102 +230,6 @@ class ArchitectureDesignStage(PipelineStage):
             "design": design.model_dump(),
         }
 
-    _MAX_VERIFY_FILES = 10
-    _MAX_VERIFY_BYTES = 50_000
-
-    async def _verify_with_source(
-        self,
-        client: Any,
-        reasoning: str,
-        job_description: str,
-        prior_outputs: dict[str, Any],
-    ) -> str:
-        """Verify architecture reasoning against actual source code.
-
-        Extracts file references from the reasoning text, reads the real
-        source files, and asks the LLM whether its proposed approach still
-        works given the actual code. Returns revised reasoning or the
-        original if verification is unavailable or finds no issues.
-        """
-        source_dir = self._get_source_dir(prior_outputs)
-        if not source_dir:
-            return reasoning
-
-        # Extract file paths from reasoning (e.g. fitz_ai/llm/providers/openai.py)
-        raw_paths = re.findall(r'[\w./\-]+\.py\b', reasoning)
-        # Also include files from raw summaries — agent-selected files
-        # the reasoning may not have mentioned but that could challenge
-        # the proposed approach
-        raw_summaries = prior_outputs.get("_raw_summaries", "")
-        if raw_summaries:
-            summary_paths = re.findall(r"^###\s+(.+?)(?:\s*$)", raw_summaries, re.MULTILINE)
-            raw_paths = [p.strip() for p in summary_paths] + raw_paths
-
-        # Deduplicate preserving order (summary files first)
-        seen: set[str] = set()
-        unique_paths: list[str] = []
-        for p in raw_paths:
-            p = p.strip()
-            if p not in seen and "/" in p:  # Must have a directory component
-                seen.add(p)
-                unique_paths.append(p)
-
-        if not unique_paths:
-            logger.info("Stage 'architecture_design': no file references to verify")
-            return reasoning
-
-        # Read actual source for top files
-        file_contents: list[str] = []
-        for rel_path in unique_paths[:self._MAX_VERIFY_FILES]:
-            try:
-                resolved = sanitize_agent_path(rel_path, source_dir)
-            except ValueError:
-                continue
-            if not resolved.is_file():
-                continue
-            try:
-                raw = resolved.read_bytes()[:self._MAX_VERIFY_BYTES]
-                content = raw.decode("utf-8", errors="replace")
-            except OSError:
-                continue
-            file_contents.append(f"### {rel_path}\n```\n{content}\n```")
-
-        if not file_contents:
-            logger.info("Stage 'architecture_design': no readable source files to verify")
-            return reasoning
-
-        logger.info(
-            f"Stage 'architecture_design': verifying against "
-            f"{len(file_contents)} source files"
-        )
-
-        await self._report_substep("verifying")
-        source_code = "\n\n".join(file_contents)
-        prompt = load_prompt("architecture_verify").format(
-            reasoning=reasoning,
-            source_code=source_code,
-        )
-
-        try:
-            t0 = time.monotonic()
-            verified = await client.generate(
-                messages=self._make_messages(prompt),
-            )
-            t1 = time.monotonic()
-            logger.info(
-                f"Stage 'architecture_design': verification took "
-                f"{t1 - t0:.1f}s ({len(verified)} chars)"
-            )
-            # Accept if response is substantial (same check as self-critique)
-            if len(verified) > len(reasoning) * 0.3:
-                return verified
-            return reasoning
-        except Exception as e:
-            logger.warning(
-                f"Stage 'architecture_design': verification failed: {e}"
-            )
-            return reasoning
-
     async def execute(self, client: Any, job_description: str, prior_outputs: dict[str, Any]) -> StageResult:
         try:
             # 1. Reasoning pass
@@ -345,12 +246,7 @@ class ArchitectureDesignStage(PipelineStage):
                 client, reasoning, job_description, krag_context=krag_context,
             )
 
-            # 3. Source verification pass
-            reasoning = await self._verify_with_source(
-                client, reasoning, job_description, prior_outputs,
-            )
-
-            # 4. Per-field-group extraction
+            # 3. Per-field-group extraction
             # Selective context: only groups that need codebase evidence get it
             _CONTEXT_GROUPS = {"approaches", "adrs", "artifacts", "components", "integrations"}
 
