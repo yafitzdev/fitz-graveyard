@@ -247,7 +247,7 @@ class ArchitectureDesignStage(PipelineStage):
 
             # 3. Per-field-group extraction
             # Selective context: only groups that need codebase evidence get it
-            _CONTEXT_GROUPS = {"approaches", "adrs", "artifacts"}
+            _CONTEXT_GROUPS = {"approaches", "adrs", "artifacts", "components", "integrations"}
 
             merged: dict[str, Any] = {}
             for group in _FIELD_GROUPS:

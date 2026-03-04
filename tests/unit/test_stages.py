@@ -539,15 +539,16 @@ class TestArchitectureDesignStage:
         #        [5]=components, [6]=integrations, [7]=artifacts
         calls = mock_client.generate.call_args_list
 
-        # approaches (call 2), adrs (call 4), artifacts (call 7) should have krag
+        # approaches (call 2), adrs (call 4), components (call 5),
+        # integrations (call 6), artifacts (call 7) should have krag
         assert "Codebase Summary" in calls[2].kwargs["messages"][1]["content"]
         assert "Codebase Summary" in calls[4].kwargs["messages"][1]["content"]
+        assert "Codebase Summary" in calls[5].kwargs["messages"][1]["content"]
+        assert "Codebase Summary" in calls[6].kwargs["messages"][1]["content"]
         assert "Codebase Summary" in calls[7].kwargs["messages"][1]["content"]
 
-        # tradeoffs (call 3), components (call 5), integrations (call 6) should NOT
+        # tradeoffs (call 3) should NOT
         assert "Codebase Summary" not in calls[3].kwargs["messages"][1]["content"]
-        assert "Codebase Summary" not in calls[5].kwargs["messages"][1]["content"]
-        assert "Codebase Summary" not in calls[6].kwargs["messages"][1]["content"]
 
     @pytest.mark.asyncio
     async def test_execute_partial_failure(self, stage):
@@ -1070,23 +1071,23 @@ class TestGatheredContextCap:
 
     def test_long_context_trimmed(self):
         stage = ContextStage()
-        long_ctx = "x" * 20000
+        long_ctx = "x" * 40000
         result = stage._get_gathered_context({"_gathered_context": long_ctx})
-        assert len(result) < 20000
+        assert len(result) < 40000
         assert result.endswith("[... context trimmed for brevity]")
         assert result.startswith("x" * 100)
 
     def test_context_at_limit_unchanged(self):
         stage = ContextStage()
-        ctx = "x" * 16000
+        ctx = "x" * 32000
         result = stage._get_gathered_context({"_gathered_context": ctx})
         assert result == ctx
 
     def test_context_just_over_limit_trimmed(self):
         stage = ContextStage()
-        ctx = "x" * 16001
+        ctx = "x" * 32001
         result = stage._get_gathered_context({"_gathered_context": ctx})
-        assert len(result) < 16100  # 16000 + trim message
+        assert len(result) < 32100  # 32000 + trim message
         assert "[... context trimmed for brevity]" in result
 
 
@@ -1111,14 +1112,14 @@ class TestRawSummaries:
 
     def test_long_raw_trimmed(self):
         stage = ContextStage()
-        long_raw = "x" * 28000
+        long_raw = "x" * 52000
         result = stage._get_raw_summaries({"_raw_summaries": long_raw})
-        assert len(result) < 28000
+        assert len(result) < 52000
         assert "[... summaries trimmed for brevity]" in result
 
     def test_raw_at_limit_unchanged(self):
         stage = ContextStage()
-        raw = "x" * 24000
+        raw = "x" * 48000
         result = stage._get_raw_summaries({"_raw_summaries": raw})
         assert result == raw
 

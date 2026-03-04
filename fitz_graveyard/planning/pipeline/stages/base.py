@@ -564,7 +564,7 @@ class PipelineStage(ABC):
             logger.warning(f"Stage '{self.name}': self-critique failed: {e}")
             return reasoning_text
 
-    _MAX_GATHERED_CONTEXT_CHARS = 16000
+    _MAX_GATHERED_CONTEXT_CHARS = 32000
 
     def _get_gathered_context(self, prior_outputs: dict[str, Any]) -> str:
         """
@@ -589,7 +589,7 @@ class PipelineStage(ABC):
             ctx = ctx[:self._MAX_GATHERED_CONTEXT_CHARS] + "\n\n[... context trimmed for brevity]"
         return ctx
 
-    _MAX_RAW_SUMMARIES_CHARS = 24000
+    _MAX_RAW_SUMMARIES_CHARS = 48000
 
     def _get_raw_summaries(self, prior_outputs: dict[str, Any]) -> str:
         """
