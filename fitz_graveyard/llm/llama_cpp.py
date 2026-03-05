@@ -380,8 +380,11 @@ class LlamaCppClient:
             "output_chars": len(result),
             "model": effective_model,
         })
+        est_tokens = len(result) / 4
+        tok_s = est_tokens / elapsed if elapsed > 0 else 0
         logger.info(
-            f"LlamaCpp.generate: {len(result)} chars in {elapsed:.1f}s"
+            f"LlamaCpp.generate: {len(result)} chars in {elapsed:.1f}s "
+            f"(~{tok_s:.1f} tok/s)"
         )
         return result
 

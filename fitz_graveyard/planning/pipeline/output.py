@@ -275,7 +275,7 @@ class PlanRenderer:
                 sections.append("### Agent File Selection")
                 sections.append("")
                 total = agent_files.get("total_screened", 0)
-                broad = agent_files.get("broad", [])
+                bm25 = agent_files.get("bm25_candidates", [])
                 relevant = agent_files.get("relevant", [])
                 import_expanded = agent_files.get("import_expanded", 0)
                 selected = agent_files.get("selected", [])
@@ -283,15 +283,15 @@ class PlanRenderer:
                     f"**Screened**: {total} files"
                 )
                 sections.append("")
-                if broad:
+                if bm25:
                     sections.append(
-                        f"**Broad screen** ({len(broad)} fast-model candidates):"
+                        f"**BM25 shortlist** ({len(bm25)} candidates):"
                     )
-                    for f in broad:
+                    for f in bm25:
                         sections.append(f"- {f}")
                     sections.append("")
                 sections.append(
-                    f"**Refined** ({len(relevant)} mid-model selected):"
+                    f"**LLM confirmed** ({len(relevant)} selected):"
                 )
                 for f in relevant:
                     sections.append(f"- {f}")

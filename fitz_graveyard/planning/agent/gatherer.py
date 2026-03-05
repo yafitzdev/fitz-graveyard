@@ -1,27 +1,29 @@
 # fitz_graveyard/planning/agent/gatherer.py
 """
-AgentContextGatherer — brute-force parallel file screening pipeline.
+AgentContextGatherer — BM25 + per-file LLM confirm screening pipeline.
 
 Pipeline:
   Pass 1:  Map            (pure Python — pathlib walk, build file list)
-  Pass 2a: Broad screen   (N parallel LLM calls — fast model, "is this relevant?")
-  Pass 2b: Refine screen  (M parallel LLM calls — mid model on broad candidates)
-  Pass 3:  Import expand  (pure Python — trace forward imports from relevant files)
-  Pass 4:  Read raw source (pure Python — stuff actual source into context)
+  Pass 2:  BM25 screen    (pure Python — score all files, take top K)
+  Pass 3:  LLM confirm    (per-file mid-model YES/NO on BM25 shortlist)
+  Pass 4:  Import expand  (pure Python — trace forward imports from relevant files)
+  Pass 5:  Read raw source (pure Python — stuff actual source into context)
 
-Two-stage screening cascade: fast model (4B) screens all files for broad
-relevance (high recall, many false positives), then mid model (30B MoE)
-re-screens the candidates for precise selection (high precision).
-Raw source is stuffed directly into the planning context — no summarization
-or synthesis LLM calls. Files sorted by import connectivity; truncated at
-a char budget so they fit in the reasoning model's context window.
-Parallelized with asyncio.Semaphore.
+BM25 replaces 735+ individual LLM screening calls with a pure Python text
+retrieval pass (milliseconds) to produce a high-recall shortlist (~150 files).
+Per-file LLM screening then confirms each candidate with a YES/NO call,
+cutting the shortlist to only truly relevant files. Raw source is stuffed
+directly into the planning context — no summarization or synthesis LLM calls.
+Files sorted by import connectivity; truncated at a char budget so they fit
+in the reasoning model's context window.
 """
 
 import asyncio
 import json
 import logging
+import math
 import re
+from collections import Counter
 from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
@@ -41,19 +43,44 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _MAX_TREE_FILES = 2000
-_CONCURRENCY = 8
 
 # Directories that are never source code in any project.
 _SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv"}
 
+# BM25 parameters (Okapi BM25 standard defaults)
+_BM25_K1 = 1.5
+_BM25_B = 0.75
+_PATH_BONUS_WEIGHT = 2.0
+
+# English stopwords (compact set for tokenization)
+_STOPWORDS = frozenset({
+    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
+    "of", "with", "by", "from", "is", "it", "as", "be", "was", "are",
+    "this", "that", "not", "can", "all", "if", "do", "my", "no", "so",
+    "we", "he", "up", "one", "its", "has", "had", "may", "our", "out",
+    "you", "his", "her", "she", "how", "new", "now", "old", "see",
+    "way", "who", "did", "get", "let", "say", "too", "use",
+    "import", "from", "def", "class", "self", "return", "none", "true",
+    "false", "pass", "else", "elif", "try", "except", "finally",
+    "raise", "yield", "lambda", "assert", "global", "nonlocal",
+    "while", "for", "break", "continue", "del", "with", "async", "await",
+})
+
+# File extensions excluded from BM25 scoring (too text-dense, drown out code).
+# These files are still indexed and can be discovered via import expansion.
+_BM25_SKIP_EXTS = frozenset({".md"})
+
+# Concurrency limit for per-file LLM screening calls
+_SCREEN_CONCURRENCY = 10
+
 
 class AgentContextGatherer:
     """
-    Brute-force parallel pipeline to gather codebase context.
+    BM25 + LLM confirm pipeline to gather codebase context.
 
-    Every file is individually screened by the LLM for relevance,
-    then the raw source of selected files is stuffed into context.
-    No summarization, no synthesis — the planning stages see real code.
+    BM25 scores all files for keyword relevance (pure Python, milliseconds),
+    then per-file LLM calls confirm the shortlist. Raw source of selected
+    files is stuffed into context. No summarization, no synthesis.
     """
 
     def __init__(self, config: "AgentConfig", source_dir: str) -> None:
@@ -67,7 +94,7 @@ class AgentContextGatherer:
         progress_callback: Callable[[float, str], None] | None = None,
     ) -> dict[str, str]:
         """
-        Run the brute-force pipeline and return context dict.
+        Run the BM25 + LLM confirm pipeline and return context dict.
 
         Returns:
             Dict with "synthesized", "raw_summaries", and "agent_files".
@@ -79,9 +106,7 @@ class AgentContextGatherer:
             logger.info("Agent context gathering disabled by config")
             return empty
 
-        fast = self._config.agent_model or client.fast_model
         mid = self._config.agent_model or client.mid_model
-        smart = self._config.agent_model or client.smart_model
 
         try:
             # Pass 1: Map (pure Python)
@@ -95,42 +120,46 @@ class AgentContextGatherer:
                 f"AgentContextGatherer: mapped {len(file_paths)} files"
             )
 
-            # Pass 2a: Broad screen (parallel LLM calls — fast model)
+            # Pass 2: BM25 screen (pure Python)
             await self._report(progress_callback, 0.062, "agent:screening")
-            broad = await self._screen_all(
-                client, fast, file_paths, job_description,
-                progress_callback,
+            top_k = min(
+                self._config.max_summary_files * 6,
+                len(file_paths),
+            )
+            bm25_candidates, bm25_scores = self._bm25_screen(
+                file_paths, job_description, top_k,
             )
 
-            if not broad:
-                logger.info("AgentContextGatherer: no relevant files found")
+            if not bm25_candidates:
+                logger.info("AgentContextGatherer: BM25 found no candidates")
                 return empty
 
             logger.info(
-                f"AgentContextGatherer: broad screen found {len(broad)} "
-                f"candidates out of {len(file_paths)}"
+                f"AgentContextGatherer: BM25 selected {len(bm25_candidates)} "
+                f"candidates from {len(file_paths)} files "
+                f"(top score: {bm25_scores[0]:.2f}, "
+                f"cutoff: {bm25_scores[-1]:.2f})"
             )
 
-            # Pass 2b: Precise screen (parallel LLM calls — mid model)
-            await self._report(progress_callback, 0.068, "agent:refining")
+            # Pass 3: Per-file LLM confirm (mid model, parallel)
+            await self._report(progress_callback, 0.068, "agent:confirming")
             relevant = await self._screen_all(
-                client, mid, broad, job_description,
+                client, mid, bm25_candidates, job_description,
             )
 
             if not relevant:
                 logger.info(
-                    "AgentContextGatherer: mid screen rejected all, "
-                    "falling back to broad results"
+                    "AgentContextGatherer: LLM confirm rejected all, "
+                    "falling back to BM25 top results"
                 )
-                relevant = broad
+                relevant = bm25_candidates[:self._config.max_summary_files]
 
             logger.info(
-                f"AgentContextGatherer: refined to {len(relevant)} "
-                f"relevant files from {len(broad)} candidates: "
-                + ", ".join(relevant)
+                f"AgentContextGatherer: confirmed {len(relevant)} "
+                f"relevant files: " + ", ".join(relevant)
             )
 
-            # Pass 3: Import expansion (pure Python, depth 1)
+            # Pass 4: Import expansion (pure Python, depth 1)
             expanded = self._import_expand(relevant, file_paths)
             import_added = len(expanded) - len(relevant)
             if import_added > 0:
@@ -148,7 +177,7 @@ class AgentContextGatherer:
                 )
                 selected = selected[:self._config.max_summary_files]
 
-            # Pass 4: Read raw source (pure Python, no LLM)
+            # Pass 5: Read raw source (pure Python, no LLM)
             await self._report(progress_callback, 0.074, "agent:reading")
             raw_source, included, fwd_map, rev_count = self._read_raw_source(
                 selected, file_paths,
@@ -169,7 +198,7 @@ class AgentContextGatherer:
                 "raw_summaries": raw_source,
                 "agent_files": {
                     "total_screened": len(file_paths),
-                    "broad": broad,
+                    "bm25_candidates": bm25_candidates,
                     "relevant": relevant,
                     "import_expanded": import_added,
                     "selected": selected,
@@ -239,42 +268,140 @@ class AgentContextGatherer:
         return name in _SKIP_DIRS
 
     # ------------------------------------------------------------------
-    # Pass 2: Screen
+    # Pass 2: BM25 screen
     # ------------------------------------------------------------------
 
-    async def _screen_file(
-        self,
-        client: Any,
-        model: str,
-        rel_path: str,
-        job_description: str,
-    ) -> bool:
-        """Ask LLM if a single file is relevant to the task.
-
-        Reads the file, sends content + task to LLM, parses YES/NO.
-        Returns False on any error (file unreadable, LLM failure, etc).
-        """
+    def _read_file_content(self, rel_path: str) -> str:
+        """Read file content, returning empty string on failure."""
         try:
             resolved = sanitize_agent_path(rel_path, self._source_dir)
         except ValueError:
-            return False
+            return ""
 
         if not resolved.is_file():
-            return False
+            return ""
 
         try:
             raw = resolved.read_bytes()[:self._config.max_file_bytes]
-            content = raw.decode("utf-8", errors="replace")
+            return raw.decode("utf-8", errors="replace")
         except OSError:
-            return False
+            return ""
 
-        if not content.strip():
-            return False
+    def _bm25_screen(
+        self,
+        file_paths: list[str],
+        job_description: str,
+        top_k: int,
+    ) -> tuple[list[str], list[float]]:
+        """Score all files by BM25 relevance to job description.
+
+        Pure Python Okapi BM25 implementation. Also applies a path bonus
+        for files whose path segments match query terms.
+
+        Returns:
+            Tuple of (sorted_paths, sorted_scores) for top K candidates.
+            Only includes files with score > 0.
+        """
+        query_terms = _tokenize(job_description)
+        if not query_terms:
+            return [], []
+
+        # Build corpus: tokenize each file's content (skip text-heavy extensions)
+        corpus: list[tuple[str, list[str]]] = []
+        for path in file_paths:
+            ext = Path(path).suffix.lower()
+            if ext in _BM25_SKIP_EXTS:
+                continue
+            content = self._read_file_content(path)
+            if not content.strip():
+                continue
+            tokens = _tokenize(content)
+            # Add path segments as bonus tokens
+            path_tokens = _tokenize(path.replace("/", " ").replace(".", " "))
+            tokens.extend(path_tokens * int(_PATH_BONUS_WEIGHT))
+            corpus.append((path, tokens))
+
+        if not corpus:
+            return [], []
+
+        # Compute document lengths and average
+        doc_lengths = [len(tokens) for _, tokens in corpus]
+        avgdl = sum(doc_lengths) / len(doc_lengths) if doc_lengths else 1.0
+        n_docs = len(corpus)
+
+        # Compute IDF for query terms
+        query_set = set(query_terms)
+        doc_freq: Counter[str] = Counter()
+        for _, tokens in corpus:
+            present = query_set & set(tokens)
+            for term in present:
+                doc_freq[term] += 1
+
+        idf: dict[str, float] = {}
+        for term in query_set:
+            df = doc_freq.get(term, 0)
+            # IDF with smoothing (prevents negative values)
+            idf[term] = math.log((n_docs - df + 0.5) / (df + 0.5) + 1.0)
+
+        # Score each document
+        scores: list[tuple[str, float]] = []
+        for i, (path, tokens) in enumerate(corpus):
+            tf_counter = Counter(tokens)
+            dl = doc_lengths[i]
+            score = 0.0
+            for term in query_terms:
+                tf = tf_counter.get(term, 0)
+                if tf == 0:
+                    continue
+                numerator = tf * (_BM25_K1 + 1)
+                denominator = tf + _BM25_K1 * (1 - _BM25_B + _BM25_B * dl / avgdl)
+                score += idf.get(term, 0) * numerator / denominator
+            scores.append((path, score))
+
+        # Sort by score descending, filter zero scores
+        scores.sort(key=lambda x: x[1], reverse=True)
+        scores = [(p, s) for p, s in scores if s > 0]
+
+        # Take top K
+        top = scores[:top_k]
+        if not top:
+            return [], []
+
+        return [p for p, _ in top], [s for _, s in top]
+
+    # ------------------------------------------------------------------
+    # Pass 3: Per-file LLM confirm (batched in pairs)
+    # ------------------------------------------------------------------
+
+    async def _screen_batch(
+        self,
+        client: Any,
+        model: str,
+        batch: list[str],
+        job_description: str,
+    ) -> list[tuple[str, bool]]:
+        """Screen a batch of files in one LLM call.
+
+        Returns list of (path, is_relevant) tuples.
+        On failure, all files in the batch are treated as not relevant.
+        """
+        file_blocks: list[str] = []
+        valid_paths: list[str] = []
+        for rel_path in batch:
+            content = self._read_file_content(rel_path)
+            if not content.strip():
+                continue
+            file_blocks.append(
+                f"FILE: {rel_path}\n\nCONTENT:\n{content}"
+            )
+            valid_paths.append(rel_path)
+
+        if not valid_paths:
+            return [(p, False) for p in batch]
 
         prompt = load_prompt("agent_screen").format(
             job_description=job_description,
-            file_path=rel_path,
-            file_content=content,
+            file_blocks="\n\n---\n\n".join(file_blocks),
         )
 
         try:
@@ -283,55 +410,79 @@ class AgentContextGatherer:
                 model=model,
                 temperature=0,
             )
-            return self._parse_yes_no(response)
-        except Exception as e:
-            logger.warning(
-                f"AgentContextGatherer: screen failed for {rel_path}: {e!r}"
-            )
-            return False
-
-    @staticmethod
-    def _parse_yes_no(response: str) -> bool:
-        """Parse a YES/NO response from the LLM."""
-        text = response.strip().upper()
-        # Check first word
-        first_word = text.split()[0] if text.split() else ""
-        return first_word == "YES"
+            verdicts = self._parse_batch_response(response, valid_paths)
+            return verdicts
+        except Exception:
+            return [(p, False) for p in batch]
 
     async def _screen_all(
         self,
         client: Any,
         model: str,
-        file_paths: list[str],
+        candidates: list[str],
         job_description: str,
-        progress_callback: Callable[[float, str], None] | None = None,
     ) -> list[str]:
-        """Screen all files in parallel. Returns paths the LLM marked relevant."""
-        sem = asyncio.Semaphore(_CONCURRENCY)
-        completed = 0
-        total = len(file_paths)
+        """Screen all candidates in parallel batches of 2."""
+        sem = asyncio.Semaphore(_SCREEN_CONCURRENCY)
+        batches = [
+            candidates[i:i + 2]
+            for i in range(0, len(candidates), 2)
+        ]
 
-        async def _do_one(path: str) -> tuple[str, bool]:
-            nonlocal completed
+        async def _bounded(batch: list[str]) -> list[tuple[str, bool]]:
             async with sem:
-                result = await self._screen_file(
-                    client, model, path, job_description,
+                return await self._screen_batch(
+                    client, model, batch, job_description,
                 )
-                completed += 1
-                if progress_callback and total > 0:
-                    pct = 0.062 + 0.012 * (completed / total)
-                    await self._report(
-                        progress_callback, pct,
-                        f"agent:screening:{completed}/{total}",
-                    )
-                return path, result
 
-        tasks = [_do_one(p) for p in file_paths]
-        results = await asyncio.gather(*tasks)
-        return [path for path, relevant in results if relevant]
+        tasks = [_bounded(b) for b in batches]
+        batch_results = await asyncio.gather(*tasks)
+        return [
+            path
+            for results in batch_results
+            for path, relevant in results
+            if relevant
+        ]
+
+    @staticmethod
+    def _parse_batch_response(
+        response: str, paths: list[str],
+    ) -> list[tuple[str, bool]]:
+        """Parse multi-line batch response into per-file verdicts.
+
+        Expected format: "file_path: YES" or "file_path: NO" per line.
+        Falls back to scanning for YES/NO by line position.
+        """
+        lines = [ln.strip() for ln in response.strip().splitlines() if ln.strip()]
+        verdicts: dict[str, bool] = {}
+
+        # Try parsing "path: YES/NO" format
+        for line in lines:
+            for path in paths:
+                if path in line:
+                    upper = line.upper()
+                    if "YES" in upper:
+                        verdicts[path] = True
+                    elif "NO" in upper:
+                        verdicts[path] = False
+                    break
+
+        # Fall back to positional matching if we didn't get all paths
+        if len(verdicts) < len(paths):
+            yes_no_lines = [
+                ln for ln in lines
+                if ln.strip().upper().startswith(("YES", "NO"))
+                or ": YES" in ln.upper()
+                or ": NO" in ln.upper()
+            ]
+            for i, path in enumerate(paths):
+                if path not in verdicts and i < len(yes_no_lines):
+                    verdicts[path] = "YES" in yes_no_lines[i].upper()
+
+        return [(p, verdicts.get(p, False)) for p in paths]
 
     # ------------------------------------------------------------------
-    # Pass 3: Import expansion
+    # Pass 4: Import expansion
     # ------------------------------------------------------------------
 
     def _import_expand(
@@ -391,7 +542,7 @@ class AgentContextGatherer:
         return sorted(paths, key=_tier)
 
     # ------------------------------------------------------------------
-    # Pass 4: Read raw source
+    # Pass 5: Read raw source
     # ------------------------------------------------------------------
 
     def _read_raw_source(
@@ -521,3 +672,9 @@ class AgentContextGatherer:
         result = callback(progress, phase)
         if hasattr(result, "__await__"):
             await result
+
+
+def _tokenize(text: str) -> list[str]:
+    """Tokenize text for BM25: lowercase, split on non-alphanumeric, remove stopwords."""
+    tokens = re.findall(r"[a-z][a-z0-9_]*", text.lower())
+    return [t for t in tokens if t not in _STOPWORDS and len(t) > 1]

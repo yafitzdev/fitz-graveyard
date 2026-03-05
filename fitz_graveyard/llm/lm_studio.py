@@ -185,8 +185,13 @@ class LMStudioClient:
 
         result = "".join(accumulated)
         elapsed = time.monotonic() - t0
+        est_tokens = len(result) / 4
+        tok_s = est_tokens / elapsed if elapsed > 0 else 0
         self._call_metrics.append({"elapsed_s": elapsed, "output_chars": len(result), "model": model})
-        logger.info(f"LMStudio.generate: {len(result)} chars in {elapsed:.1f}s")
+        logger.info(
+            f"LMStudio.generate: {len(result)} chars in {elapsed:.1f}s "
+            f"(~{tok_s:.1f} tok/s)"
+        )
         return result
 
     async def generate_with_fallback(self, messages: list[dict]) -> tuple[str, str]:

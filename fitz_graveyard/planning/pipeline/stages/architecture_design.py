@@ -141,6 +141,11 @@ class ArchitectureDesignStage(PipelineStage):
         context_str = job_description
         if "context" in prior_outputs:
             context = prior_outputs["context"]
+            if isinstance(context, str):
+                try:
+                    context = json.loads(context)
+                except (json.JSONDecodeError, TypeError):
+                    context = {}
             parts = [
                 f"Project: {job_description}",
                 f"Description: {context.get('project_description', '')}",
@@ -153,10 +158,10 @@ class ArchitectureDesignStage(PipelineStage):
                 parts.append(f"Expected deliverable files: {', '.join(context['needed_artifacts'])}")
             context_str = "\n".join(parts)
 
-        # Build binding constraints from context stage
+        # Build binding constraints from context stage (reuse parsed 'context' from above)
         binding = ""
         if "context" in prior_outputs:
-            ctx = prior_outputs["context"]
+            ctx = context
             files = ctx.get("existing_files", [])
             artifacts = ctx.get("needed_artifacts", [])
             scope = ctx.get("scope_boundaries", {})

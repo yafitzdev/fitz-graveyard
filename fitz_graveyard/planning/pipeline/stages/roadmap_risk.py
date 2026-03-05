@@ -133,6 +133,11 @@ class RoadmapRiskStage(PipelineStage):
         context_str = ""
         if "context" in prior_outputs:
             ctx = prior_outputs["context"]
+            if isinstance(ctx, str):
+                try:
+                    ctx = json.loads(ctx)
+                except (json.JSONDecodeError, TypeError):
+                    ctx = {}
             context_str = (
                 f"Project: {ctx.get('project_description', '')}\n"
                 f"Requirements: {', '.join(ctx.get('key_requirements', []))}\n"
@@ -187,10 +192,9 @@ class RoadmapRiskStage(PipelineStage):
                 artifact_names = [a.get("filename", "") for a in artifacts]
                 architecture_design_str += f"\nDesign Artifacts: {', '.join(artifact_names)}\n"
 
-        # Build binding constraints from prior stages
+        # Build binding constraints from prior stages (reuse parsed ctx from above)
         binding_parts = []
         if "context" in prior_outputs:
-            ctx = prior_outputs["context"]
             artifacts = ctx.get("needed_artifacts", [])
             if artifacts:
                 binding_parts.append("Deliverable files (from context):\n" + "\n".join(f"  - {a}" for a in artifacts))

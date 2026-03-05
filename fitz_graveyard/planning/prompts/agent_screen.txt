@@ -2,12 +2,10 @@ You are selecting files for an architectural review.
 
 TASK: {job_description}
 
-FILE: {file_path}
+{file_blocks}
 
-CONTENT:
-{file_content}
-
-Is this file relevant to implementing the task above?
+For each file above, is it relevant to implementing the task?
 A file is relevant if it would need to be read, modified, or understood to implement the task.
 
-Answer with exactly one word: YES or NO
+Reply with one line per file, in the same order:
+FILE_PATH: YES or NO

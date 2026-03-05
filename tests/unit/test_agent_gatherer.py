@@ -1,6 +1,7 @@
 # tests/unit/test_agent_gatherer.py
-"""Unit tests for AgentContextGatherer (brute-force parallel screening)."""
+"""Unit tests for AgentContextGatherer (BM25 + per-file LLM confirm)."""
 
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -10,6 +11,7 @@ from fitz_graveyard.config.schema import AgentConfig
 from fitz_graveyard.planning.agent.gatherer import (
     AgentContextGatherer,
     _MAX_TREE_FILES,
+    _tokenize,
 )
 
 
@@ -28,6 +30,57 @@ def mock_client():
     client.smart_model = "test-model"
     client.generate = AsyncMock(return_value="LLM response")
     return client
+
+
+# ---------------------------------------------------------------------------
+# Tokenizer
+# ---------------------------------------------------------------------------
+class TestTokenize:
+    def test_basic_tokenization(self):
+        result = _tokenize("build an openai chat plugin")
+        assert "build" in result
+        assert "openai" in result
+        assert "chat" in result
+        assert "plugin" in result
+        assert "an" not in result
+
+    def test_removes_stopwords(self):
+        result = _tokenize("the quick and simple test")
+        assert "the" not in result
+        assert "and" not in result
+        assert "quick" in result
+        assert "simple" in result
+        assert "test" in result
+
+    def test_removes_python_keywords(self):
+        result = _tokenize("import os from pathlib def main class Foo")
+        assert "import" not in result
+        assert "from" not in result
+        assert "def" not in result
+        assert "class" not in result
+        assert "pathlib" in result
+        assert "main" in result
+        assert "foo" in result
+
+    def test_lowercases(self):
+        result = _tokenize("OpenAI ChatPlugin")
+        assert "openai" in result
+        assert "chatplugin" in result
+
+    def test_splits_on_non_alphanumeric(self):
+        result = _tokenize("foo/bar.py")
+        assert "foo" in result
+        assert "bar" in result
+        assert "py" in result
+
+    def test_empty_input(self):
+        assert _tokenize("") == []
+
+    def test_removes_single_char_tokens(self):
+        result = _tokenize("a b c dd ee")
+        assert "dd" in result
+        assert "ee" in result
+        assert len([t for t in result if len(t) == 1]) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -122,110 +175,239 @@ class TestBuildFileTree:
 
 
 # ---------------------------------------------------------------------------
-# Pass 2: _screen_file / _screen_all / _parse_yes_no
+# Pass 2: BM25 screening
 # ---------------------------------------------------------------------------
-class TestParseYesNo:
-    def test_yes(self):
-        assert AgentContextGatherer._parse_yes_no("YES") is True
-
-    def test_no(self):
-        assert AgentContextGatherer._parse_yes_no("NO") is False
-
-    def test_yes_with_explanation(self):
-        assert AgentContextGatherer._parse_yes_no("YES this file is relevant") is True
-
-    def test_no_with_explanation(self):
-        assert AgentContextGatherer._parse_yes_no("NO this is unrelated") is False
-
-    def test_lowercase_yes(self):
-        assert AgentContextGatherer._parse_yes_no("yes") is True
-
-    def test_lowercase_no(self):
-        assert AgentContextGatherer._parse_yes_no("no") is False
-
-    def test_whitespace(self):
-        assert AgentContextGatherer._parse_yes_no("  YES  ") is True
-
-    def test_empty(self):
-        assert AgentContextGatherer._parse_yes_no("") is False
-
-    def test_garbage(self):
-        assert AgentContextGatherer._parse_yes_no("maybe") is False
-
-
-class TestScreenFile:
-    @pytest.mark.asyncio
-    async def test_relevant_file(self, tmp_path, mock_client):
-        (tmp_path / "main.py").write_text("def run(): pass")
-        mock_client.generate = AsyncMock(return_value="YES")
-        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        result = await gatherer._screen_file(
-            mock_client, "test-model", "main.py", "add logging"
+class TestBm25Screen:
+    def test_scores_relevant_files_higher(self, tmp_path):
+        (tmp_path / "openai_provider.py").write_text(
+            "class OpenAIProvider:\n    def chat(self, prompt): pass"
         )
-        assert result is True
+        (tmp_path / "utils.py").write_text(
+            "def format_string(s): return s.strip()"
+        )
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        paths, scores = gatherer._bm25_screen(
+            ["openai_provider.py", "utils.py"],
+            "build an openai chat plugin",
+            top_k=10,
+        )
+        assert len(paths) > 0
+        assert paths[0] == "openai_provider.py"
+
+    def test_returns_top_k(self, tmp_path):
+        for i in range(10):
+            (tmp_path / f"file_{i}.py").write_text(f"keyword_{i} = {i}")
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        all_paths = [f"file_{i}.py" for i in range(10)]
+        paths, scores = gatherer._bm25_screen(all_paths, "keyword_0 keyword_1", top_k=3)
+        assert len(paths) <= 3
+
+    def test_empty_query_returns_empty(self, tmp_path):
+        (tmp_path / "main.py").write_text("x = 1")
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        paths, scores = gatherer._bm25_screen(["main.py"], "the and or", top_k=10)
+        assert paths == []
+        assert scores == []
+
+    def test_no_files_returns_empty(self, tmp_path):
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        paths, scores = gatherer._bm25_screen([], "some query", top_k=10)
+        assert paths == []
+
+    def test_filters_zero_score_files(self, tmp_path):
+        (tmp_path / "relevant.py").write_text("openai chat provider interface")
+        (tmp_path / "unrelated.py").write_text("zzzzz qqqqq wwwww")
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        paths, scores = gatherer._bm25_screen(
+            ["relevant.py", "unrelated.py"],
+            "openai chat",
+            top_k=10,
+        )
+        assert "relevant.py" in paths
+        for s in scores:
+            assert s > 0
+
+    def test_path_bonus_boosts_matching_paths(self, tmp_path):
+        (tmp_path / "openai.py").write_text("provider = 1")
+        (tmp_path / "other.py").write_text("provider = 1")
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        paths, scores = gatherer._bm25_screen(
+            ["openai.py", "other.py"],
+            "openai provider",
+            top_k=10,
+        )
+        assert paths[0] == "openai.py"
+
+    def test_skips_empty_files(self, tmp_path):
+        (tmp_path / "empty.py").write_text("")
+        (tmp_path / "real.py").write_text("openai chat provider")
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        paths, scores = gatherer._bm25_screen(
+            ["empty.py", "real.py"], "openai", top_k=10,
+        )
+        assert "empty.py" not in paths
+        assert "real.py" in paths
+
+    def test_skips_markdown_files(self, tmp_path):
+        (tmp_path / "docs.md").write_text("openai chat provider plugin interface")
+        (tmp_path / "code.py").write_text("openai chat provider")
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        paths, scores = gatherer._bm25_screen(
+            ["docs.md", "code.py"], "openai chat", top_k=10,
+        )
+        assert "code.py" in paths
+        assert "docs.md" not in paths
+
+    def test_scores_are_descending(self, tmp_path):
+        for i in range(5):
+            content = "openai " * (i + 1) + "filler " * 20
+            (tmp_path / f"f{i}.py").write_text(content)
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        all_paths = [f"f{i}.py" for i in range(5)]
+        paths, scores = gatherer._bm25_screen(all_paths, "openai", top_k=10)
+        assert scores == sorted(scores, reverse=True)
+
+
+# ---------------------------------------------------------------------------
+# Pass 3: Batch LLM confirm (pairs)
+# ---------------------------------------------------------------------------
+class TestParseBatchResponse:
+    def test_path_colon_format(self):
+        response = "fitz_ai/engine.py: YES\nfitz_ai/utils.py: NO"
+        result = AgentContextGatherer._parse_batch_response(
+            response, ["fitz_ai/engine.py", "fitz_ai/utils.py"],
+        )
+        assert result == [("fitz_ai/engine.py", True), ("fitz_ai/utils.py", False)]
+
+    def test_both_yes(self):
+        response = "a.py: YES\nb.py: YES"
+        result = AgentContextGatherer._parse_batch_response(
+            response, ["a.py", "b.py"],
+        )
+        assert result == [("a.py", True), ("b.py", True)]
+
+    def test_both_no(self):
+        response = "a.py: NO\nb.py: NO"
+        result = AgentContextGatherer._parse_batch_response(
+            response, ["a.py", "b.py"],
+        )
+        assert result == [("a.py", False), ("b.py", False)]
+
+    def test_lowercase(self):
+        response = "a.py: yes\nb.py: no"
+        result = AgentContextGatherer._parse_batch_response(
+            response, ["a.py", "b.py"],
+        )
+        assert result == [("a.py", True), ("b.py", False)]
+
+    def test_with_explanation(self):
+        response = "a.py: YES - this is the main engine\nb.py: NO - unrelated utility"
+        result = AgentContextGatherer._parse_batch_response(
+            response, ["a.py", "b.py"],
+        )
+        assert result == [("a.py", True), ("b.py", False)]
+
+    def test_positional_fallback(self):
+        # No path in the response, just YES/NO lines
+        response = "YES\nNO"
+        result = AgentContextGatherer._parse_batch_response(
+            response, ["a.py", "b.py"],
+        )
+        assert result == [("a.py", True), ("b.py", False)]
+
+    def test_single_file(self):
+        response = "a.py: YES"
+        result = AgentContextGatherer._parse_batch_response(
+            response, ["a.py"],
+        )
+        assert result == [("a.py", True)]
+
+    def test_garbage_defaults_to_false(self):
+        response = "I'm not sure about these files"
+        result = AgentContextGatherer._parse_batch_response(
+            response, ["a.py", "b.py"],
+        )
+        assert result == [("a.py", False), ("b.py", False)]
+
+    def test_extra_whitespace(self):
+        response = "  a.py:   YES  \n  b.py:   NO  "
+        result = AgentContextGatherer._parse_batch_response(
+            response, ["a.py", "b.py"],
+        )
+        assert result == [("a.py", True), ("b.py", False)]
+
+
+class TestScreenBatch:
+    @pytest.mark.asyncio
+    async def test_screens_pair(self, tmp_path, mock_client):
+        (tmp_path / "a.py").write_text("def engine(): pass")
+        (tmp_path / "b.py").write_text("def utils(): pass")
+        mock_client.generate = AsyncMock(return_value="a.py: YES\nb.py: NO")
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        result = await gatherer._screen_batch(
+            mock_client, "test-model", ["a.py", "b.py"], "build engine",
+        )
+        assert result == [("a.py", True), ("b.py", False)]
         mock_client.generate.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_irrelevant_file(self, tmp_path, mock_client):
-        (tmp_path / "main.py").write_text("def run(): pass")
-        mock_client.generate = AsyncMock(return_value="NO")
-        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        result = await gatherer._screen_file(
-            mock_client, "test-model", "main.py", "add logging"
-        )
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_missing_file(self, tmp_path, mock_client):
-        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        result = await gatherer._screen_file(
-            mock_client, "test-model", "nonexistent.py", "add logging"
-        )
-        assert result is False
-        mock_client.generate.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_empty_file(self, tmp_path, mock_client):
+    async def test_empty_file_skipped(self, tmp_path, mock_client):
         (tmp_path / "empty.py").write_text("")
+        (tmp_path / "real.py").write_text("x = 1")
+        mock_client.generate = AsyncMock(return_value="real.py: YES")
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        result = await gatherer._screen_file(
-            mock_client, "test-model", "empty.py", "add logging"
+        result = await gatherer._screen_batch(
+            mock_client, "test-model", ["empty.py", "real.py"], "task",
         )
-        assert result is False
+        # empty.py not sent to LLM, only real.py
+        assert ("real.py", True) in result
+
+    @pytest.mark.asyncio
+    async def test_all_empty_no_llm_call(self, tmp_path, mock_client):
+        (tmp_path / "a.py").write_text("")
+        (tmp_path / "b.py").write_text("")
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        result = await gatherer._screen_batch(
+            mock_client, "test-model", ["a.py", "b.py"], "task",
+        )
         mock_client.generate.assert_not_called()
+        assert all(not relevant for _, relevant in result)
 
     @pytest.mark.asyncio
     async def test_llm_failure(self, tmp_path, mock_client):
-        (tmp_path / "main.py").write_text("def run(): pass")
+        (tmp_path / "a.py").write_text("x = 1")
         mock_client.generate = AsyncMock(side_effect=RuntimeError("boom"))
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        result = await gatherer._screen_file(
-            mock_client, "test-model", "main.py", "add logging"
+        result = await gatherer._screen_batch(
+            mock_client, "test-model", ["a.py"], "task",
         )
-        assert result is False
+        assert result == [("a.py", False)]
 
     @pytest.mark.asyncio
-    async def test_respects_max_file_bytes(self, tmp_path, mock_client):
-        (tmp_path / "big.py").write_text("x" * 200)
-        mock_client.generate = AsyncMock(return_value="YES")
-        gatherer = AgentContextGatherer(
-            config=_make_config(max_file_bytes=50), source_dir=str(tmp_path)
-        )
-        await gatherer._screen_file(
-            mock_client, "test-model", "big.py", "task"
+    async def test_uses_screen_prompt(self, tmp_path, mock_client):
+        (tmp_path / "a.py").write_text("x = 1")
+        (tmp_path / "b.py").write_text("y = 2")
+        mock_client.generate = AsyncMock(return_value="a.py: YES\nb.py: NO")
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        await gatherer._screen_batch(
+            mock_client, "test-model", ["a.py", "b.py"], "build engine",
         )
         prompt = mock_client.generate.call_args[1]["messages"][0]["content"]
-        # Content should be truncated
-        assert len(prompt) < 200 + 200  # prompt template + content
+        assert "build engine" in prompt
+        assert "FILE: a.py" in prompt
+        assert "FILE: b.py" in prompt
+        assert "x = 1" in prompt
+        assert "y = 2" in prompt
 
     @pytest.mark.asyncio
-    async def test_rejects_path_traversal(self, tmp_path, mock_client):
+    async def test_uses_temperature_zero(self, tmp_path, mock_client):
+        (tmp_path / "a.py").write_text("x = 1")
+        mock_client.generate = AsyncMock(return_value="a.py: YES")
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        result = await gatherer._screen_file(
-            mock_client, "test-model", "../../etc/passwd", "task"
+        await gatherer._screen_batch(
+            mock_client, "test-model", ["a.py"], "task",
         )
-        assert result is False
-        mock_client.generate.assert_not_called()
+        assert mock_client.generate.call_args[1]["temperature"] == 0
 
 
 class TestScreenAll:
@@ -234,9 +416,9 @@ class TestScreenAll:
         (tmp_path / "a.py").write_text("def a(): pass")
         (tmp_path / "b.py").write_text("def b(): pass")
         (tmp_path / "c.py").write_text("def c(): pass")
-        # a=YES, b=NO, c=YES
+        # Batch 1: a+b, Batch 2: c (odd count)
         mock_client.generate = AsyncMock(
-            side_effect=["YES", "NO", "YES"]
+            side_effect=["a.py: YES\nb.py: NO", "c.py: YES"]
         )
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
         result = await gatherer._screen_all(
@@ -249,9 +431,25 @@ class TestScreenAll:
         assert "c.py" in result
 
     @pytest.mark.asyncio
+    async def test_batches_in_pairs(self, tmp_path, mock_client):
+        for name in ["a.py", "b.py", "c.py", "d.py"]:
+            (tmp_path / name).write_text(f"content of {name}")
+        mock_client.generate = AsyncMock(
+            side_effect=["a.py: YES\nb.py: YES", "c.py: YES\nd.py: YES"]
+        )
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        await gatherer._screen_all(
+            mock_client, "test-model",
+            ["a.py", "b.py", "c.py", "d.py"],
+            "task",
+        )
+        # 4 files -> 2 batches of 2 -> 2 LLM calls
+        assert mock_client.generate.call_count == 2
+
+    @pytest.mark.asyncio
     async def test_all_irrelevant(self, tmp_path, mock_client):
         (tmp_path / "a.py").write_text("x = 1")
-        mock_client.generate = AsyncMock(return_value="NO")
+        mock_client.generate = AsyncMock(return_value="a.py: NO")
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
         result = await gatherer._screen_all(
             mock_client, "test-model", ["a.py"], "task",
@@ -262,16 +460,19 @@ class TestScreenAll:
     async def test_handles_llm_failures_gracefully(self, tmp_path, mock_client):
         (tmp_path / "a.py").write_text("x = 1")
         (tmp_path / "b.py").write_text("y = 2")
+        (tmp_path / "c.py").write_text("z = 3")
+        (tmp_path / "d.py").write_text("w = 4")
+        # Batch 1 (a+b) fails, batch 2 (c+d) succeeds
         mock_client.generate = AsyncMock(
-            side_effect=[RuntimeError("boom"), "YES"]
+            side_effect=[RuntimeError("boom"), "c.py: YES\nd.py: NO"]
         )
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
         result = await gatherer._screen_all(
-            mock_client, "test-model", ["a.py", "b.py"], "task",
+            mock_client, "test-model", ["a.py", "b.py", "c.py", "d.py"], "task",
         )
-        # a fails (treated as not relevant), b succeeds
-        assert "b.py" in result
+        assert "c.py" in result
         assert "a.py" not in result
+        assert "b.py" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -297,13 +498,11 @@ class TestReadRawSource:
         result, included, _, _ = gatherer._read_raw_source(["api.py"], ["api.py"])
         assert "INTERFACE SIGNATURES" in result
         assert "chat(prompt: str) -> str" in result
-        # Signatures should come before the raw source
         sig_pos = result.index("INTERFACE SIGNATURES")
         source_pos = result.index("### api.py")
         assert sig_pos < source_pos
 
     def test_budget_truncation(self, tmp_path):
-        # Create 3 files, each ~5000 chars, with budget of 10000
         for name in ["a.py", "b.py", "c.py"]:
             (tmp_path / name).write_text(f"# {name}\n" + "x = 1\n" * 800)
         gatherer = AgentContextGatherer(
@@ -313,13 +512,11 @@ class TestReadRawSource:
         result, included, _, _ = gatherer._read_raw_source(
             ["a.py", "b.py", "c.py"], ["a.py", "b.py", "c.py"]
         )
-        # Should include some but not all files
         assert len(included) < 3
         assert len(included) >= 1
         assert len(result) <= 10_000
 
     def test_connectivity_ordering(self, tmp_path):
-        # a.py imports b.py — b has higher connectivity, should come first
         (tmp_path / "a.py").write_text("from b import x\ny = 1")
         (tmp_path / "b.py").write_text("x = 42")
         (tmp_path / "c.py").write_text("z = 99")
@@ -327,7 +524,6 @@ class TestReadRawSource:
         result, included, _, _ = gatherer._read_raw_source(
             ["a.py", "b.py", "c.py"], ["a.py", "b.py", "c.py"]
         )
-        # b.py should appear before c.py (b has connections, c has none)
         b_pos = result.index("### b.py")
         c_pos = result.index("### c.py")
         assert b_pos < c_pos
@@ -359,7 +555,6 @@ class TestReadRawSource:
         )
         result, included, _, _ = gatherer._read_raw_source(["big.py"], ["big.py"])
         assert "big.py" in included
-        # Content should be truncated at 50 bytes
         content_lines = result.split("```")[1]
         assert len(content_lines.strip()) <= 50
 
@@ -371,11 +566,10 @@ class TestReadRawSource:
 
 
 # ---------------------------------------------------------------------------
-# Pass 3: _import_expand
+# Pass 4: _import_expand
 # ---------------------------------------------------------------------------
 class TestImportExpand:
     def test_adds_direct_imports(self, tmp_path):
-        """If a.py imports b.py, and a.py is relevant, b.py should be added."""
         (tmp_path / "a.py").write_text("from b import helper")
         (tmp_path / "b.py").write_text("def helper(): pass")
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
@@ -384,7 +578,6 @@ class TestImportExpand:
         assert "b.py" in result
 
     def test_no_duplicates(self, tmp_path):
-        """If b.py is already relevant, import expand shouldn't duplicate it."""
         (tmp_path / "a.py").write_text("from b import helper")
         (tmp_path / "b.py").write_text("def helper(): pass")
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
@@ -393,14 +586,12 @@ class TestImportExpand:
         assert result.count("b.py") == 1
 
     def test_no_imports_returns_same(self, tmp_path):
-        """Files with no imports should return the same list."""
         (tmp_path / "a.py").write_text("x = 1")
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
         result = gatherer._import_expand(["a.py"], ["a.py"])
         assert result == ["a.py"]
 
     def test_depth_one_only(self, tmp_path):
-        """Import expansion should be depth 1 only (a->b, not a->b->c)."""
         (tmp_path / "a.py").write_text("from b import x")
         (tmp_path / "b.py").write_text("from c import y\nx = 1")
         (tmp_path / "c.py").write_text("y = 2")
@@ -408,7 +599,6 @@ class TestImportExpand:
         result = gatherer._import_expand(["a.py"], ["a.py", "b.py", "c.py"])
         assert "a.py" in result
         assert "b.py" in result
-        # c.py should NOT be added (depth 2)
         assert "c.py" not in result
 
 
@@ -486,36 +676,38 @@ class TestGatherEndToEnd:
 
     @pytest.mark.asyncio
     async def test_happy_path(self, tmp_path, mock_client):
-        (tmp_path / "main.py").write_text("def run(): pass")
+        (tmp_path / "main.py").write_text(
+            "def run(): pass\nopenai chat provider interface"
+        )
         (tmp_path / "util.py").write_text("def helper(): pass")
 
-        # Calls: broad_screen(main.py)=YES, broad_screen(util.py)=NO,
-        #        refine_screen(main.py)=YES
-        # No summarize/synthesize — raw source is read directly
+        # BM25 shortlists both. Batched screen: main.py=YES, util.py=NO
         mock_client.generate = AsyncMock(
-            side_effect=["YES", "NO", "YES"]
+            return_value="main.py: YES\nutil.py: NO"
         )
-        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        result = await gatherer.gather(mock_client, "add logging")
+        gatherer = AgentContextGatherer(
+            config=_make_config(), source_dir=str(tmp_path),
+        )
+        result = await gatherer.gather(mock_client, "build openai chat provider")
 
-        # Raw source should contain actual file content
         assert "def run(): pass" in result["synthesized"]
-        assert "def run(): pass" in result["raw_summaries"]
         assert "### main.py" in result["raw_summaries"]
         assert "agent_files" in result
         agent_files = result["agent_files"]
         assert agent_files["total_screened"] == 2
         assert "main.py" in agent_files["relevant"]
         assert "util.py" not in agent_files["relevant"]
-        assert "included" in agent_files
 
     @pytest.mark.asyncio
-    async def test_all_screened_out_returns_empty(self, tmp_path, mock_client):
-        (tmp_path / "main.py").write_text("x = 1")
-        mock_client.generate = AsyncMock(return_value="NO")
-        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        result = await gatherer.gather(mock_client, "task")
-        assert result["synthesized"] == ""
+    async def test_all_screened_out_falls_back_to_bm25(self, tmp_path, mock_client):
+        (tmp_path / "main.py").write_text("openai provider chat interface")
+        mock_client.generate = AsyncMock(return_value="main.py: NO")
+        gatherer = AgentContextGatherer(
+            config=_make_config(max_summary_files=5), source_dir=str(tmp_path),
+        )
+        result = await gatherer.gather(mock_client, "openai chat")
+        assert result["synthesized"] != ""
+        assert "main.py" in result["agent_files"]["relevant"]
 
     @pytest.mark.asyncio
     async def test_empty_dir_returns_empty(self, tmp_path, mock_client):
@@ -525,102 +717,75 @@ class TestGatherEndToEnd:
 
     @pytest.mark.asyncio
     async def test_uses_agent_model_config(self, tmp_path, mock_client):
-        (tmp_path / "main.py").write_text("x = 1")
-        # broad=YES, refine=YES (no summarize/synthesize)
-        mock_client.generate = AsyncMock(
-            side_effect=["YES", "YES"]
-        )
+        (tmp_path / "main.py").write_text("openai chat provider")
+        mock_client.generate = AsyncMock(return_value="main.py: YES")
         gatherer = AgentContextGatherer(
             config=_make_config(agent_model="custom-model"),
             source_dir=str(tmp_path),
         )
-        await gatherer.gather(mock_client, "task")
+        await gatherer.gather(mock_client, "openai chat")
         for call in mock_client.generate.call_args_list:
             assert call[1]["model"] == "custom-model"
 
     @pytest.mark.asyncio
-    async def test_falls_back_to_client_model(self, tmp_path, mock_client):
-        (tmp_path / "main.py").write_text("x = 1")
-        # broad=YES, refine=YES
-        mock_client.generate = AsyncMock(
-            side_effect=["YES", "YES"]
-        )
+    async def test_falls_back_to_mid_model(self, tmp_path, mock_client):
+        (tmp_path / "main.py").write_text("openai chat provider")
+        mock_client.mid_model = "mid-30b"
+        mock_client.generate = AsyncMock(return_value="main.py: YES")
         gatherer = AgentContextGatherer(
-            config=_make_config(), source_dir=str(tmp_path)
+            config=_make_config(), source_dir=str(tmp_path),
         )
-        await gatherer.gather(mock_client, "task")
+        await gatherer.gather(mock_client, "openai chat")
         for call in mock_client.generate.call_args_list:
-            assert call[1]["model"] == "test-model"
+            assert call[1]["model"] == "mid-30b"
 
     @pytest.mark.asyncio
-    async def test_uses_correct_tier_per_pass(self, tmp_path):
-        """Broad screen=fast, refine=mid. No summarize/synthesize LLM calls."""
-        client = MagicMock()
-        client.fast_model = "fast-3b"
-        client.mid_model = "mid-30b"
-        client.smart_model = "smart-27b"
-        (tmp_path / "main.py").write_text("x = 1")
-        # broad=YES, refine=YES
-        client.generate = AsyncMock(
-            side_effect=["YES", "YES"]
+    async def test_batches_halve_llm_calls(self, tmp_path, mock_client):
+        """4 BM25 candidates -> 2 batches of 2 -> 2 LLM calls."""
+        for name in ["a.py", "b.py", "c.py", "d.py"]:
+            (tmp_path / name).write_text(f"openai provider {name}")
+        mock_client.generate = AsyncMock(
+            side_effect=["a.py: YES\nb.py: NO", "c.py: YES\nd.py: NO"]
         )
         gatherer = AgentContextGatherer(
-            config=_make_config(), source_dir=str(tmp_path)
+            config=_make_config(), source_dir=str(tmp_path),
         )
-        await gatherer.gather(client, "task")
-
-        calls = client.generate.call_args_list
-        assert len(calls) == 2  # Only screening calls, no summarize/synthesize
-        # First call is broad screening -> fast model
-        assert calls[0][1]["model"] == "fast-3b"
-        # Second call is refine screening -> mid model
-        assert calls[1][1]["model"] == "mid-30b"
-
-    @pytest.mark.asyncio
-    async def test_agent_model_overrides_tiers(self, tmp_path):
-        """When agent_model is set, it overrides both fast and smart tiers."""
-        client = MagicMock()
-        client.fast_model = "fast-3b"
-        client.smart_model = "smart-30b"
-        (tmp_path / "main.py").write_text("x = 1")
-        # broad=YES, refine=YES
-        client.generate = AsyncMock(
-            side_effect=["YES", "YES"]
-        )
-        gatherer = AgentContextGatherer(
-            config=_make_config(agent_model="override-model"),
-            source_dir=str(tmp_path),
-        )
-        await gatherer.gather(client, "task")
-        for call in client.generate.call_args_list:
-            assert call[1]["model"] == "override-model"
+        await gatherer.gather(mock_client, "openai provider")
+        assert mock_client.generate.call_count == 2
 
     @pytest.mark.asyncio
     async def test_total_failure_returns_empty(self, tmp_path, mock_client):
-        (tmp_path / "main.py").write_text("x = 1")
+        (tmp_path / "main.py").write_text("openai chat provider")
         mock_client.generate = AsyncMock(side_effect=RuntimeError("total fail"))
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        result = await gatherer.gather(mock_client, "task")
-        assert result["synthesized"] == ""
-        assert result["raw_summaries"] == ""
+        result = await gatherer.gather(mock_client, "openai chat")
+        # All screening fails -> fallback to BM25 -> still works
+        assert result["synthesized"] != ""
 
     @pytest.mark.asyncio
     async def test_caps_at_max_summary_files(self, tmp_path, mock_client):
-        # Create 5 files, max_summary_files=2
         for i in range(5):
-            (tmp_path / f"f{i}.py").write_text(f"x = {i}")
+            (tmp_path / f"f{i}.py").write_text(f"target keyword relevant {i}")
 
-        # broad=YES*5, refine=YES*5 (no summarize/synthesize)
-        responses = ["YES"] * 5 + ["YES"] * 5
-        mock_client.generate = AsyncMock(side_effect=responses)
+        mock_client.generate = AsyncMock(return_value="YES")
         gatherer = AgentContextGatherer(
             config=_make_config(max_summary_files=2),
             source_dir=str(tmp_path),
         )
-        result = await gatherer.gather(mock_client, "task")
+        result = await gatherer.gather(mock_client, "target keyword relevant")
         agent_files = result["agent_files"]
-        assert len(agent_files["relevant"]) == 5
         assert len(agent_files["selected"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_bm25_candidates_in_metadata(self, tmp_path, mock_client):
+        (tmp_path / "a.py").write_text("openai chat provider interface")
+        mock_client.generate = AsyncMock(return_value="a.py: YES")
+        gatherer = AgentContextGatherer(
+            config=_make_config(), source_dir=str(tmp_path),
+        )
+        result = await gatherer.gather(mock_client, "openai chat")
+        assert "bm25_candidates" in result["agent_files"]
+        assert isinstance(result["agent_files"]["bm25_candidates"], list)
 
 
 # ---------------------------------------------------------------------------
@@ -629,39 +794,33 @@ class TestGatherEndToEnd:
 class TestProgressCallback:
     @pytest.mark.asyncio
     async def test_all_phases_reported(self, tmp_path, mock_client):
-        (tmp_path / "main.py").write_text("x = 1")
-        # broad=YES, refine=YES
-        mock_client.generate = AsyncMock(
-            side_effect=["YES", "YES"]
-        )
+        (tmp_path / "main.py").write_text("openai chat provider")
+        mock_client.generate = AsyncMock(return_value="main.py: YES")
         phases = []
 
         def track(progress, phase):
             phases.append(phase)
 
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        await gatherer.gather(mock_client, "task", progress_callback=track)
+        await gatherer.gather(mock_client, "openai chat", progress_callback=track)
 
-        phase_prefixes = [p.split(":")[1] if ":" in p else p for p in phases]
-        assert "mapping" in phase_prefixes
-        assert "screening" in phase_prefixes or any("screening" in p for p in phases)
-        assert any("refining" in p for p in phases)
-        assert any("reading" in p for p in phases)
+        phase_names = [p.split(":")[1] if ":" in p else p for p in phases]
+        assert "mapping" in phase_names
+        assert "screening" in phase_names
+        assert "confirming" in phase_names
+        assert "reading" in phase_names
 
     @pytest.mark.asyncio
     async def test_async_callback_awaited(self, tmp_path, mock_client):
-        (tmp_path / "main.py").write_text("x = 1")
-        # broad=YES, refine=YES
-        mock_client.generate = AsyncMock(
-            side_effect=["YES", "YES"]
-        )
+        (tmp_path / "main.py").write_text("openai chat provider")
+        mock_client.generate = AsyncMock(return_value="main.py: YES")
         calls = []
 
         async def async_track(progress, phase):
             calls.append(phase)
 
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        await gatherer.gather(mock_client, "task", progress_callback=async_track)
+        await gatherer.gather(mock_client, "openai chat", progress_callback=async_track)
         assert len(calls) > 0
 
 
@@ -690,3 +849,27 @@ class TestParseFileList:
     def test_filters_non_string_items(self):
         result = AgentContextGatherer._parse_file_list('["a.py", 42, null]')
         assert result == ["a.py"]
+
+
+class TestReadFileContent:
+    def test_reads_existing_file(self, tmp_path):
+        (tmp_path / "main.py").write_text("x = 1")
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        content = gatherer._read_file_content("main.py")
+        assert content == "x = 1"
+
+    def test_missing_file_returns_empty(self, tmp_path):
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        assert gatherer._read_file_content("nonexistent.py") == ""
+
+    def test_path_traversal_returns_empty(self, tmp_path):
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        assert gatherer._read_file_content("../../etc/passwd") == ""
+
+    def test_respects_max_file_bytes(self, tmp_path):
+        (tmp_path / "big.py").write_text("x" * 200)
+        gatherer = AgentContextGatherer(
+            config=_make_config(max_file_bytes=50), source_dir=str(tmp_path),
+        )
+        content = gatherer._read_file_content("big.py")
+        assert len(content) <= 50
