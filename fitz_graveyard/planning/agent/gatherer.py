@@ -286,7 +286,7 @@ class AgentContextGatherer:
             return self._parse_yes_no(response)
         except Exception as e:
             logger.warning(
-                f"AgentContextGatherer: screen failed for {rel_path}: {e}"
+                f"AgentContextGatherer: screen failed for {rel_path}: {e!r}"
             )
             return False
 

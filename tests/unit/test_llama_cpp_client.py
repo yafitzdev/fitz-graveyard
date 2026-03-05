@@ -205,20 +205,26 @@ class TestHealthCheck:
             result = await client.health_check()
         assert result is True
 
-    def test_check_alive_raises_when_not_started(self):
+    @pytest.mark.asyncio
+    async def test_ensure_alive_raises_when_not_started(self):
         client = _make_client()
         with pytest.raises(RuntimeError, match="not started"):
-            client._check_alive()
+            await client._ensure_alive()
 
-    def test_check_alive_raises_on_crash(self):
+    @pytest.mark.asyncio
+    async def test_ensure_alive_restarts_on_crash(self):
         client = _make_client()
         mock_proc = MagicMock()
         mock_proc.poll.return_value = 1
+        mock_proc.returncode = 1
         mock_proc.stderr = MagicMock()
         mock_proc.stderr.read.return_value = b"segfault"
         client._process = mock_proc
-        with pytest.raises(RuntimeError, match="crashed"):
-            client._check_alive()
+        client._active_tier = "fast"
+
+        with patch.object(client, "start", new_callable=AsyncMock) as mock_start:
+            await client._ensure_alive()
+            mock_start.assert_called_once_with("fast")
 
 
 # ---------------------------------------------------------------------------

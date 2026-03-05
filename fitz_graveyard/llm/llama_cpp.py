@@ -295,18 +295,24 @@ class LlamaCppClient:
             f"{self._startup_timeout}s"
         )
 
-    def _check_alive(self) -> None:
-        """Raise if the server process has died unexpectedly."""
+    async def _ensure_alive(self) -> None:
+        """Restart the server if it has crashed, raise if not started."""
         if self._process is None:
             raise RuntimeError("llama-server not started")
         if self._process.poll() is not None:
             stderr = ""
             if self._process.stderr:
                 stderr = self._process.stderr.read().decode(errors="replace")
-            raise RuntimeError(
-                f"llama-server crashed (code {self._process.returncode}): "
+            code = self._process.returncode
+            logger.warning(
+                f"llama-server crashed (code {code}), restarting: "
                 f"{stderr[:500]}"
             )
+            self._process = None
+            self._client = None
+            tier = self._active_tier or "fast"
+            self._active_tier = None
+            await self.start(tier)
 
     # ------------------------------------------------------------------
     # Interface methods (match OllamaClient / LMStudioClient)
@@ -315,7 +321,7 @@ class LlamaCppClient:
     async def health_check(self) -> bool:
         """Check if llama-server is running and healthy."""
         try:
-            self._check_alive()
+            await self._ensure_alive()
             async with httpx.AsyncClient(timeout=5.0) as http:
                 resp = await http.get(
                     f"http://127.0.0.1:{self._port}/health"
@@ -343,7 +349,7 @@ class LlamaCppClient:
             Full accumulated response text.
         """
         await self._ensure_tier(model)
-        self._check_alive()
+        await self._ensure_alive()
 
         effective_model = model or self.model
         logger.info(
@@ -413,7 +419,7 @@ class LlamaCppClient:
             AgentMessage with .tool_calls or .content.
         """
         await self._ensure_tier(model)
-        self._check_alive()
+        await self._ensure_alive()
 
         effective_model = model or self.model
         openai_tools = [_callable_to_openai_tool(fn) for fn in tools]

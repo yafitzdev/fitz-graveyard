@@ -101,7 +101,8 @@ def is_llama_cpp_retryable(exception: BaseException) -> bool:
     """
     Returns True if the llama.cpp exception should be retried.
 
-    Same as LM Studio retryable conditions, plus 503 (model loading/swapping).
+    Same as LM Studio retryable conditions, plus 503 (model loading/swapping)
+    and RuntimeError from server crashes (auto-restart may have failed).
     """
     # Reuse LM Studio logic for shared error types
     if is_lm_studio_retryable(exception):
@@ -114,6 +115,12 @@ def is_llama_cpp_retryable(exception: BaseException) -> bool:
             return True
     except ImportError:
         pass
+
+    # Server crash/restart failures
+    if isinstance(exception, RuntimeError):
+        msg = str(exception).lower()
+        if "llama-server" in msg or "crashed" in msg or "exited" in msg:
+            return True
 
     return False
 
