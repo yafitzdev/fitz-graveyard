@@ -149,7 +149,9 @@ class AgentContextGatherer:
 
             # Pass 4: Read raw source (pure Python, no LLM)
             await self._report(progress_callback, 0.074, "agent:reading")
-            raw_source, included = self._read_raw_source(selected, file_paths)
+            raw_source, included, fwd_map, rev_count = self._read_raw_source(
+                selected, file_paths,
+            )
 
             if not raw_source:
                 logger.warning("AgentContextGatherer: no readable source files")
@@ -159,6 +161,8 @@ class AgentContextGatherer:
                 f"AgentContextGatherer: stuffed {len(included)}/{len(selected)} "
                 f"files ({len(raw_source)} chars) into context"
             )
+            # Serialize forward_map for JSON compatibility
+            serializable_fwd = {k: sorted(v) for k, v in fwd_map.items()}
             return {
                 "synthesized": raw_source,
                 "raw_summaries": raw_source,
@@ -169,6 +173,8 @@ class AgentContextGatherer:
                     "import_expanded": import_added,
                     "selected": selected,
                     "included": included,
+                    "forward_map": serializable_fwd,
+                    "reverse_count": rev_count,
                 },
             }
 
@@ -391,14 +397,14 @@ class AgentContextGatherer:
         self,
         selected: list[str],
         all_paths: list[str],
-    ) -> tuple[str, list[str]]:
+    ) -> tuple[str, list[str], dict[str, set[str]], dict[str, int]]:
         """Read actual source code of selected files into a context string.
 
         Files are sorted by import connectivity (most-connected first)
         so that architecturally central files survive budget truncation.
 
         Returns:
-            (raw_source_string, list_of_included_paths)
+            (raw_source_string, included_paths, forward_map, reverse_count)
         """
         # Compute import connectivity for prioritization
         forward_map, _ = build_import_graph(
@@ -459,7 +465,7 @@ class AgentContextGatherer:
             )
             blocks.insert(0, header)
 
-        return "\n\n".join(blocks), included
+        return "\n\n".join(blocks), included, forward_map, reverse_count
 
     # ------------------------------------------------------------------
     # Helpers

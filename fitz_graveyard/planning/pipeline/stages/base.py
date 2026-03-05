@@ -6,6 +6,7 @@ Each stage defines its prompt template, output parsing logic, and
 execution logic. Stages are executed sequentially by the PlanningPipeline.
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -629,6 +630,152 @@ class PipelineStage(ABC):
         except Exception as e:
             logger.warning(f"Stage '{self.name}': devil's advocate failed: {e}")
             return reasoning_text
+
+    # ------------------------------------------------------------------
+    # Decomposed reasoning: focused investigations
+    # ------------------------------------------------------------------
+
+    _INVESTIGATION_SYSTEM = (
+        "You are analyzing source code to answer a specific question about a codebase. "
+        "Be precise and concrete. Cite specific files, methods, and return types. "
+        "Do not speculate — only state what the code actually shows. "
+        "If you cannot determine the answer from the provided code, say so."
+    )
+
+    _GENERIC_QUESTIONS = [
+        (
+            "What are the key interfaces and their exact contracts? "
+            "For each important class or protocol, list every public method with its "
+            "parameter types and return type. What data goes in and what comes out at each layer?"
+        ),
+        (
+            "Trace the data flow end-to-end for the main operation in this codebase. "
+            "At each step, what data is available? Where does data get transformed, "
+            "reduced, or discarded? What information exists at one layer but is NOT "
+            "passed to the next layer?"
+        ),
+        (
+            "What extension points exist in this codebase (hooks, middleware, plugins, "
+            "base classes, event systems)? For each extension point, what data can it "
+            "access? What can it NOT see? What are its limitations?"
+        ),
+        (
+            "What patterns and conventions does this codebase follow? How is new "
+            "functionality typically added? What existing patterns should new code match? "
+            "Are there naming conventions, directory structure rules, or architectural "
+            "patterns that are consistently applied?"
+        ),
+    ]
+
+    _INVESTIGATION_CONCURRENCY = 4
+
+    async def _investigate(
+        self,
+        client: Any,
+        job_description: str,
+        prior_outputs: dict[str, Any],
+    ) -> str:
+        """Run focused investigation questions in parallel before reasoning.
+
+        Each question gets its own LLM call with the full source context,
+        producing pre-digested facts that the reasoning pass can build on.
+
+        Returns formatted findings string, or empty string on failure.
+        """
+        krag_context = self._get_raw_summaries(prior_outputs)
+        if not krag_context:
+            return ""
+
+        await self._report_substep("investigating")
+
+        # Generic questions (always asked)
+        questions = list(self._GENERIC_QUESTIONS)
+
+        # Customized questions (from AST data)
+        agent_files = prior_outputs.get("_agent_context", {}).get("agent_files", {})
+        if agent_files:
+            from fitz_graveyard.planning.agent.indexer import generate_investigation_questions
+            # Extract signatures from the raw context (it's prepended)
+            sig_marker = "--- INTERFACE SIGNATURES"
+            sig_end = krag_context.find("\n\n###")
+            signatures = krag_context[krag_context.find(sig_marker):sig_end] if sig_marker in krag_context else ""
+
+            # Reconstruct forward_map from serialized form
+            fwd_raw = agent_files.get("forward_map", {})
+            forward_map = {k: set(v) for k, v in fwd_raw.items()}
+            reverse_count = agent_files.get("reverse_count", {})
+
+            custom = generate_investigation_questions(signatures, forward_map, reverse_count)
+            if custom:
+                logger.info(
+                    f"Stage '{self.name}': generated {len(custom)} "
+                    f"customized investigation questions"
+                )
+                questions.extend(custom)
+
+        # Run all investigations in parallel
+        sem = asyncio.Semaphore(self._INVESTIGATION_CONCURRENCY)
+
+        async def _bounded(q: str) -> tuple[str, str]:
+            async with sem:
+                answer = await self._ask_one(client, q, job_description, krag_context)
+                return q, answer
+
+        t0 = time.monotonic()
+        results = await asyncio.gather(
+            *[_bounded(q) for q in questions],
+            return_exceptions=True,
+        )
+        t1 = time.monotonic()
+
+        # Format findings
+        findings: list[str] = []
+        for r in results:
+            if isinstance(r, Exception):
+                logger.warning(f"Stage '{self.name}': investigation failed: {r}")
+                continue
+            q, a = r
+            if a:
+                findings.append(f"Q: {q}\nA: {a}")
+
+        if not findings:
+            return ""
+
+        logger.info(
+            f"Stage '{self.name}': {len(findings)}/{len(questions)} investigations "
+            f"completed in {t1 - t0:.1f}s"
+        )
+        return (
+            "--- INVESTIGATION FINDINGS (verified against source code) ---\n\n"
+            + "\n\n".join(findings)
+            + "\n\n---"
+        )
+
+    async def _ask_one(
+        self,
+        client: Any,
+        question: str,
+        job_description: str,
+        krag_context: str,
+    ) -> str:
+        """Ask one focused investigation question about the codebase."""
+        messages = [
+            {"role": "system", "content": self._INVESTIGATION_SYSTEM},
+            {
+                "role": "user",
+                "content": (
+                    f"TASK: {job_description}\n\n"
+                    f"--- SOURCE CODE ---\n{krag_context}\n\n"
+                    f"QUESTION: {question}\n\n"
+                    "Answer concisely but precisely. Cite specific files and methods."
+                ),
+            },
+        ]
+        try:
+            return await client.generate(messages=messages, temperature=0)
+        except Exception as e:
+            logger.warning(f"Stage '{self.name}': _ask_one failed: {e}")
+            return ""
 
     _MAX_GATHERED_CONTEXT_CHARS = 32000
 

@@ -135,7 +135,7 @@ class ArchitectureDesignStage(PipelineStage):
     def progress_range(self) -> tuple[float, float]:
         return (0.25, 0.65)
 
-    def build_prompt(self, job_description: str, prior_outputs: dict[str, Any]) -> list[dict]:
+    def build_prompt(self, job_description: str, prior_outputs: dict[str, Any], *, findings: str = "") -> list[dict]:
         prompt_template = load_prompt("architecture_design")
 
         context_str = job_description
@@ -182,6 +182,8 @@ class ArchitectureDesignStage(PipelineStage):
             krag_context=krag_context,
             binding_constraints=binding,
         )
+        if findings:
+            prompt = f"{findings}\n\n{prompt}"
         if impl_check:
             prompt = f"{impl_check}\n\n{prompt}"
         return self._make_messages(prompt)
@@ -232,26 +234,29 @@ class ArchitectureDesignStage(PipelineStage):
 
     async def execute(self, client: Any, job_description: str, prior_outputs: dict[str, Any]) -> StageResult:
         try:
-            # 1. Reasoning pass
-            messages = self.build_prompt(job_description, prior_outputs)
+            # 1. Focused investigations (parallel)
+            findings = await self._investigate(client, job_description, prior_outputs)
+
+            # 2. Reasoning pass (with investigation findings)
+            messages = self.build_prompt(job_description, prior_outputs, findings=findings)
             await self._report_substep("reasoning")
             t0 = time.monotonic()
             reasoning = await client.generate(messages=messages)
             t1 = time.monotonic()
             logger.info(f"Stage '{self.name}': reasoning took {t1 - t0:.1f}s ({len(reasoning)} chars)")
 
-            # 2. Self-critique pass
+            # 3. Self-critique pass
             krag_context = self._get_gathered_context(prior_outputs)
             reasoning = await self._self_critique(
                 client, reasoning, job_description, krag_context=krag_context,
             )
 
-            # 3. Devil's advocate pass
+            # 4. Devil's advocate pass
             reasoning = await self._devil_advocate(
                 client, reasoning, job_description, krag_context=krag_context,
             )
 
-            # 4. Per-field-group extraction
+            # 5. Per-field-group extraction
             # Selective context: only groups that need codebase evidence get it
             _CONTEXT_GROUPS = {"approaches", "adrs", "artifacts", "components", "integrations"}
 

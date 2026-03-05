@@ -526,6 +526,11 @@ class TestArchitectureDesignStage:
         prior = {"_gathered_context": krag}
 
         mock_client.generate.side_effect = [
+            # 4 investigation calls (generic questions — _gathered_context triggers _investigate)
+            "Investigation answer 1.",
+            "Investigation answer 2.",
+            "Investigation answer 3.",
+            "Investigation answer 4.",
             "Reasoning...",
             "Reviewed reasoning...",  # critique
             "Challenged reasoning...",  # devil's advocate
@@ -540,21 +545,21 @@ class TestArchitectureDesignStage:
         result = await stage.execute(mock_client, "Build API", prior)
         assert result.success is True
 
-        # Calls: [0]=reasoning, [1]=critique, [2]=devil's advocate,
-        #        [3]=approaches, [4]=tradeoffs, [5]=adrs,
-        #        [6]=components, [7]=integrations, [8]=artifacts
+        # Calls: [0..3]=investigations, [4]=reasoning, [5]=critique, [6]=DA,
+        #        [7]=approaches, [8]=tradeoffs, [9]=adrs,
+        #        [10]=components, [11]=integrations, [12]=artifacts
         calls = mock_client.generate.call_args_list
 
-        # approaches (call 3), adrs (call 5), components (call 6),
-        # integrations (call 7), artifacts (call 8) should have krag
-        assert "Codebase Summary" in calls[3].kwargs["messages"][1]["content"]
-        assert "Codebase Summary" in calls[5].kwargs["messages"][1]["content"]
-        assert "Codebase Summary" in calls[6].kwargs["messages"][1]["content"]
+        # approaches (7), adrs (9), components (10),
+        # integrations (11), artifacts (12) should have krag
         assert "Codebase Summary" in calls[7].kwargs["messages"][1]["content"]
-        assert "Codebase Summary" in calls[8].kwargs["messages"][1]["content"]
+        assert "Codebase Summary" in calls[9].kwargs["messages"][1]["content"]
+        assert "Codebase Summary" in calls[10].kwargs["messages"][1]["content"]
+        assert "Codebase Summary" in calls[11].kwargs["messages"][1]["content"]
+        assert "Codebase Summary" in calls[12].kwargs["messages"][1]["content"]
 
-        # tradeoffs (call 4) should NOT
-        assert "Codebase Summary" not in calls[4].kwargs["messages"][1]["content"]
+        # tradeoffs (8) should NOT
+        assert "Codebase Summary" not in calls[8].kwargs["messages"][1]["content"]
 
     @pytest.mark.asyncio
     async def test_execute_partial_failure(self, stage):
@@ -1285,4 +1290,105 @@ class TestDevilAdvocate:
         )
         assert "context:challenging" in reported
 
+
+class TestInvestigate:
+    """Test the _investigate method on PipelineStage."""
+
+    @pytest.mark.asyncio
+    async def test_returns_findings_string(self):
+        stage = ContextStage()
+        mock_client = AsyncMock()
+        mock_client.generate.return_value = "Interface X returns str."
+
+        prior = {"_raw_summaries": "## api.py\ndef chat() -> str: ..."}
+        result = await stage._investigate(mock_client, "Build API", prior)
+        assert "INVESTIGATION FINDINGS" in result
+        assert "Interface X returns str." in result
+
+    @pytest.mark.asyncio
+    async def test_skips_without_raw_summaries(self):
+        stage = ContextStage()
+        mock_client = AsyncMock()
+
+        result = await stage._investigate(mock_client, "Build API", {})
+        assert result == ""
+        mock_client.generate.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_parallel_calls_for_generic_questions(self):
+        stage = ContextStage()
+        mock_client = AsyncMock()
+        mock_client.generate.return_value = "Answer."
+
+        prior = {"_raw_summaries": "some code context"}
+        await stage._investigate(mock_client, "Build API", prior)
+        # Should have at least 4 calls (generic questions)
+        assert mock_client.generate.call_count >= 4
+
+    @pytest.mark.asyncio
+    async def test_includes_custom_questions_with_agent_files(self):
+        stage = ContextStage()
+        mock_client = AsyncMock()
+        mock_client.generate.return_value = "Answer."
+
+        prior = {
+            "_raw_summaries": (
+                "--- INTERFACE SIGNATURES (auto-extracted) ---\n"
+                "class ImplA(Base):\nclass ImplB(Base):\n\n"
+                "### src/mod.py\n```\ncode\n```"
+            ),
+            "_agent_context": {
+                "agent_files": {
+                    "forward_map": {},
+                    "reverse_count": {},
+                },
+            },
+        }
+        result = await stage._investigate(mock_client, "Build API", prior)
+        # 4 generic + 1 custom (class hierarchy) = 5 calls
+        assert mock_client.generate.call_count == 5
+
+    @pytest.mark.asyncio
+    async def test_handles_llm_failures_gracefully(self):
+        stage = ContextStage()
+        mock_client = AsyncMock()
+        mock_client.generate.side_effect = RuntimeError("LLM crashed")
+
+        prior = {"_raw_summaries": "some code"}
+        result = await stage._investigate(mock_client, "Build API", prior)
+        # All calls fail, should return empty
+        assert result == ""
+
+    @pytest.mark.asyncio
+    async def test_partial_failures_still_return_findings(self):
+        stage = ContextStage()
+        mock_client = AsyncMock()
+        # First call succeeds, rest fail
+        mock_client.generate.side_effect = [
+            "Good answer.",
+            RuntimeError("fail"),
+            RuntimeError("fail"),
+            RuntimeError("fail"),
+        ]
+
+        prior = {"_raw_summaries": "some code"}
+        result = await stage._investigate(mock_client, "Build API", prior)
+        assert "INVESTIGATION FINDINGS" in result
+        assert "Good answer." in result
+
+    @pytest.mark.asyncio
+    async def test_reports_investigating_substep(self):
+        stage = ContextStage()
+        reported = []
+
+        async def track(phase: str) -> None:
+            reported.append(phase)
+
+        stage.set_substep_callback(track)
+        mock_client = AsyncMock()
+        mock_client.generate.return_value = "Answer."
+
+        prior = {"_raw_summaries": "code"}
+        await stage._investigate(mock_client, "Build API", prior)
+        assert "context:investigating" in reported
 

@@ -17,11 +17,14 @@ from fitz_graveyard.planning.agent.indexer import (
     _extract_python,
     _extract_python_regex,
     _extract_signatures_from_python,
+    _parse_class_hierarchies,
+    _parse_simple_return_methods,
     _group_by_directory,
     build_directory_clusters,
     build_import_graph,
     build_structural_index,
     extract_interface_signatures,
+    generate_investigation_questions,
 )
 
 
@@ -642,3 +645,142 @@ class TestExtractInterfaceSignatures:
         assert "## b.py" in result
         assert "foo() -> int" in result
         assert "bar() -> str" in result
+
+
+class TestParseClassHierarchies:
+    """Tests for _parse_class_hierarchies()."""
+
+    def test_single_hierarchy(self):
+        sigs = "class OpenAIChat(ChatProvider):\nclass OllamaChat(ChatProvider):"
+        result = _parse_class_hierarchies(sigs)
+        assert result == {"ChatProvider": ["OpenAIChat", "OllamaChat"]}
+
+    def test_no_hierarchies(self):
+        sigs = "def foo() -> str:\ndef bar() -> int:"
+        result = _parse_class_hierarchies(sigs)
+        assert result == {}
+
+    def test_skips_object_abc_basemodel(self):
+        sigs = "class Foo(object):\nclass Bar(ABC):\nclass Baz(BaseModel):\nclass Qux(Protocol):"
+        result = _parse_class_hierarchies(sigs)
+        assert result == {}
+
+    def test_multiple_bases(self):
+        sigs = "class Impl(Base, Mixin):"
+        result = _parse_class_hierarchies(sigs)
+        assert "Base" in result
+        assert "Mixin" in result
+
+    def test_multiple_base_classes(self):
+        sigs = (
+            "class A(Base):\nclass B(Base):\n"
+            "class X(Other):\nclass Y(Other):\nclass Z(Other):"
+        )
+        result = _parse_class_hierarchies(sigs)
+        assert len(result["Base"]) == 2
+        assert len(result["Other"]) == 3
+
+
+class TestParseSimpleReturnMethods:
+    """Tests for _parse_simple_return_methods()."""
+
+    def test_finds_simple_return(self):
+        sigs = "## src/provider.py\n  chat(prompt: str, model: str, config: dict) -> str"
+        result = _parse_simple_return_methods(sigs)
+        assert len(result) == 1
+        assert result[0] == ("src/provider.py", "chat", "str", 3)
+
+    def test_skips_complex_return(self):
+        sigs = "## mod.py\n  process(a: int, b: int, c: int) -> dict"
+        result = _parse_simple_return_methods(sigs)
+        assert result == []
+
+    def test_skips_private_methods(self):
+        sigs = "## mod.py\n  _internal(a: int, b: int, c: int) -> str"
+        result = _parse_simple_return_methods(sigs)
+        assert result == []
+
+    def test_skips_few_params(self):
+        sigs = "## mod.py\n  get(key: str) -> str"
+        result = _parse_simple_return_methods(sigs)
+        assert result == []
+
+    def test_bool_return(self):
+        sigs = "## check.py\n  validate(data: dict, schema: dict, strict: bool) -> bool"
+        result = _parse_simple_return_methods(sigs)
+        assert len(result) == 1
+        assert result[0][2] == "bool"
+
+    def test_async_method(self):
+        sigs = "## svc.py\n  async generate(prompt: str, model: str, temp: float) -> str"
+        result = _parse_simple_return_methods(sigs)
+        assert len(result) == 1
+        assert result[0][1] == "generate"
+
+    def test_tracks_current_file(self):
+        sigs = (
+            "## a.py\n  foo(x: int, y: int, z: int) -> str\n"
+            "## b.py\n  bar(a: str, b: str, c: str) -> bool"
+        )
+        result = _parse_simple_return_methods(sigs)
+        assert result[0][0] == "a.py"
+        assert result[1][0] == "b.py"
+
+
+class TestGenerateInvestigationQuestions:
+    """Tests for generate_investigation_questions()."""
+
+    def test_class_hierarchy_question(self):
+        sigs = "class ImplA(Base):\nclass ImplB(Base):"
+        result = generate_investigation_questions(sigs, {}, {})
+        assert len(result) == 1
+        assert "Base" in result[0]
+        assert "ImplA" in result[0]
+
+    def test_hub_file_question(self):
+        result = generate_investigation_questions(
+            "", {}, {"core/engine.py": 7},
+        )
+        assert len(result) == 1
+        assert "core/engine.py" in result[0]
+        assert "7" in result[0]
+
+    def test_simple_return_question(self):
+        sigs = "## provider.py\n  chat(prompt: str, model: str, config: dict) -> str"
+        result = generate_investigation_questions(sigs, {}, {})
+        assert len(result) == 1
+        assert "chat" in result[0]
+        assert "str" in result[0]
+
+    def test_max_three_questions(self):
+        # 2 hierarchy + 1 hub + 1 simple return = should cap at 3
+        sigs = (
+            "class A(X):\nclass B(X):\n"
+            "class C(Y):\nclass D(Y):\n"
+            "## mod.py\n  do(a: int, b: int, c: int) -> str"
+        )
+        result = generate_investigation_questions(
+            sigs, {}, {"hub.py": 10},
+        )
+        assert len(result) <= 3
+
+    def test_empty_inputs(self):
+        result = generate_investigation_questions("", {}, {})
+        assert result == []
+
+    def test_hub_below_threshold_ignored(self):
+        result = generate_investigation_questions(
+            "", {}, {"small.py": 3},
+        )
+        assert result == []
+
+    def test_combined_all_types(self):
+        sigs = (
+            "class ImplA(Base):\nclass ImplB(Base):\n"
+            "## svc.py\n  process(a: int, b: int, c: int) -> bool"
+        )
+        result = generate_investigation_questions(
+            sigs, {}, {"hub.py": 6},
+        )
+        # All 3 heuristics fire = exactly 3 (at cap)
+        assert len(result) == 3

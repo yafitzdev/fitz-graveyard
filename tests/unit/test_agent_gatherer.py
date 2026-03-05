@@ -281,7 +281,7 @@ class TestReadRawSource:
     def test_reads_files_as_fenced_blocks(self, tmp_path):
         (tmp_path / "main.py").write_text("def run(): pass")
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        result, included = gatherer._read_raw_source(["main.py"], ["main.py"])
+        result, included, _, _ = gatherer._read_raw_source(["main.py"], ["main.py"])
         assert "### main.py" in result
         assert "def run(): pass" in result
         assert "```" in result
@@ -294,7 +294,7 @@ class TestReadRawSource:
             "        pass\n"
         )
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        result, included = gatherer._read_raw_source(["api.py"], ["api.py"])
+        result, included, _, _ = gatherer._read_raw_source(["api.py"], ["api.py"])
         assert "INTERFACE SIGNATURES" in result
         assert "chat(prompt: str) -> str" in result
         # Signatures should come before the raw source
@@ -310,7 +310,7 @@ class TestReadRawSource:
             config=_make_config(max_context_chars=10_000),
             source_dir=str(tmp_path),
         )
-        result, included = gatherer._read_raw_source(
+        result, included, _, _ = gatherer._read_raw_source(
             ["a.py", "b.py", "c.py"], ["a.py", "b.py", "c.py"]
         )
         # Should include some but not all files
@@ -324,7 +324,7 @@ class TestReadRawSource:
         (tmp_path / "b.py").write_text("x = 42")
         (tmp_path / "c.py").write_text("z = 99")
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        result, included = gatherer._read_raw_source(
+        result, included, _, _ = gatherer._read_raw_source(
             ["a.py", "b.py", "c.py"], ["a.py", "b.py", "c.py"]
         )
         # b.py should appear before c.py (b has connections, c has none)
@@ -335,7 +335,7 @@ class TestReadRawSource:
     def test_skips_missing_files(self, tmp_path):
         (tmp_path / "a.py").write_text("x = 1")
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        result, included = gatherer._read_raw_source(
+        result, included, _, _ = gatherer._read_raw_source(
             ["a.py", "missing.py"], ["a.py", "missing.py"]
         )
         assert "a.py" in included
@@ -345,7 +345,7 @@ class TestReadRawSource:
         (tmp_path / "empty.py").write_text("")
         (tmp_path / "real.py").write_text("x = 1")
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        result, included = gatherer._read_raw_source(
+        result, included, _, _ = gatherer._read_raw_source(
             ["empty.py", "real.py"], ["empty.py", "real.py"]
         )
         assert "real.py" in included
@@ -357,7 +357,7 @@ class TestReadRawSource:
             config=_make_config(max_file_bytes=50),
             source_dir=str(tmp_path),
         )
-        result, included = gatherer._read_raw_source(["big.py"], ["big.py"])
+        result, included, _, _ = gatherer._read_raw_source(["big.py"], ["big.py"])
         assert "big.py" in included
         # Content should be truncated at 50 bytes
         content_lines = result.split("```")[1]
@@ -365,7 +365,7 @@ class TestReadRawSource:
 
     def test_empty_selected_returns_empty(self, tmp_path):
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        result, included = gatherer._read_raw_source([], [])
+        result, included, _, _ = gatherer._read_raw_source([], [])
         assert result == ""
         assert included == []
 

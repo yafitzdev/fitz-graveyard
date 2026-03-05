@@ -636,6 +636,140 @@ def extract_interface_signatures(
 
 
 # ---------------------------------------------------------------------------
+# Investigation question generation (customized from AST data)
+# ---------------------------------------------------------------------------
+
+_MAX_CUSTOM_QUESTIONS = 3
+
+
+def generate_investigation_questions(
+    signatures: str,
+    forward_map: dict[str, set[str]],
+    reverse_count: dict[str, int],
+) -> list[str]:
+    """Generate codebase-specific investigation questions from structural data.
+
+    Analyzes interface signatures and import graph to produce targeted
+    questions that guide the LLM toward architectural insights it would
+    otherwise miss.
+
+    Args:
+        signatures: Output of extract_interface_signatures().
+        forward_map: {file: {imported_files}} from build_import_graph().
+        reverse_count: {file: number_of_importers} from import graph.
+
+    Returns:
+        List of 0-3 customized question strings.
+    """
+    questions: list[str] = []
+
+    # Parse signatures to find class hierarchies and method signatures
+    hierarchies = _parse_class_hierarchies(signatures)
+    methods_with_simple_returns = _parse_simple_return_methods(signatures)
+
+    # 1. Class hierarchy: base class with ≥2 implementations
+    for base, impls in hierarchies.items():
+        if len(impls) >= 2 and len(questions) < _MAX_CUSTOM_QUESTIONS:
+            impl_list = ", ".join(impls[:5])
+            questions.append(
+                f"Class '{base}' has {len(impls)} implementations: {impl_list}. "
+                f"For each implementation, what does its key method actually do internally? "
+                f"Do all implementations handle data the same way, or do some discard "
+                f"information that others preserve? What data is available inside each "
+                f"implementation that is NOT available to outside callers?"
+            )
+
+    # 2. Hub file: imported by many files (architecturally central)
+    hub_threshold = 5
+    hubs = sorted(
+        ((f, c) for f, c in reverse_count.items() if c >= hub_threshold),
+        key=lambda x: x[1],
+        reverse=True,
+    )
+    for hub_file, count in hubs[:1]:  # Only ask about the top hub
+        if len(questions) < _MAX_CUSTOM_QUESTIONS:
+            questions.append(
+                f"File '{hub_file}' is imported by {count} other files, making it "
+                f"architecturally central. What interfaces does it define? What are "
+                f"the exact method signatures and return types? If this file's "
+                f"contracts change, what would break?"
+            )
+
+    # 3. Simple return type on complex method (data loss signal)
+    for file_path, method_name, return_type, param_count in methods_with_simple_returns:
+        if len(questions) < _MAX_CUSTOM_QUESTIONS:
+            questions.append(
+                f"Method '{method_name}' in '{file_path}' takes {param_count} "
+                f"parameters but returns only '{return_type}'. What richer data "
+                f"is available inside this method before the return value is "
+                f"constructed? What information is discarded during the conversion "
+                f"to {return_type}?"
+            )
+
+    return questions
+
+
+def _parse_class_hierarchies(signatures: str) -> dict[str, list[str]]:
+    """Extract {base_class: [impl1, impl2, ...]} from signatures text.
+
+    Parses lines like:
+      class OpenAIChat(ChatProvider):
+      class OllamaChat(ChatProvider):
+    into {"ChatProvider": ["OpenAIChat", "OllamaChat"]}
+    """
+    hierarchies: dict[str, list[str]] = {}
+    for match in re.finditer(r"class\s+(\w+)\(([^)]+)\):", signatures):
+        cls_name = match.group(1)
+        bases = [b.strip() for b in match.group(2).split(",")]
+        for base in bases:
+            if base and base not in ("object", "ABC", "BaseModel", "Protocol"):
+                hierarchies.setdefault(base, []).append(cls_name)
+    return hierarchies
+
+
+def _parse_simple_return_methods(
+    signatures: str,
+) -> list[tuple[str, str, str, int]]:
+    """Find methods with simple return types that suggest data loss.
+
+    Returns list of (file_path, method_name, return_type, param_count).
+    Only includes methods returning str/bool with ≥3 parameters.
+    """
+    results: list[tuple[str, str, str, int]] = []
+    current_file = ""
+    simple_types = {"str", "bool", "int", "float", "None"}
+
+    for line in signatures.splitlines():
+        if line.startswith("## "):
+            current_file = line[3:].strip()
+            continue
+
+        # Match method lines like: "  chat(prompt: str, model: str) -> str"
+        # or top-level: "process(data: list, config: dict) -> bool"
+        match = re.match(
+            r"\s*(?:async\s+)?(\w+)\(([^)]*)\)\s*->\s*(\w+)", line,
+        )
+        if not match:
+            continue
+
+        method_name = match.group(1)
+        params_str = match.group(2)
+        return_type = match.group(3)
+
+        if return_type not in simple_types:
+            continue
+        if method_name.startswith("_"):
+            continue
+
+        # Count parameters (split by comma, filter empty)
+        params = [p.strip() for p in params_str.split(",") if p.strip()]
+        if len(params) >= 3:
+            results.append((current_file, method_name, return_type, len(params)))
+
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Two-tier directory clustering (for large codebases, ≥100 files)
 # ---------------------------------------------------------------------------
 
