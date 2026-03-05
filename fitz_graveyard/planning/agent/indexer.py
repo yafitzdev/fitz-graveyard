@@ -635,6 +635,146 @@ def extract_interface_signatures(
     return "\n\n".join(blocks)
 
 
+_MAX_LIBRARY_CHARS = 4000
+_MAX_LIBRARY_PACKAGES = 10
+
+
+def extract_library_signatures(
+    source_dir: str,
+    included_files: list[str],
+    file_list: list[str],
+    max_file_bytes: int = 50_000,
+) -> str:
+    """Extract public API signatures from third-party packages used by included files.
+
+    Collects imports from included files, filters out intra-project imports,
+    then uses importlib + inspect to extract class/method signatures from
+    installed packages. Gives the LLM ground truth for library APIs so it
+    doesn't hallucinate non-existent methods like ``ContextVar.update()``.
+
+    Args:
+        source_dir: Absolute path to source directory root.
+        included_files: Files included in the planning context.
+        file_list: All file paths in the codebase (for intra-project filtering).
+        max_file_bytes: Maximum bytes to read per file.
+
+    Returns:
+        Formatted library reference block, or empty string if nothing found.
+    """
+    import importlib
+    import inspect
+
+    root = Path(source_dir).resolve()
+    module_lookup = _build_module_file_lookup(file_list)
+
+    # Collect all imports from included files
+    all_imports: set[str] = set()
+    for rel_path in included_files:
+        if not rel_path.endswith(".py"):
+            continue
+        full_path = root / rel_path
+        if not full_path.is_file():
+            continue
+        try:
+            raw = full_path.read_bytes()[:max_file_bytes]
+            content = raw.decode("utf-8", errors="replace")
+        except OSError:
+            continue
+        all_imports.update(_extract_full_imports(content))
+
+    # Filter out intra-project imports
+    third_party: set[str] = set()
+    for imp in all_imports:
+        top_level = imp.split(".")[0]
+        if top_level in module_lookup or imp in module_lookup:
+            continue
+        # Skip stdlib modules we can't usefully introspect
+        if top_level in {"__future__", "typing", "typing_extensions", "collections"}:
+            continue
+        third_party.add(top_level)
+
+    if not third_party:
+        return ""
+
+    blocks: list[str] = []
+    used = 0
+
+    for pkg_name in sorted(third_party)[:_MAX_LIBRARY_PACKAGES]:
+        try:
+            mod = importlib.import_module(pkg_name)
+        except Exception:
+            continue
+
+        lines: list[str] = []
+        try:
+            members = inspect.getmembers(mod)
+        except Exception:
+            members = [(name, getattr(mod, name, None)) for name in dir(mod)]
+
+        for name, obj in members:
+            if name.startswith("_"):
+                continue
+            try:
+                if inspect.isclass(obj):
+                    methods = _extract_class_public_methods(obj)
+                    if methods:
+                        lines.append(f"class {name}: {', '.join(methods)}")
+                    else:
+                        lines.append(f"class {name}")
+                elif inspect.isfunction(obj) or inspect.isbuiltin(obj):
+                    sig = _safe_signature(obj)
+                    lines.append(f"{name}{sig}")
+            except Exception:
+                continue
+
+        if not lines:
+            continue
+
+        block = f"## {pkg_name}\n" + "\n".join(lines[:20])  # Cap lines per package
+        if used + len(block) > _MAX_LIBRARY_CHARS:
+            break
+
+        blocks.append(block)
+        used += len(block)
+
+    if not blocks:
+        return ""
+
+    logger.info(
+        f"Library signatures: extracted {len(blocks)} packages ({used} chars)"
+    )
+    return "\n\n".join(blocks)
+
+
+def _extract_class_public_methods(cls: type) -> list[str]:
+    """Extract public method names + signatures from a class."""
+    import inspect
+
+    methods: list[str] = []
+    for name in sorted(dir(cls)):
+        if name.startswith("_"):
+            continue
+        try:
+            attr = getattr(cls, name)
+        except Exception:
+            continue
+        if callable(attr) or isinstance(attr, property):
+            sig = _safe_signature(attr) if callable(attr) else " (property)"
+            methods.append(f"{name}{sig}")
+    return methods[:15]  # Cap methods per class
+
+
+def _safe_signature(obj: object) -> str:
+    """Get inspect.signature() as string, or empty on failure."""
+    import inspect
+
+    try:
+        sig = inspect.signature(obj)
+        return str(sig)
+    except (ValueError, TypeError):
+        return "()"
+
+
 # ---------------------------------------------------------------------------
 # Investigation question generation (customized from AST data)
 # ---------------------------------------------------------------------------

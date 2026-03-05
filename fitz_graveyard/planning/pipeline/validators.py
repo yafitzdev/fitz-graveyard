@@ -7,6 +7,7 @@ checks a structural condition, and optionally repairs via LLM or deterministic f
 Validators run between extraction and parse_output() — never crash the stage.
 """
 
+import ast
 import json
 import logging
 import re
@@ -351,4 +352,190 @@ def ensure_grounded_risks(
         logger.info(f"ensure_grounded_risks: removed {len(ungrounded)} ungrounded risks: {removed_descs}")
 
     merged["risks"] = grounded
+    return merged
+
+
+# ---------------------------------------------------------------------------
+# Artifact code validators
+# ---------------------------------------------------------------------------
+
+def _extract_known_methods(reference_text: str) -> set[str]:
+    """Extract known method/function names from signatures + library reference blocks."""
+    methods: set[str] = set()
+    for line in reference_text.splitlines():
+        line = line.strip()
+        # Match "  method_name(..." or "method_name(..." or "async method_name(..."
+        m = re.match(r"(?:async\s+)?(\w+)\(", line)
+        if m:
+            methods.add(m.group(1))
+        # Match "class Name: method1(...), method2(...), ..."
+        if line.startswith("class ") and ":" in line:
+            after_colon = line.split(":", 1)[1]
+            for call_match in re.finditer(r"(\w+)\(", after_colon):
+                methods.add(call_match.group(1))
+    return methods
+
+
+def _extract_method_calls_from_ast(tree: ast.Module) -> list[tuple[str, int]]:
+    """Extract (method_name, line_number) from attribute calls in AST."""
+    calls: list[tuple[str, int]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            calls.append((node.func.attr, node.lineno))
+    return calls
+
+
+def ensure_valid_artifacts(
+    merged: dict[str, Any],
+    prior_outputs: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate Python artifacts: syntax check + method call cross-reference.
+
+    Pure Python, no LLM. For each .py artifact:
+    1. ast.parse() — catches syntax errors
+    2. Cross-reference method calls against known signatures
+    3. Annotate suspicious calls with [VERIFY] comments
+
+    Never crashes — silently skips unparseable artifacts.
+    """
+    artifacts = merged.get("artifacts", [])
+    if not artifacts:
+        return merged
+
+    # Build known methods from signatures + library reference
+    raw_summaries = prior_outputs.get("_raw_summaries", "")
+    # Extract the reference blocks (before first ### source file)
+    first_source = raw_summaries.find("\n\n### ")
+    reference = raw_summaries[:first_source] if first_source > 0 else ""
+    known_methods = _extract_known_methods(reference)
+    # Add common builtins/stdlib that are always valid
+    known_methods.update({
+        "append", "extend", "insert", "remove", "pop", "get", "set",
+        "update", "items", "keys", "values", "strip", "split", "join",
+        "format", "replace", "startswith", "endswith", "lower", "upper",
+        "encode", "decode", "read", "write", "close", "open",
+        "dumps", "loads", "dump", "load",  # json
+        "info", "warning", "error", "debug", "exception",  # logging
+        "add", "discard", "copy", "clear",
+        "resolve", "exists", "is_file", "is_dir",  # pathlib
+        "isinstance", "hasattr", "getattr", "setattr", "len", "str",
+        "int", "float", "bool", "list", "dict", "tuple", "type",
+        "print", "range", "enumerate", "zip", "map", "filter", "sorted",
+        "run", "gather", "create_task", "sleep",  # asyncio
+        "model_dump", "model_validate",  # pydantic
+    })
+
+    annotated = 0
+    for artifact in artifacts:
+        if not artifact.get("filename", "").endswith(".py"):
+            continue
+
+        content = artifact.get("content", "")
+        if not content.strip():
+            continue
+
+        # 1. Syntax check
+        try:
+            tree = ast.parse(content)
+        except SyntaxError as e:
+            line_num = e.lineno or 1
+            lines = content.splitlines()
+            if 0 < line_num <= len(lines):
+                lines[line_num - 1] += f"  # [SYNTAX ERROR: {e.msg}]"
+                artifact["content"] = "\n".join(lines)
+                annotated += 1
+            continue
+
+        # 2. Cross-reference method calls
+        if not known_methods:
+            continue
+
+        calls = _extract_method_calls_from_ast(tree)
+        suspicious: set[int] = set()
+        for method_name, line_num in calls:
+            if method_name.startswith("_"):
+                continue
+            if method_name not in known_methods:
+                suspicious.add(line_num)
+
+        if suspicious:
+            lines = content.splitlines()
+            for line_num in sorted(suspicious):
+                if 0 < line_num <= len(lines):
+                    if "[VERIFY]" not in lines[line_num - 1]:
+                        lines[line_num - 1] += "  # [VERIFY] method not found in signatures"
+                        annotated += 1
+            artifact["content"] = "\n".join(lines)
+
+    if annotated:
+        logger.info(f"ensure_valid_artifacts: annotated {annotated} suspicious lines")
+
+    return merged
+
+
+async def ensure_correct_artifacts(
+    merged: dict[str, Any],
+    client: Any,
+    prior_outputs: dict[str, Any],
+) -> dict[str, Any]:
+    """LLM review of Python artifacts for API correctness.
+
+    One focused LLM call reviews all .py artifacts against the signatures
+    reference. Returns corrected artifacts. Silent fallback on failure.
+    """
+    artifacts = merged.get("artifacts", [])
+    py_artifacts = [a for a in artifacts if a.get("filename", "").endswith(".py")]
+    if not py_artifacts:
+        return merged
+
+    # Get reference blocks (signatures + library API)
+    raw_summaries = prior_outputs.get("_raw_summaries", "")
+    first_source = raw_summaries.find("\n\n### ")
+    reference = raw_summaries[:first_source] if first_source > 0 else ""
+
+    if not reference:
+        return merged
+
+    artifact_text = "\n\n".join(
+        f"--- {a['filename']} ---\n{a['content']}" for a in py_artifacts
+    )
+
+    prompt = (
+        "Review these Python code artifacts for API correctness.\n"
+        "For each artifact, check:\n"
+        "1. Do all method calls use methods that actually exist on the object?\n"
+        "2. Are parameter names and types correct?\n"
+        "3. Are return types handled correctly (e.g., not treating str as dict)?\n"
+        "4. Are stdlib/third-party APIs used correctly (real methods, not hallucinated)?\n"
+        "5. Any lines marked [VERIFY] — are those calls correct or wrong?\n\n"
+        f"REFERENCE (ground truth — these are the real APIs):\n{reference}\n\n"
+        f"ARTIFACTS TO REVIEW:\n{artifact_text}\n\n"
+        "Return corrected artifacts as JSON array:\n"
+        '[{"filename": "path/to/file.py", "content": "corrected full file content"}]\n'
+        "Only include artifacts that needed corrections. Return [] if all are correct."
+    )
+
+    try:
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ]
+        raw = await client.generate(messages=messages)
+        corrections = extract_json(raw)
+        if isinstance(corrections, list):
+            fix_map = {
+                c["filename"]: c["content"]
+                for c in corrections
+                if isinstance(c, dict) and "filename" in c and "content" in c
+            }
+            applied = 0
+            for artifact in artifacts:
+                if artifact.get("filename") in fix_map:
+                    artifact["content"] = fix_map[artifact["filename"]]
+                    applied += 1
+            if applied:
+                logger.info(f"ensure_correct_artifacts: LLM corrected {applied} artifacts")
+    except Exception as e:
+        logger.warning(f"ensure_correct_artifacts: LLM review failed: {e}")
+
     return merged

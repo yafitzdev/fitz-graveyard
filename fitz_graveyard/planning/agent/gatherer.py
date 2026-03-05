@@ -30,6 +30,7 @@ from fitz_graveyard.planning.agent.indexer import (
     INDEXABLE_EXTENSIONS,
     build_import_graph,
     extract_interface_signatures,
+    extract_library_signatures,
 )
 from fitz_graveyard.planning.prompts import load_prompt
 from fitz_graveyard.validation.sanitize import sanitize_agent_path
@@ -464,6 +465,19 @@ class AgentContextGatherer:
                 + signatures
             )
             blocks.insert(0, header)
+
+        # Prepend library API reference (after interface signatures)
+        lib_sigs = extract_library_signatures(
+            self._source_dir, included, all_paths, self._config.max_file_bytes,
+        )
+        if lib_sigs:
+            lib_header = (
+                "--- LIBRARY API REFERENCE (installed packages, ground truth) ---\n"
+                + lib_sigs
+            )
+            # Insert after interface signatures (position 1) or at 0
+            insert_pos = 1 if signatures else 0
+            blocks.insert(insert_pos, lib_header)
 
         return "\n\n".join(blocks), included, forward_map, reverse_count
 

@@ -274,8 +274,14 @@ class ArchitectureDesignStage(PipelineStage):
                 merged.update(partial)
 
             # 5. Post-extraction validators
-            from fitz_graveyard.planning.pipeline.validators import ensure_min_adrs
+            from fitz_graveyard.planning.pipeline.validators import (
+                ensure_correct_artifacts,
+                ensure_min_adrs,
+                ensure_valid_artifacts,
+            )
             merged = await ensure_min_adrs(merged, client, prior_outputs, reasoning)
+            merged = ensure_valid_artifacts(merged, prior_outputs)
+            merged = await ensure_correct_artifacts(merged, client, prior_outputs)
 
             # 6. Parse through existing parse_output (handles defaults + Pydantic validation)
             parsed = self.parse_output(json.dumps(merged))

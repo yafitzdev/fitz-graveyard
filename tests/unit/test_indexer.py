@@ -24,6 +24,7 @@ from fitz_graveyard.planning.agent.indexer import (
     build_import_graph,
     build_structural_index,
     extract_interface_signatures,
+    extract_library_signatures,
     generate_investigation_questions,
 )
 
@@ -645,6 +646,69 @@ class TestExtractInterfaceSignatures:
         assert "## b.py" in result
         assert "foo() -> int" in result
         assert "bar() -> str" in result
+
+
+class TestExtractLibrarySignatures:
+    """Tests for extract_library_signatures()."""
+
+    def test_extracts_stdlib_package(self, tmp_path):
+        """Should extract signatures from an importable stdlib package."""
+        (tmp_path / "app.py").write_text("import json\nx = json.dumps({})\n")
+        result = extract_library_signatures(
+            str(tmp_path), ["app.py"], ["app.py"],
+        )
+        assert "## json" in result
+        assert "dumps" in result
+
+    def test_skips_intra_project_imports(self, tmp_path):
+        """Imports that resolve to project files should be excluded."""
+        (tmp_path / "mymod.py").write_text("def foo(): pass\n")
+        (tmp_path / "app.py").write_text("import mymod\nmymod.foo()\n")
+        result = extract_library_signatures(
+            str(tmp_path), ["app.py"], ["app.py", "mymod.py"],
+        )
+        assert "mymod" not in result
+
+    def test_skips_uninstalled_packages(self, tmp_path):
+        """Uninstalled packages should be silently skipped."""
+        (tmp_path / "app.py").write_text("import nonexistent_pkg_xyz\n")
+        result = extract_library_signatures(
+            str(tmp_path), ["app.py"], ["app.py"],
+        )
+        assert result == ""
+
+    def test_empty_included_files(self, tmp_path):
+        result = extract_library_signatures(str(tmp_path), [], [])
+        assert result == ""
+
+    def test_skips_typing(self, tmp_path):
+        """typing is excluded since it's not useful as API reference."""
+        (tmp_path / "app.py").write_text("from typing import Any, Dict\n")
+        result = extract_library_signatures(
+            str(tmp_path), ["app.py"], ["app.py"],
+        )
+        assert "typing" not in result
+
+    def test_caps_output_length(self, tmp_path):
+        """Output should be capped to avoid context bloat."""
+        # Import many packages
+        imports = "\n".join(f"import {pkg}" for pkg in [
+            "json", "os", "sys", "re", "ast", "pathlib",
+            "logging", "inspect", "importlib", "hashlib",
+            "sqlite3", "email",
+        ])
+        (tmp_path / "app.py").write_text(imports + "\n")
+        result = extract_library_signatures(
+            str(tmp_path), ["app.py"], ["app.py"],
+        )
+        assert len(result) <= 5000  # ~4000 cap + header tolerance
+
+    def test_non_python_files_skipped(self, tmp_path):
+        (tmp_path / "config.yaml").write_text("key: value\n")
+        result = extract_library_signatures(
+            str(tmp_path), ["config.yaml"], ["config.yaml"],
+        )
+        assert result == ""
 
 
 class TestParseClassHierarchies:
