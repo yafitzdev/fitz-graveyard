@@ -118,6 +118,7 @@ class LlamaCppClient:
         self._process: subprocess.Popen | None = None
         self._client: AsyncOpenAI | None = None
         self._active_tier: str | None = None
+        self._active_context_size: int | None = None
         self._call_metrics: list[dict] = []
 
     # ------------------------------------------------------------------
@@ -152,22 +153,29 @@ class LlamaCppClient:
     # Lifecycle
     # ------------------------------------------------------------------
 
-    async def start(self, tier: str = "fast") -> None:
+    async def start(self, tier: str = "fast", context_size: int | None = None) -> None:
         """Start llama-server subprocess for the given tier.
+
+        Kills any stale llama-server processes first to ensure clean
+        VRAM state (prevents KV cache fragmentation slowdowns).
 
         Args:
             tier: "fast", "mid", or "smart" — determines which model config to use.
+            context_size: Override context window size. None = use tier config default.
         """
+        self._kill_stale_servers()
+
         tier_map = {"fast": self._fast_model, "mid": self._mid_model, "smart": self._smart_model}
         model_cfg = tier_map.get(tier, self._fast_model)
         model_path = str(Path(self._models_dir) / model_cfg.path)
+        ctx = context_size or model_cfg.context_size
 
         cmd = [
             self._server_path,
             "--host", "127.0.0.1",
             "--port", str(self._port),
             "-m", model_path,
-            "-c", str(model_cfg.context_size),
+            "-c", str(ctx),
             "-ngl", str(model_cfg.gpu_layers),
         ]
         if model_cfg.flash_attention:
@@ -197,10 +205,11 @@ class LlamaCppClient:
             timeout=self._timeout,
         )
         self._active_tier = tier
+        self._active_context_size = ctx
         self.model = model_cfg.path
 
         logger.info(
-            f"llama-server ready ({tier}): {model_cfg.path}"
+            f"llama-server ready ({tier}): {model_cfg.path} (ctx={ctx})"
         )
 
     async def stop(self) -> None:
@@ -222,26 +231,95 @@ class LlamaCppClient:
         self._client = None
         logger.info("llama-server stopped")
 
-    async def ensure_model(self, model_name: str) -> None:
+    def _kill_stale_servers(self) -> None:
+        """Kill any llama-server processes left over from previous runs.
+
+        Stale processes hold VRAM and accumulate fragmented KV cache,
+        causing severe inference slowdowns. This ensures a clean GPU
+        state before loading a new model.
+        """
+        # Stop our own managed process first
+        if self._process is not None:
+            self._process.terminate()
+            try:
+                self._process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                self._process.kill()
+                self._process.wait(timeout=5)
+            self._process = None
+            self._active_tier = None
+            self._client = None
+
+        server_name = Path(self._server_path).name  # e.g. "llama-server.exe"
+
+        try:
+            if sys.platform == "win32":
+                # tasklist /FI filters by image name, taskkill /F force-kills
+                result = subprocess.run(
+                    ["tasklist", "/FI", f"IMAGENAME eq {server_name}", "/NH"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                if server_name.lower() in result.stdout.lower():
+                    logger.info(
+                        f"Killing stale {server_name} processes for clean VRAM state"
+                    )
+                    subprocess.run(
+                        ["taskkill", "/F", "/IM", server_name],
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    # Brief pause for GPU memory to be released
+                    import time
+                    time.sleep(2)
+                    logger.info(f"Stale {server_name} processes killed")
+                else:
+                    logger.info(f"No stale {server_name} processes found")
+            else:
+                # Unix: pkill by process name
+                result = subprocess.run(
+                    ["pgrep", "-f", server_name],
+                    capture_output=True, text=True, timeout=5,
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    logger.info(
+                        f"Killing stale {server_name} processes for clean VRAM state"
+                    )
+                    subprocess.run(
+                        ["pkill", "-f", server_name],
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    import time
+                    time.sleep(2)
+                    logger.info(f"Stale {server_name} processes killed")
+                else:
+                    logger.info(f"No stale {server_name} processes found")
+        except Exception as e:
+            logger.warning(f"Failed to check for stale servers: {e}")
+
+    async def ensure_model(
+        self, model_name: str, context_size: int | None = None,
+    ) -> None:
         """Switch to the tier for the given model name.
 
         Public API for callers that need to pre-load a specific tier
         (e.g. orchestrator switching from smart back to mid after agent
-        gathering).
+        gathering). Also restarts if a different context_size is requested.
         """
-        await self._ensure_tier(model_name)
+        await self._ensure_tier(model_name, context_size=context_size)
 
-    async def _ensure_tier(self, model_name: str | None) -> None:
-        """Restart server if the requested model needs a different tier.
+    async def _ensure_tier(
+        self, model_name: str | None, context_size: int | None = None,
+    ) -> None:
+        """Restart server if the requested model or context size differs.
 
         Args:
             model_name: Model name from generate() call.
                         Resolved to tier by matching against model paths.
+            context_size: Override context window. None = use tier default.
         """
         if model_name is None:
             # No override — use whatever is currently loaded
             if self._active_tier is None:
-                await self.start("fast")
+                await self.start("fast", context_size=context_size)
             return
 
         # Resolve tier from model name. Check smart first, then mid,
@@ -254,15 +332,21 @@ class LlamaCppClient:
         else:
             needed = "fast"
 
-        if self._active_tier == needed:
+        # Restart if tier changed or context size changed
+        ctx_changed = (
+            context_size is not None
+            and self._active_context_size is not None
+            and context_size != self._active_context_size
+        )
+        if self._active_tier == needed and not ctx_changed:
             return
 
-        logger.info(
-            f"Switching tier: {self._active_tier} → {needed} "
-            f"(model={model_name})"
-        )
+        reason = f"tier {self._active_tier}→{needed}"
+        if ctx_changed:
+            reason += f", ctx {self._active_context_size}→{context_size}"
+        logger.info(f"Restarting llama-server: {reason} (model={model_name})")
         await self.stop()
-        await self.start(needed)
+        await self.start(needed, context_size=context_size)
 
     async def _wait_for_ready(self) -> None:
         """Poll /health until server responds 200 or timeout."""

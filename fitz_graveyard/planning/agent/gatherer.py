@@ -4,16 +4,16 @@ AgentContextGatherer — BM25 + per-file LLM confirm screening pipeline.
 
 Pipeline:
   Pass 1:  Map            (pure Python — pathlib walk, build file list)
-  Pass 2:  BM25 screen    (pure Python — score all files, take top K)
+  Pass 2:  BM25 screen    (pure Python — score all files, dynamic top-K)
   Pass 3:  LLM confirm    (per-file mid-model YES/NO on BM25 shortlist)
-  Pass 4:  Import expand  (pure Python — trace forward imports from relevant files)
+  Pass 4:  Import expand  (pure Python — BFS depth 2, both directions)
   Pass 5:  Read raw source (pure Python — stuff actual source into context)
 
-BM25 replaces 735+ individual LLM screening calls with a pure Python text
-retrieval pass (milliseconds) to produce a high-recall shortlist (~150 files).
-Per-file LLM screening then confirms each candidate with a YES/NO call,
-cutting the shortlist to only truly relevant files. Raw source is stuffed
-directly into the planning context — no summarization or synthesis LLM calls.
+BM25 prefilters a dynamic top-K shortlist (scales with codebase size, default
+~200 for 25 max_summary_files). Per-file LLM screening confirms candidates.
+Import expansion then chases imports recursively (depth 2, forward + reverse)
+to catch architecturally central files that lack task keywords. Raw source is
+stuffed directly into the planning context — no summarization or synthesis.
 Files sorted by import connectivity; truncated at a char budget so they fit
 in the reasoning model's context window.
 """
@@ -122,10 +122,15 @@ class AgentContextGatherer:
 
             # Pass 2: BM25 screen (pure Python)
             await self._report(progress_callback, 0.062, "agent:screening")
-            top_k = min(
-                self._config.max_summary_files * 6,
-                len(file_paths),
+            # Dynamic top-K: scale with codebase size
+            # Small codebases (<100 files): take ~50% of files
+            # Medium (100-500): ~30%
+            # Large (500+): cap at max_summary_files * 8 (default 200)
+            dynamic_k = max(
+                self._config.max_summary_files * 8,
+                len(file_paths) // 3,
             )
+            top_k = min(dynamic_k, len(file_paths))
             bm25_candidates, bm25_scores = self._bm25_screen(
                 file_paths, job_description, top_k,
             )
@@ -159,7 +164,7 @@ class AgentContextGatherer:
                 f"relevant files: " + ", ".join(relevant)
             )
 
-            # Pass 4: Import expansion (pure Python, depth 1)
+            # Pass 4: Import expansion (pure Python, BFS depth 2, both directions)
             expanded = self._import_expand(relevant, file_paths)
             import_added = len(expanded) - len(relevant)
             if import_added > 0:
@@ -488,12 +493,13 @@ class AgentContextGatherer:
     def _import_expand(
         self, relevant: list[str], file_paths: list[str],
     ) -> list[str]:
-        """Add direct imports of relevant files. Pure Python, depth 1.
+        """Recursive import expansion (BFS, depth 2, both directions).
 
-        Traces forward imports from each relevant file and adds any
-        new files not already in the relevant list. This catches
+        Traces forward imports ("file A imports B") and reverse imports
+        ("B is imported by A") from each relevant file. This catches
         architecturally central files (e.g. base.py, protocols) that
-        are imported by every relevant file but contain no task keywords.
+        are imported by relevant files but contain no task keywords,
+        AND files that depend on relevant files.
 
         Args:
             relevant: Paths the LLM marked as relevant.
@@ -505,14 +511,38 @@ class AgentContextGatherer:
         forward_map, _module_lookup = build_import_graph(
             self._source_dir, file_paths, self._config.max_file_bytes,
         )
+
+        # Build reverse map: {file → set of files that import it}
+        reverse_map: dict[str, set[str]] = {}
+        for src, deps in forward_map.items():
+            for dep in deps:
+                reverse_map.setdefault(dep, set()).add(src)
+
+        # BFS both directions, depth 2
         relevant_set = set(relevant)
-        expanded: list[str] = list(relevant)
-        for rel_path in relevant:
-            for dep in forward_map.get(rel_path, set()):
-                if dep not in relevant_set:
-                    relevant_set.add(dep)
-                    expanded.append(dep)
-        return expanded
+        frontier = set(relevant)
+        for depth in range(2):
+            next_frontier: set[str] = set()
+            for rel_path in frontier:
+                # Forward: files this file imports
+                for dep in forward_map.get(rel_path, set()):
+                    if dep not in relevant_set:
+                        relevant_set.add(dep)
+                        next_frontier.add(dep)
+                # Reverse: files that import this file
+                for importer in reverse_map.get(rel_path, set()):
+                    if importer not in relevant_set:
+                        relevant_set.add(importer)
+                        next_frontier.add(importer)
+            frontier = next_frontier
+            if not frontier:
+                break
+            logger.info(
+                f"AgentContextGatherer: import expand depth {depth + 1} "
+                f"added {len(frontier)} files"
+            )
+
+        return list(relevant) + sorted(relevant_set - set(relevant))
 
     @staticmethod
     def _prioritize_for_summary(paths: list[str]) -> list[str]:
