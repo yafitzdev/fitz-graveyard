@@ -13,6 +13,7 @@ import inspect
 import json
 import logging
 import platform
+import statistics
 import subprocess
 import time
 from pathlib import Path
@@ -75,6 +76,73 @@ def _callable_to_openai_tool(fn) -> dict:
     }
 
 
+class TokSecBaseline:
+    """Tracks historical tok/s per model and detects performance degradation.
+
+    Persists baselines to a JSON file alongside the config. When current
+    tok/s drops below 50% of the median baseline, signals that a GPU
+    driver reset is needed.
+    """
+
+    _DEGRADATION_RATIO = 0.5  # trigger reset if tok/s < 50% of baseline
+    _MIN_SAMPLES = 5  # need this many samples before checking for drift
+    _MAX_SAMPLES = 50  # rolling window
+    _MIN_OUTPUT_CHARS = 200  # ignore short outputs (tok/s too noisy)
+
+    def __init__(self, path: Path | None = None):
+        if path is None:
+            import platformdirs
+            path = Path(platformdirs.user_config_path("fitz-graveyard")) / "tok_baselines.json"
+        self._path = path
+        self._data: dict = self._load()
+
+    def _load(self) -> dict:
+        try:
+            return json.loads(self._path.read_text())
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {}
+
+    def _save(self) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._path.write_text(json.dumps(self._data, indent=2))
+
+    @staticmethod
+    def _key(model_path: str, context_size: int) -> str:
+        return f"{model_path}::ctx{context_size}"
+
+    def record(self, model_path: str, context_size: int, tok_s: float, output_chars: int) -> None:
+        """Record a tok/s sample. Ignores short outputs (tok/s too noisy)."""
+        if tok_s < 1.0 or output_chars < self._MIN_OUTPUT_CHARS:
+            return
+        key = self._key(model_path, context_size)
+        entry = self._data.setdefault(key, {"samples": []})
+        entry["samples"].append(round(tok_s, 1))
+        if len(entry["samples"]) > self._MAX_SAMPLES:
+            entry["samples"] = entry["samples"][-self._MAX_SAMPLES:]
+        entry["median"] = round(statistics.median(entry["samples"]), 1)
+        self._save()
+
+    def is_degraded(self, model_path: str, context_size: int, tok_s: float, output_chars: int) -> bool:
+        """Check if current tok/s indicates GPU performance degradation."""
+        if tok_s < 1.0 or output_chars < self._MIN_OUTPUT_CHARS:
+            return False
+        key = self._key(model_path, context_size)
+        entry = self._data.get(key)
+        if not entry or len(entry.get("samples", [])) < self._MIN_SAMPLES:
+            return False
+        median = entry.get("median", 0)
+        if median <= 0:
+            return False
+        ratio = tok_s / median
+        if ratio < self._DEGRADATION_RATIO:
+            logger.warning(
+                f"Performance degradation detected: {tok_s:.1f} tok/s "
+                f"vs baseline {median:.1f} tok/s ({ratio:.0%})"
+            )
+            return True
+        return False
+
+
 class LlamaCppClient:
     """
     Async llama.cpp client that manages llama-server as a subprocess.
@@ -121,6 +189,8 @@ class LlamaCppClient:
         self._active_tier: str | None = None
         self._active_context_size: int | None = None
         self._call_metrics: list[dict] = []
+        self._baseline = TokSecBaseline()
+        self._degradation_warned = False
 
     # ------------------------------------------------------------------
     # Model tier properties
@@ -245,21 +315,18 @@ class LlamaCppClient:
     async def _ensure_tier(
         self, model_name: str | None, context_size: int | None = None,
     ) -> None:
-        """Restart server if the requested model or context size differs.
+        """Restart server only if the actual model path or context size differs.
 
-        Args:
-            model_name: Model name from generate() call.
-                        Resolved to tier by matching against model paths.
-            context_size: Override context window. None = use tier default.
+        Compares model paths rather than tier names — avoids unnecessary restarts
+        when multiple tiers point to the same GGUF file (destroys CUDA context,
+        triggers WDDM degradation on Blackwell consumer GPUs).
         """
         if model_name is None:
-            # No override — use whatever is currently loaded
             if self._active_tier is None:
                 await self.start("fast", context_size=context_size)
             return
 
-        # Resolve tier from model name. Check smart first, then mid,
-        # then fall back to fast. Skip mid if it has the same path as fast.
+        # Resolve tier from model name
         if model_name == self._smart_model.path:
             needed = "smart"
         elif (model_name == self._mid_model.path
@@ -268,13 +335,28 @@ class LlamaCppClient:
         else:
             needed = "fast"
 
-        # Restart if tier changed or context size changed
+        # Check if the actual model path and context size match what's loaded
+        tier_map = {"fast": self._fast_model, "mid": self._mid_model, "smart": self._smart_model}
+        needed_cfg = tier_map[needed]
+        active_cfg = tier_map.get(self._active_tier) if self._active_tier else None
+
+        same_model = (
+            active_cfg is not None
+            and active_cfg.path == needed_cfg.path
+            and active_cfg.gpu_layers == needed_cfg.gpu_layers
+        )
         ctx_changed = (
             context_size is not None
             and self._active_context_size is not None
             and context_size != self._active_context_size
         )
-        if self._active_tier == needed and not ctx_changed:
+
+        if same_model and not ctx_changed:
+            if self._active_tier != needed:
+                logger.debug(
+                    f"Tier {self._active_tier}→{needed} (same model, skipping restart)"
+                )
+                self._active_tier = needed
             return
 
         reason = f"tier {self._active_tier}→{needed}"
@@ -282,13 +364,6 @@ class LlamaCppClient:
             reason += f", ctx {self._active_context_size}→{context_size}"
         logger.info(f"Restarting llama-server: {reason} (model={model_name})")
         await self.stop()
-
-        # Reset GPU driver to recover from WDDM VRAM degradation
-        # (Blackwell consumer GPUs lose performance after CUDA context teardown)
-        if self._reset_gpu_driver():
-            logger.info("Waiting 3s for GPU driver to recover...")
-            await asyncio.sleep(3)
-
         await self.start(needed, context_size=context_size)
 
     @staticmethod
@@ -305,7 +380,6 @@ class LlamaCppClient:
         try:
             user32 = ctypes.windll.user32  # type: ignore[attr-defined]
 
-            # INPUT structure for SendInput
             INPUT_KEYBOARD = 1
             KEYEVENTF_KEYUP = 0x0002
 
@@ -313,6 +387,18 @@ class LlamaCppClient:
             VK_CONTROL = 0x11
             VK_SHIFT = 0x10
             VK_B = 0x42
+
+            # Full Win32 INPUT structures — union must include MOUSEINPUT
+            # (the largest member) so sizeof(INPUT) matches the Windows ABI.
+            class MOUSEINPUT(ctypes.Structure):
+                _fields_ = [
+                    ("dx", ctypes.c_long),
+                    ("dy", ctypes.c_long),
+                    ("mouseData", ctypes.c_ulong),
+                    ("dwFlags", ctypes.c_ulong),
+                    ("time", ctypes.c_ulong),
+                    ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+                ]
 
             class KEYBDINPUT(ctypes.Structure):
                 _fields_ = [
@@ -323,9 +409,20 @@ class LlamaCppClient:
                     ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
                 ]
 
+            class HARDWAREINPUT(ctypes.Structure):
+                _fields_ = [
+                    ("uMsg", ctypes.c_ulong),
+                    ("wParamL", ctypes.c_ushort),
+                    ("wParamH", ctypes.c_ushort),
+                ]
+
             class INPUT(ctypes.Structure):
                 class _INPUT(ctypes.Union):
-                    _fields_ = [("ki", KEYBDINPUT)]
+                    _fields_ = [
+                        ("ki", KEYBDINPUT),
+                        ("mi", MOUSEINPUT),
+                        ("hi", HARDWAREINPUT),
+                    ]
 
                 _fields_ = [
                     ("type", ctypes.c_ulong),
@@ -499,6 +596,18 @@ class LlamaCppClient:
             f"LlamaCpp.generate: {len(result)} chars in {elapsed:.1f}s "
             f"(prefill {prefill_s:.1f}s, ~{tok_s:.1f} tok/s gen)"
         )
+
+        # Track tok/s baseline and warn on degradation
+        # Only for substantial outputs (short YES/NO responses have noisy tok/s)
+        ctx = self._active_context_size or 0
+        if ctx > 0:
+            if not self._degradation_warned and self._baseline.is_degraded(effective_model, ctx, tok_s, len(result)):
+                logger.warning(
+                    "GPU degradation detected. Reset drivers with Ctrl+Win+Shift+B"
+                )
+                self._degradation_warned = True
+            self._baseline.record(effective_model, ctx, tok_s, len(result))
+
         return result
 
     async def generate_with_fallback(

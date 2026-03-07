@@ -152,7 +152,7 @@ class TestEnsureTier:
              patch.object(client, "stop", new_callable=AsyncMock) as stop:
             await client._ensure_tier("smart.gguf")
         stop.assert_called_once()
-        start.assert_called_once_with("smart")
+        start.assert_called_once_with("smart", context_size=None)
 
     @pytest.mark.asyncio
     async def test_switches_smart_to_fast(self):
@@ -162,7 +162,7 @@ class TestEnsureTier:
              patch.object(client, "stop", new_callable=AsyncMock) as stop:
             await client._ensure_tier("fast.gguf")
         stop.assert_called_once()
-        start.assert_called_once_with("fast")
+        start.assert_called_once_with("fast", context_size=None)
 
     @pytest.mark.asyncio
     async def test_auto_starts_if_not_running(self):
@@ -170,7 +170,23 @@ class TestEnsureTier:
         assert client._active_tier is None
         with patch.object(client, "start", new_callable=AsyncMock) as start:
             await client._ensure_tier(None)
-        start.assert_called_once_with("fast")
+        start.assert_called_once_with("fast", context_size=None)
+
+    @pytest.mark.asyncio
+    async def test_skips_restart_when_same_model_path(self):
+        """When all tiers point to the same GGUF, no restart needed."""
+        same_model = LlamaCppModelConfig(
+            path="shared.gguf", context_size=65536, gpu_layers=-1,
+        )
+        client = _make_client(
+            fast_model=same_model, smart_model=same_model,
+        )
+        client._active_tier = "fast"
+        with patch.object(client, "start", new_callable=AsyncMock) as start, \
+             patch.object(client, "stop", new_callable=AsyncMock) as stop:
+            await client._ensure_tier("shared.gguf")
+        stop.assert_not_called()
+        start.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_none_model_keeps_current(self):
