@@ -67,6 +67,7 @@ class TestLifecycle:
         mock_proc.stderr = MagicMock()
 
         with patch("subprocess.Popen", return_value=mock_proc) as popen, \
+             patch("subprocess.run"), \
              patch.object(client, "_wait_for_ready", new_callable=AsyncMock):
             await client.start("fast")
 
@@ -86,6 +87,7 @@ class TestLifecycle:
         mock_proc.poll.return_value = None
 
         with patch("subprocess.Popen", return_value=mock_proc), \
+             patch("subprocess.run"), \
              patch.object(client, "_wait_for_ready", new_callable=AsyncMock):
             await client.start("smart")
 

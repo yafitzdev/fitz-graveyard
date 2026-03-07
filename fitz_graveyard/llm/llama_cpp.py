@@ -8,6 +8,7 @@ gpu_layers are server-level settings).
 """
 
 import asyncio
+import atexit
 import ctypes
 import inspect
 import json
@@ -84,10 +85,10 @@ class TokSecBaseline:
     driver reset is needed.
     """
 
-    _DEGRADATION_RATIO = 0.5  # trigger reset if tok/s < 50% of baseline
+    _DEGRADATION_RATIO = 0.5  # trigger reset if prefill tok/s < 50% of baseline
     _MIN_SAMPLES = 5  # need this many samples before checking for drift
     _MAX_SAMPLES = 50  # rolling window
-    _MIN_OUTPUT_CHARS = 200  # ignore short outputs (tok/s too noisy)
+    _MIN_PREFILL_S = 0.5  # ignore very fast calls (too noisy)
 
     def __init__(self, path: Path | None = None):
         if path is None:
@@ -110,21 +111,21 @@ class TokSecBaseline:
     def _key(model_path: str, context_size: int) -> str:
         return f"{model_path}::ctx{context_size}"
 
-    def record(self, model_path: str, context_size: int, tok_s: float, output_chars: int) -> None:
-        """Record a tok/s sample. Ignores short outputs (tok/s too noisy)."""
-        if tok_s < 1.0 or output_chars < self._MIN_OUTPUT_CHARS:
+    def record(self, model_path: str, context_size: int, prefill_tok_s: float, prefill_s: float) -> None:
+        """Record a prefill tok/s sample. Ignores very fast calls (too noisy)."""
+        if prefill_tok_s < 1.0 or prefill_s < self._MIN_PREFILL_S:
             return
         key = self._key(model_path, context_size)
         entry = self._data.setdefault(key, {"samples": []})
-        entry["samples"].append(round(tok_s, 1))
+        entry["samples"].append(round(prefill_tok_s, 1))
         if len(entry["samples"]) > self._MAX_SAMPLES:
             entry["samples"] = entry["samples"][-self._MAX_SAMPLES:]
         entry["median"] = round(statistics.median(entry["samples"]), 1)
         self._save()
 
-    def is_degraded(self, model_path: str, context_size: int, tok_s: float, output_chars: int) -> bool:
-        """Check if current tok/s indicates GPU performance degradation."""
-        if tok_s < 1.0 or output_chars < self._MIN_OUTPUT_CHARS:
+    def is_degraded(self, model_path: str, context_size: int, prefill_tok_s: float, prefill_s: float) -> bool:
+        """Check if current prefill tok/s indicates GPU performance degradation."""
+        if prefill_tok_s < 1.0 or prefill_s < self._MIN_PREFILL_S:
             return False
         key = self._key(model_path, context_size)
         entry = self._data.get(key)
@@ -133,11 +134,11 @@ class TokSecBaseline:
         median = entry.get("median", 0)
         if median <= 0:
             return False
-        ratio = tok_s / median
+        ratio = prefill_tok_s / median
         if ratio < self._DEGRADATION_RATIO:
             logger.warning(
-                f"Performance degradation detected: {tok_s:.1f} tok/s "
-                f"vs baseline {median:.1f} tok/s ({ratio:.0%})"
+                f"Performance degradation detected: {prefill_tok_s:.0f} prefill tok/s "
+                f"vs baseline {median:.0f} prefill tok/s ({ratio:.0%})"
             )
             return True
         return False
@@ -259,6 +260,9 @@ class LlamaCppClient:
             f"Starting llama-server ({tier}): {' '.join(cmd)}"
         )
 
+        # Kill any orphaned llama-server processes before spawning
+        self._kill_orphaned_servers()
+
         # Use DEVNULL for stdin, pipe stderr for error reporting
         self._process = subprocess.Popen(
             cmd,
@@ -266,6 +270,10 @@ class LlamaCppClient:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
         )
+
+        # Ensure subprocess is killed on exit (Ctrl+C may skip async cleanup)
+        proc = self._process
+        atexit.register(lambda: proc.kill() if proc.poll() is None else None)
 
         await self._wait_for_ready()
 
@@ -281,6 +289,21 @@ class LlamaCppClient:
         logger.info(
             f"llama-server ready ({tier}): {model_cfg.path} (ctx={ctx})"
         )
+
+    @staticmethod
+    def _kill_orphaned_servers() -> None:
+        """Kill any llama-server processes left over from previous runs."""
+        if platform.system() != "Windows":
+            return
+        try:
+            result = subprocess.run(
+                ["taskkill", "/IM", "llama-server.exe", "/F"],
+                capture_output=True, timeout=5,
+            )
+            if result.returncode == 0:
+                logger.info("Killed orphaned llama-server process(es)")
+        except Exception:
+            pass
 
     async def stop(self) -> None:
         """Stop the llama-server subprocess."""
@@ -581,32 +604,34 @@ class LlamaCppClient:
         elapsed = t_end - t0
         prefill_s = (t_first_token - t0) if t_first_token else elapsed
         gen_s = (t_end - t_first_token) if t_first_token else 0.0
-        est_tokens = len(result) / 4
-        # tok/s = generation speed only (excludes prompt prefill)
-        tok_s = est_tokens / gen_s if gen_s > 0.05 else 0.0
+        est_output_tokens = len(result) / 4
+        est_input_tokens = sum(len(m.get("content", "")) for m in messages) / 4
+        gen_tok_s = est_output_tokens / gen_s if gen_s > 0.05 else 0.0
+        prefill_tok_s = est_input_tokens / prefill_s if prefill_s > 0.05 else 0.0
         self._call_metrics.append({
             "elapsed_s": elapsed,
             "prefill_s": prefill_s,
             "gen_s": gen_s,
             "output_chars": len(result),
-            "tok_s": tok_s,
+            "tok_s": gen_tok_s,
+            "prefill_tok_s": prefill_tok_s,
             "model": effective_model,
         })
         logger.info(
             f"LlamaCpp.generate: {len(result)} chars in {elapsed:.1f}s "
-            f"(prefill {prefill_s:.1f}s, ~{tok_s:.1f} tok/s gen)"
+            f"(prefill {prefill_s:.1f}s ~{prefill_tok_s:.0f} tok/s, "
+            f"gen ~{gen_tok_s:.1f} tok/s)"
         )
 
-        # Track tok/s baseline and warn on degradation
-        # Only for substantial outputs (short YES/NO responses have noisy tok/s)
+        # Track prefill tok/s baseline and warn on degradation
         ctx = self._active_context_size or 0
         if ctx > 0:
-            if not self._degradation_warned and self._baseline.is_degraded(effective_model, ctx, tok_s, len(result)):
+            if not self._degradation_warned and self._baseline.is_degraded(effective_model, ctx, prefill_tok_s, prefill_s):
                 logger.warning(
                     "GPU degradation detected. Reset drivers with Ctrl+Win+Shift+B"
                 )
                 self._degradation_warned = True
-            self._baseline.record(effective_model, ctx, tok_s, len(result))
+            self._baseline.record(effective_model, ctx, prefill_tok_s, prefill_s)
 
         return result
 
