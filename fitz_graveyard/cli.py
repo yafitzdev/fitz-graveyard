@@ -143,9 +143,14 @@ _PHASE_DESCRIPTIONS = {
     "initializing": "Initializing...",
     "health_check": "Checking LLM connectivity...",
     "agent:mapping": "Mapping codebase...",
+    "agent:screening": "BM25 screening...",
+    "agent:confirming": "Confirming files with LLM...",
+    "agent:reading": "Reading source files...",
     "agent:selecting": "Selecting relevant files...",
     "agent:selecting_dirs": "Selecting relevant directories...",
     "agent:synthesizing": "Synthesizing context...",
+    "agent:checking_existing": "Checking for existing implementation...",
+    "agent_exploring_complete": "Codebase analysis complete",
     "context:reasoning": "Analyzing requirements and constraints...",
     "context_complete": "Requirements analysis complete",
     "architecture_design:reasoning": "Exploring architecture and design...",
@@ -167,6 +172,10 @@ def _get_phase_description(phase: str | None) -> str:
     # Direct lookup
     if phase in _PHASE_DESCRIPTIONS:
         return _PHASE_DESCRIPTIONS[phase]
+    # Agent confirming: "agent:confirming:3/50 file.py (42 tok/s)" → "Confirming 3/50 file.py (42 tok/s)"
+    if phase.startswith("agent:confirming:"):
+        detail = phase[len("agent:confirming:"):]
+        return f"Confirming {detail}"
     # Agent summarizing: "agent:summarizing:path/to/file.py" → "Summarizing file.py..."
     if phase.startswith("agent:summarizing:"):
         filename = phase.split(":")[-1].rsplit("/", 1)[-1]

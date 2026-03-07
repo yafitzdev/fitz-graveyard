@@ -269,145 +269,82 @@ class TestBm25Screen:
 
 
 # ---------------------------------------------------------------------------
-# Pass 3: Batch LLM confirm (pairs)
+# Pass 3: Per-file LLM confirm
 # ---------------------------------------------------------------------------
-class TestParseBatchResponse:
-    def test_path_colon_format(self):
-        response = "fitz_ai/engine.py: YES\nfitz_ai/utils.py: NO"
-        result = AgentContextGatherer._parse_batch_response(
-            response, ["fitz_ai/engine.py", "fitz_ai/utils.py"],
-        )
-        assert result == [("fitz_ai/engine.py", True), ("fitz_ai/utils.py", False)]
-
-    def test_both_yes(self):
-        response = "a.py: YES\nb.py: YES"
-        result = AgentContextGatherer._parse_batch_response(
-            response, ["a.py", "b.py"],
-        )
-        assert result == [("a.py", True), ("b.py", True)]
-
-    def test_both_no(self):
-        response = "a.py: NO\nb.py: NO"
-        result = AgentContextGatherer._parse_batch_response(
-            response, ["a.py", "b.py"],
-        )
-        assert result == [("a.py", False), ("b.py", False)]
-
-    def test_lowercase(self):
-        response = "a.py: yes\nb.py: no"
-        result = AgentContextGatherer._parse_batch_response(
-            response, ["a.py", "b.py"],
-        )
-        assert result == [("a.py", True), ("b.py", False)]
-
-    def test_with_explanation(self):
-        response = "a.py: YES - this is the main engine\nb.py: NO - unrelated utility"
-        result = AgentContextGatherer._parse_batch_response(
-            response, ["a.py", "b.py"],
-        )
-        assert result == [("a.py", True), ("b.py", False)]
-
-    def test_positional_fallback(self):
-        # No path in the response, just YES/NO lines
-        response = "YES\nNO"
-        result = AgentContextGatherer._parse_batch_response(
-            response, ["a.py", "b.py"],
-        )
-        assert result == [("a.py", True), ("b.py", False)]
-
-    def test_single_file(self):
-        response = "a.py: YES"
-        result = AgentContextGatherer._parse_batch_response(
-            response, ["a.py"],
-        )
-        assert result == [("a.py", True)]
-
-    def test_garbage_defaults_to_false(self):
-        response = "I'm not sure about these files"
-        result = AgentContextGatherer._parse_batch_response(
-            response, ["a.py", "b.py"],
-        )
-        assert result == [("a.py", False), ("b.py", False)]
-
-    def test_extra_whitespace(self):
-        response = "  a.py:   YES  \n  b.py:   NO  "
-        result = AgentContextGatherer._parse_batch_response(
-            response, ["a.py", "b.py"],
-        )
-        assert result == [("a.py", True), ("b.py", False)]
-
-
-class TestScreenBatch:
+class TestScreenFile:
     @pytest.mark.asyncio
-    async def test_screens_pair(self, tmp_path, mock_client):
+    async def test_screens_relevant(self, tmp_path, mock_client):
         (tmp_path / "a.py").write_text("def engine(): pass")
-        (tmp_path / "b.py").write_text("def utils(): pass")
-        mock_client.generate = AsyncMock(return_value="a.py: YES\nb.py: NO")
+        mock_client.generate = AsyncMock(return_value="YES")
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        result = await gatherer._screen_batch(
-            mock_client, "test-model", ["a.py", "b.py"], "build engine",
+        result = await gatherer._screen_file(
+            mock_client, "test-model", "a.py", "build engine",
         )
-        assert result == [("a.py", True), ("b.py", False)]
+        assert result == ("a.py", True)
         mock_client.generate.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_empty_file_skipped(self, tmp_path, mock_client):
-        (tmp_path / "empty.py").write_text("")
-        (tmp_path / "real.py").write_text("x = 1")
-        mock_client.generate = AsyncMock(return_value="real.py: YES")
+    async def test_screens_irrelevant(self, tmp_path, mock_client):
+        (tmp_path / "a.py").write_text("def utils(): pass")
+        mock_client.generate = AsyncMock(return_value="NO")
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        result = await gatherer._screen_batch(
-            mock_client, "test-model", ["empty.py", "real.py"], "task",
+        result = await gatherer._screen_file(
+            mock_client, "test-model", "a.py", "build engine",
         )
-        # empty.py not sent to LLM, only real.py
-        assert ("real.py", True) in result
+        assert result == ("a.py", False)
 
     @pytest.mark.asyncio
-    async def test_all_empty_no_llm_call(self, tmp_path, mock_client):
-        (tmp_path / "a.py").write_text("")
-        (tmp_path / "b.py").write_text("")
+    async def test_empty_file_no_llm_call(self, tmp_path, mock_client):
+        (tmp_path / "empty.py").write_text("")
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        result = await gatherer._screen_batch(
-            mock_client, "test-model", ["a.py", "b.py"], "task",
+        result = await gatherer._screen_file(
+            mock_client, "test-model", "empty.py", "task",
         )
         mock_client.generate.assert_not_called()
-        assert all(not relevant for _, relevant in result)
+        assert result == ("empty.py", False)
 
     @pytest.mark.asyncio
     async def test_llm_failure(self, tmp_path, mock_client):
         (tmp_path / "a.py").write_text("x = 1")
         mock_client.generate = AsyncMock(side_effect=RuntimeError("boom"))
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        result = await gatherer._screen_batch(
-            mock_client, "test-model", ["a.py"], "task",
+        result = await gatherer._screen_file(
+            mock_client, "test-model", "a.py", "task",
         )
-        assert result == [("a.py", False)]
+        assert result == ("a.py", False)
 
     @pytest.mark.asyncio
     async def test_uses_screen_prompt(self, tmp_path, mock_client):
         (tmp_path / "a.py").write_text("x = 1")
-        (tmp_path / "b.py").write_text("y = 2")
-        mock_client.generate = AsyncMock(return_value="a.py: YES\nb.py: NO")
+        mock_client.generate = AsyncMock(return_value="YES")
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        await gatherer._screen_batch(
-            mock_client, "test-model", ["a.py", "b.py"], "build engine",
+        await gatherer._screen_file(
+            mock_client, "test-model", "a.py", "build engine",
         )
         prompt = mock_client.generate.call_args[1]["messages"][0]["content"]
         assert "build engine" in prompt
         assert "FILE: a.py" in prompt
-        assert "FILE: b.py" in prompt
         assert "x = 1" in prompt
-        assert "y = 2" in prompt
 
     @pytest.mark.asyncio
     async def test_uses_temperature_zero(self, tmp_path, mock_client):
         (tmp_path / "a.py").write_text("x = 1")
-        mock_client.generate = AsyncMock(return_value="a.py: YES")
+        mock_client.generate = AsyncMock(return_value="YES")
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        await gatherer._screen_batch(
-            mock_client, "test-model", ["a.py"], "task",
+        await gatherer._screen_file(
+            mock_client, "test-model", "a.py", "task",
         )
         assert mock_client.generate.call_args[1]["temperature"] == 0
+
+    @pytest.mark.asyncio
+    async def test_yes_with_explanation(self, tmp_path, mock_client):
+        (tmp_path / "a.py").write_text("x = 1")
+        mock_client.generate = AsyncMock(return_value="YES - this is the main engine")
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
+        result = await gatherer._screen_file(
+            mock_client, "test-model", "a.py", "task",
+        )
+        assert result == ("a.py", True)
 
 
 class TestScreenAll:
@@ -416,9 +353,8 @@ class TestScreenAll:
         (tmp_path / "a.py").write_text("def a(): pass")
         (tmp_path / "b.py").write_text("def b(): pass")
         (tmp_path / "c.py").write_text("def c(): pass")
-        # Batch 1: a+b, Batch 2: c (odd count)
         mock_client.generate = AsyncMock(
-            side_effect=["a.py: YES\nb.py: NO", "c.py: YES"]
+            side_effect=["YES", "NO", "YES"]
         )
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
         result = await gatherer._screen_all(
@@ -431,11 +367,11 @@ class TestScreenAll:
         assert "c.py" in result
 
     @pytest.mark.asyncio
-    async def test_batches_in_pairs(self, tmp_path, mock_client):
+    async def test_one_call_per_file(self, tmp_path, mock_client):
         for name in ["a.py", "b.py", "c.py", "d.py"]:
             (tmp_path / name).write_text(f"content of {name}")
         mock_client.generate = AsyncMock(
-            side_effect=["a.py: YES\nb.py: YES", "c.py: YES\nd.py: YES"]
+            side_effect=["YES", "YES", "YES", "YES"]
         )
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
         await gatherer._screen_all(
@@ -443,13 +379,12 @@ class TestScreenAll:
             ["a.py", "b.py", "c.py", "d.py"],
             "task",
         )
-        # 4 files -> 2 batches of 2 -> 2 LLM calls
-        assert mock_client.generate.call_count == 2
+        assert mock_client.generate.call_count == 4
 
     @pytest.mark.asyncio
     async def test_all_irrelevant(self, tmp_path, mock_client):
         (tmp_path / "a.py").write_text("x = 1")
-        mock_client.generate = AsyncMock(return_value="a.py: NO")
+        mock_client.generate = AsyncMock(return_value="NO")
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
         result = await gatherer._screen_all(
             mock_client, "test-model", ["a.py"], "task",
@@ -461,18 +396,15 @@ class TestScreenAll:
         (tmp_path / "a.py").write_text("x = 1")
         (tmp_path / "b.py").write_text("y = 2")
         (tmp_path / "c.py").write_text("z = 3")
-        (tmp_path / "d.py").write_text("w = 4")
-        # Batch 1 (a+b) fails, batch 2 (c+d) succeeds
         mock_client.generate = AsyncMock(
-            side_effect=[RuntimeError("boom"), "c.py: YES\nd.py: NO"]
+            side_effect=[RuntimeError("boom"), "NO", "YES"]
         )
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
         result = await gatherer._screen_all(
-            mock_client, "test-model", ["a.py", "b.py", "c.py", "d.py"], "task",
+            mock_client, "test-model", ["a.py", "b.py", "c.py"], "task",
         )
         assert "c.py" in result
         assert "a.py" not in result
-        assert "b.py" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -764,18 +696,18 @@ class TestGatherEndToEnd:
             assert call[1]["model"] == "mid-30b"
 
     @pytest.mark.asyncio
-    async def test_batches_halve_llm_calls(self, tmp_path, mock_client):
-        """4 BM25 candidates -> 2 batches of 2 -> 2 LLM calls."""
+    async def test_one_llm_call_per_file(self, tmp_path, mock_client):
+        """4 BM25 candidates -> 4 individual LLM calls."""
         for name in ["a.py", "b.py", "c.py", "d.py"]:
             (tmp_path / name).write_text(f"openai provider {name}")
         mock_client.generate = AsyncMock(
-            side_effect=["a.py: YES\nb.py: NO", "c.py: YES\nd.py: NO"]
+            side_effect=["YES", "NO", "YES", "NO"]
         )
         gatherer = AgentContextGatherer(
             config=_make_config(), source_dir=str(tmp_path),
         )
         await gatherer.gather(mock_client, "openai provider")
-        assert mock_client.generate.call_count == 2
+        assert mock_client.generate.call_count == 4
 
     @pytest.mark.asyncio
     async def test_total_failure_returns_empty(self, tmp_path, mock_client):

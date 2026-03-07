@@ -23,6 +23,7 @@ import json
 import logging
 import math
 import re
+import time
 from collections import Counter
 from collections.abc import Callable
 from pathlib import Path, PurePosixPath
@@ -150,6 +151,7 @@ class AgentContextGatherer:
             await self._report(progress_callback, 0.068, "agent:confirming")
             relevant = await self._screen_all(
                 client, mid, bm25_candidates, job_description,
+                progress_callback=progress_callback,
             )
 
             if not relevant:
@@ -378,35 +380,24 @@ class AgentContextGatherer:
     # Pass 3: Per-file LLM confirm (batched in pairs)
     # ------------------------------------------------------------------
 
-    async def _screen_batch(
+    async def _screen_file(
         self,
         client: Any,
         model: str,
-        batch: list[str],
+        rel_path: str,
         job_description: str,
-    ) -> list[tuple[str, bool]]:
-        """Screen a batch of files in one LLM call.
+    ) -> tuple[str, bool]:
+        """Screen a single file with one LLM call.
 
-        Returns list of (path, is_relevant) tuples.
-        On failure, all files in the batch are treated as not relevant.
+        Returns (path, is_relevant). On failure, returns not relevant.
         """
-        file_blocks: list[str] = []
-        valid_paths: list[str] = []
-        for rel_path in batch:
-            content = self._read_file_content(rel_path)
-            if not content.strip():
-                continue
-            file_blocks.append(
-                f"FILE: {rel_path}\n\nCONTENT:\n{content}"
-            )
-            valid_paths.append(rel_path)
-
-        if not valid_paths:
-            return [(p, False) for p in batch]
+        content = self._read_file_content(rel_path)
+        if not content.strip():
+            return (rel_path, False)
 
         prompt = load_prompt("agent_screen").format(
             job_description=job_description,
-            file_blocks="\n\n---\n\n".join(file_blocks),
+            file_blocks=f"FILE: {rel_path}\n\nCONTENT:\n{content}",
         )
 
         try:
@@ -415,10 +406,10 @@ class AgentContextGatherer:
                 model=model,
                 temperature=0,
             )
-            verdicts = self._parse_batch_response(response, valid_paths)
-            return verdicts
+            upper = response.strip().upper()
+            return (rel_path, "YES" in upper)
         except Exception:
-            return [(p, False) for p in batch]
+            return (rel_path, False)
 
     async def _screen_all(
         self,
@@ -426,65 +417,35 @@ class AgentContextGatherer:
         model: str,
         candidates: list[str],
         job_description: str,
+        progress_callback: Callable[[float, str], None] | None = None,
     ) -> list[str]:
-        """Screen all candidates in parallel batches of 2."""
+        """Screen all candidates with per-file LLM calls (parallel)."""
         sem = asyncio.Semaphore(_SCREEN_CONCURRENCY)
-        batches = [
-            candidates[i:i + 2]
-            for i in range(0, len(candidates), 2)
-        ]
+        completed = 0
+        total = len(candidates)
 
-        async def _bounded(batch: list[str]) -> list[tuple[str, bool]]:
+        async def _bounded(rel_path: str) -> tuple[str, bool]:
+            nonlocal completed
             async with sem:
-                return await self._screen_batch(
-                    client, model, batch, job_description,
+                t0 = time.monotonic()
+                results = await self._screen_file(
+                    client, model, rel_path, job_description,
                 )
+                elapsed = time.monotonic() - t0
+                completed += 1
+                if progress_callback:
+                    name = Path(rel_path).name
+                    phase = (
+                        f"agent:confirming:{completed}/{total} "
+                        f"{name} ({elapsed:.1f}s)"
+                    )
+                    prog = 0.068 + (completed / total) * 0.005
+                    await self._report(progress_callback, prog, phase)
+                return results
 
-        tasks = [_bounded(b) for b in batches]
-        batch_results = await asyncio.gather(*tasks)
-        return [
-            path
-            for results in batch_results
-            for path, relevant in results
-            if relevant
-        ]
-
-    @staticmethod
-    def _parse_batch_response(
-        response: str, paths: list[str],
-    ) -> list[tuple[str, bool]]:
-        """Parse multi-line batch response into per-file verdicts.
-
-        Expected format: "file_path: YES" or "file_path: NO" per line.
-        Falls back to scanning for YES/NO by line position.
-        """
-        lines = [ln.strip() for ln in response.strip().splitlines() if ln.strip()]
-        verdicts: dict[str, bool] = {}
-
-        # Try parsing "path: YES/NO" format
-        for line in lines:
-            for path in paths:
-                if path in line:
-                    upper = line.upper()
-                    if "YES" in upper:
-                        verdicts[path] = True
-                    elif "NO" in upper:
-                        verdicts[path] = False
-                    break
-
-        # Fall back to positional matching if we didn't get all paths
-        if len(verdicts) < len(paths):
-            yes_no_lines = [
-                ln for ln in lines
-                if ln.strip().upper().startswith(("YES", "NO"))
-                or ": YES" in ln.upper()
-                or ": NO" in ln.upper()
-            ]
-            for i, path in enumerate(paths):
-                if path not in verdicts and i < len(yes_no_lines):
-                    verdicts[path] = "YES" in yes_no_lines[i].upper()
-
-        return [(p, verdicts.get(p, False)) for p in paths]
+        tasks = [_bounded(p) for p in candidates]
+        results = await asyncio.gather(*tasks)
+        return [path for path, relevant in results if relevant]
 
     # ------------------------------------------------------------------
     # Pass 4: Import expansion

@@ -8,11 +8,12 @@ gpu_layers are server-level settings).
 """
 
 import asyncio
+import ctypes
 import inspect
 import json
 import logging
+import platform
 import subprocess
-import sys
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -156,14 +157,13 @@ class LlamaCppClient:
     async def start(self, tier: str = "fast", context_size: int | None = None) -> None:
         """Start llama-server subprocess for the given tier.
 
-        Kills any stale llama-server processes first to ensure clean
-        VRAM state (prevents KV cache fragmentation slowdowns).
-
         Args:
             tier: "fast", "mid", or "smart" — determines which model config to use.
             context_size: Override context window size. None = use tier config default.
         """
-        self._kill_stale_servers()
+        # Stop our own managed process if running
+        if self._process is not None:
+            await self.stop()
 
         tier_map = {"fast": self._fast_model, "mid": self._mid_model, "smart": self._smart_model}
         model_cfg = tier_map.get(tier, self._fast_model)
@@ -231,70 +231,6 @@ class LlamaCppClient:
         self._client = None
         logger.info("llama-server stopped")
 
-    def _kill_stale_servers(self) -> None:
-        """Kill any llama-server processes left over from previous runs.
-
-        Stale processes hold VRAM and accumulate fragmented KV cache,
-        causing severe inference slowdowns. This ensures a clean GPU
-        state before loading a new model.
-        """
-        # Stop our own managed process first
-        if self._process is not None:
-            self._process.terminate()
-            try:
-                self._process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                self._process.kill()
-                self._process.wait(timeout=5)
-            self._process = None
-            self._active_tier = None
-            self._client = None
-
-        server_name = Path(self._server_path).name  # e.g. "llama-server.exe"
-
-        try:
-            if sys.platform == "win32":
-                # tasklist /FI filters by image name, taskkill /F force-kills
-                result = subprocess.run(
-                    ["tasklist", "/FI", f"IMAGENAME eq {server_name}", "/NH"],
-                    capture_output=True, text=True, timeout=5,
-                )
-                if server_name.lower() in result.stdout.lower():
-                    logger.info(
-                        f"Killing stale {server_name} processes for clean VRAM state"
-                    )
-                    subprocess.run(
-                        ["taskkill", "/F", "/IM", server_name],
-                        capture_output=True, text=True, timeout=10,
-                    )
-                    # Brief pause for GPU memory to be released
-                    import time
-                    time.sleep(2)
-                    logger.info(f"Stale {server_name} processes killed")
-                else:
-                    logger.info(f"No stale {server_name} processes found")
-            else:
-                # Unix: pkill by process name
-                result = subprocess.run(
-                    ["pgrep", "-f", server_name],
-                    capture_output=True, text=True, timeout=5,
-                )
-                if result.returncode == 0 and result.stdout.strip():
-                    logger.info(
-                        f"Killing stale {server_name} processes for clean VRAM state"
-                    )
-                    subprocess.run(
-                        ["pkill", "-f", server_name],
-                        capture_output=True, text=True, timeout=10,
-                    )
-                    import time
-                    time.sleep(2)
-                    logger.info(f"Stale {server_name} processes killed")
-                else:
-                    logger.info(f"No stale {server_name} processes found")
-        except Exception as e:
-            logger.warning(f"Failed to check for stale servers: {e}")
-
     async def ensure_model(
         self, model_name: str, context_size: int | None = None,
     ) -> None:
@@ -346,7 +282,85 @@ class LlamaCppClient:
             reason += f", ctx {self._active_context_size}→{context_size}"
         logger.info(f"Restarting llama-server: {reason} (model={model_name})")
         await self.stop()
+
+        # Reset GPU driver to recover from WDDM VRAM degradation
+        # (Blackwell consumer GPUs lose performance after CUDA context teardown)
+        if self._reset_gpu_driver():
+            logger.info("Waiting 3s for GPU driver to recover...")
+            await asyncio.sleep(3)
+
         await self.start(needed, context_size=context_size)
+
+    @staticmethod
+    def _reset_gpu_driver() -> bool:
+        """Simulate Ctrl+Win+Shift+B to reset the GPU display driver.
+
+        This recovers Blackwell consumer GPUs from WDDM VRAM reallocation
+        degradation that occurs after CUDA context create/destroy cycles.
+        Only runs on Windows. Returns True if the reset was sent.
+        """
+        if platform.system() != "Windows":
+            return False
+
+        try:
+            user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+
+            # INPUT structure for SendInput
+            INPUT_KEYBOARD = 1
+            KEYEVENTF_KEYUP = 0x0002
+
+            VK_LWIN = 0x5B
+            VK_CONTROL = 0x11
+            VK_SHIFT = 0x10
+            VK_B = 0x42
+
+            class KEYBDINPUT(ctypes.Structure):
+                _fields_ = [
+                    ("wVk", ctypes.c_ushort),
+                    ("wScan", ctypes.c_ushort),
+                    ("dwFlags", ctypes.c_ulong),
+                    ("time", ctypes.c_ulong),
+                    ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+                ]
+
+            class INPUT(ctypes.Structure):
+                class _INPUT(ctypes.Union):
+                    _fields_ = [("ki", KEYBDINPUT)]
+
+                _fields_ = [
+                    ("type", ctypes.c_ulong),
+                    ("ii", _INPUT),
+                ]
+
+            def _key_input(vk: int, flags: int = 0) -> INPUT:
+                inp = INPUT()
+                inp.type = INPUT_KEYBOARD
+                inp.ii.ki.wVk = vk
+                inp.ii.ki.dwFlags = flags
+                return inp
+
+            # Press Ctrl, Win, Shift, B — then release all
+            inputs = (INPUT * 8)(
+                _key_input(VK_CONTROL),
+                _key_input(VK_LWIN),
+                _key_input(VK_SHIFT),
+                _key_input(VK_B),
+                _key_input(VK_B, KEYEVENTF_KEYUP),
+                _key_input(VK_SHIFT, KEYEVENTF_KEYUP),
+                _key_input(VK_LWIN, KEYEVENTF_KEYUP),
+                _key_input(VK_CONTROL, KEYEVENTF_KEYUP),
+            )
+
+            sent = user32.SendInput(8, ctypes.pointer(inputs[0]), ctypes.sizeof(INPUT))
+            if sent != 8:
+                logger.warning(f"GPU driver reset: SendInput returned {sent}/8")
+                return False
+
+            logger.info("GPU driver reset: Ctrl+Win+Shift+B sent successfully")
+            return True
+        except Exception as e:
+            logger.warning(f"GPU driver reset failed: {e}")
+            return False
 
     async def _wait_for_ready(self) -> None:
         """Poll /health until server responds 200 or timeout."""
@@ -396,6 +410,11 @@ class LlamaCppClient:
             self._client = None
             tier = self._active_tier or "fast"
             self._active_tier = None
+
+            # Reset GPU driver after crash (CUDA context was destroyed)
+            if self._reset_gpu_driver():
+                await asyncio.sleep(3)
+
             await self.start(tier)
 
     # ------------------------------------------------------------------
@@ -442,6 +461,7 @@ class LlamaCppClient:
         )
 
         t0 = time.monotonic()
+        t_first_token = None
         accumulated = []
         kwargs: dict = {
             "model": effective_model,
@@ -455,20 +475,29 @@ class LlamaCppClient:
         async for chunk in stream:
             delta = chunk.choices[0].delta if chunk.choices else None
             if delta and delta.content:
+                if t_first_token is None:
+                    t_first_token = time.monotonic()
                 accumulated.append(delta.content)
 
         result = "".join(accumulated)
-        elapsed = time.monotonic() - t0
+        t_end = time.monotonic()
+        elapsed = t_end - t0
+        prefill_s = (t_first_token - t0) if t_first_token else elapsed
+        gen_s = (t_end - t_first_token) if t_first_token else 0.0
+        est_tokens = len(result) / 4
+        # tok/s = generation speed only (excludes prompt prefill)
+        tok_s = est_tokens / gen_s if gen_s > 0.05 else 0.0
         self._call_metrics.append({
             "elapsed_s": elapsed,
+            "prefill_s": prefill_s,
+            "gen_s": gen_s,
             "output_chars": len(result),
+            "tok_s": tok_s,
             "model": effective_model,
         })
-        est_tokens = len(result) / 4
-        tok_s = est_tokens / elapsed if elapsed > 0 else 0
         logger.info(
             f"LlamaCpp.generate: {len(result)} chars in {elapsed:.1f}s "
-            f"(~{tok_s:.1f} tok/s)"
+            f"(prefill {prefill_s:.1f}s, ~{tok_s:.1f} tok/s gen)"
         )
         return result
 
@@ -482,6 +511,16 @@ class LlamaCppClient:
         """
         result = await self.generate(messages, model=self.smart_model)
         return result, self.model
+
+    @property
+    def last_tok_s(self) -> float:
+        """Generation-only tok/s from the most recent generate() call.
+
+        Excludes prompt prefill time — measures actual decode speed.
+        """
+        if self._call_metrics:
+            return self._call_metrics[-1].get("tok_s", 0.0)
+        return 0.0
 
     def drain_call_metrics(self) -> list[dict]:
         """Return and clear accumulated call metrics."""
