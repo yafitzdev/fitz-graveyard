@@ -428,76 +428,41 @@ class TestNeighborExpand:
 
 
 # ---------------------------------------------------------------------------
-# Pass 9: _read_raw_source
+# Pass 9: _read_selected_files
 # ---------------------------------------------------------------------------
-class TestReadRawSource:
-    def _graph(self, tmp_path, file_paths):
-        fwd, _ = build_import_graph(str(tmp_path), file_paths)
-        return fwd
-
-    def test_reads_files_as_fenced_blocks(self, tmp_path):
+class TestReadSelectedFiles:
+    def test_reads_all_files_into_dict(self, tmp_path):
         (tmp_path / "main.py").write_text("def run(): pass")
         paths = ["main.py"]
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        result, included, _, _ = gatherer._read_raw_source(paths, paths, self._graph(tmp_path, paths))
-        assert "### main.py" in result
-        assert "def run(): pass" in result
-        assert "```" in result
+        contents, included = gatherer._read_selected_files(paths)
         assert included == ["main.py"]
+        assert "def run(): pass" in contents["main.py"]
 
-    def test_prepends_interface_signatures(self, tmp_path):
-        (tmp_path / "api.py").write_text(
-            "class ChatProvider:\n"
-            "    def chat(self, prompt: str) -> str:\n"
-            "        pass\n"
-        )
-        paths = ["api.py"]
-        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        result, included, _, _ = gatherer._read_raw_source(paths, paths, self._graph(tmp_path, paths))
-        assert "INTERFACE SIGNATURES" in result
-        assert "chat(prompt: str) -> str" in result
-        sig_pos = result.index("INTERFACE SIGNATURES")
-        source_pos = result.index("### api.py")
-        assert sig_pos < source_pos
-
-    def test_budget_truncation(self, tmp_path):
+    def test_reads_multiple_files(self, tmp_path):
         for name in ["a.py", "b.py", "c.py"]:
-            (tmp_path / name).write_text(f"# {name}\n" + "x = 1\n" * 800)
-        paths = ["a.py", "b.py", "c.py"]
-        gatherer = AgentContextGatherer(
-            config=_make_config(max_context_chars=10_000),
-            source_dir=str(tmp_path),
-        )
-        result, included, _, _ = gatherer._read_raw_source(paths, paths, self._graph(tmp_path, paths))
-        assert len(included) < 3
-        assert len(included) >= 1
-        assert len(result) <= 10_000
-
-    def test_connectivity_ordering(self, tmp_path):
-        (tmp_path / "a.py").write_text("from b import x\ny = 1")
-        (tmp_path / "b.py").write_text("x = 42")
-        (tmp_path / "c.py").write_text("z = 99")
+            (tmp_path / name).write_text(f"# {name}\nx = 1")
         paths = ["a.py", "b.py", "c.py"]
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        result, included, _, _ = gatherer._read_raw_source(paths, paths, self._graph(tmp_path, paths))
-        b_pos = result.index("### b.py")
-        c_pos = result.index("### c.py")
-        assert b_pos < c_pos
+        contents, included = gatherer._read_selected_files(paths)
+        assert included == ["a.py", "b.py", "c.py"]
+        assert len(contents) == 3
 
     def test_skips_missing_files(self, tmp_path):
         (tmp_path / "a.py").write_text("x = 1")
         paths = ["a.py", "missing.py"]
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        result, included, _, _ = gatherer._read_raw_source(paths, paths, self._graph(tmp_path, paths))
+        contents, included = gatherer._read_selected_files(paths)
         assert "a.py" in included
         assert "missing.py" not in included
+        assert "missing.py" not in contents
 
     def test_skips_empty_files(self, tmp_path):
         (tmp_path / "empty.py").write_text("")
         (tmp_path / "real.py").write_text("x = 1")
         paths = ["empty.py", "real.py"]
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        result, included, _, _ = gatherer._read_raw_source(paths, paths, self._graph(tmp_path, paths))
+        contents, included = gatherer._read_selected_files(paths)
         assert "real.py" in included
         assert "empty.py" not in included
 
@@ -508,15 +473,14 @@ class TestReadRawSource:
             config=_make_config(max_file_bytes=50),
             source_dir=str(tmp_path),
         )
-        result, included, _, _ = gatherer._read_raw_source(paths, paths, self._graph(tmp_path, paths))
+        contents, included = gatherer._read_selected_files(paths)
         assert "big.py" in included
-        content_lines = result.split("```")[1]
-        assert len(content_lines.strip()) <= 50
+        assert len(contents["big.py"]) <= 50
 
     def test_empty_selected_returns_empty(self, tmp_path):
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        result, included, _, _ = gatherer._read_raw_source([], [], {})
-        assert result == ""
+        contents, included = gatherer._read_selected_files([])
+        assert contents == {}
         assert included == []
 
 
@@ -761,8 +725,14 @@ class TestGatherEndToEnd:
         )
         result = await gatherer.gather(mock_client, "build openai chat provider")
 
-        assert "def run(): pass" in result["synthesized"]
+        # synthesized = structural overview (compact, no full source)
+        assert "STRUCTURAL OVERVIEW" in result["synthesized"]
+        # raw_summaries = overview + scan hit full source
         assert "### main.py" in result["raw_summaries"]
+        assert "def run(): pass" in result["raw_summaries"]
+        # file_contents = all files available for tool use
+        assert "main.py" in result["file_contents"]
+        assert "def run(): pass" in result["file_contents"]["main.py"]
         assert "agent_files" in result
         agent_files = result["agent_files"]
         assert agent_files["total_screened"] == 2

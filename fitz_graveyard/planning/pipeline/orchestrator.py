@@ -200,6 +200,7 @@ class PlanningPipeline:
             else:
                 prior_outputs["_gathered_context"] = agent_ctx.get("synthesized", "")
                 prior_outputs["_raw_summaries"] = agent_ctx.get("raw_summaries", "")
+                prior_outputs["_file_contents"] = agent_ctx.get("file_contents", {})
 
         # Implementation check: does the codebase already solve this task?
         if (

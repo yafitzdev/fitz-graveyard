@@ -242,11 +242,13 @@ class ArchitectureDesignStage(PipelineStage):
             # 1. Focused investigations (parallel)
             findings = await self._investigate(client, job_description, prior_outputs)
 
-            # 2. Reasoning pass (with investigation findings)
+            # 2. Reasoning pass (with investigation findings + file access tool)
             messages = self.build_prompt(job_description, prior_outputs, findings=findings)
             await self._report_substep("reasoning")
             t0 = time.monotonic()
-            reasoning = await client.generate(messages=messages)
+            reasoning = await self._reason_with_tools(
+                client, messages, prior_outputs,
+            )
             t1 = time.monotonic()
             logger.info(f"Stage '{self.name}': reasoning took {t1 - t0:.1f}s ({len(reasoning)} chars)")
 

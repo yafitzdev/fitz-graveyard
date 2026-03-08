@@ -831,6 +831,77 @@ class PipelineStage(ABC):
         """Get the codebase source directory for reading actual source files."""
         return prior_outputs.get("_source_dir")
 
+    async def _reason_with_tools(
+        self,
+        client: Any,
+        messages: list[dict],
+        prior_outputs: dict[str, Any],
+        max_rounds: int = 3,
+    ) -> str:
+        """Run reasoning with a read_file tool so the LLM can inspect source code.
+
+        The LLM receives the structural overview in the prompt and can request
+        full source of specific files via tool calling. Falls back to plain
+        generate() if tool calling is unavailable or file_contents is empty.
+
+        Args:
+            client:        LLM client with generate_with_tools()
+            messages:      Chat messages for the reasoning prompt
+            prior_outputs: Pipeline prior outputs (must contain _file_contents)
+            max_rounds:    Max tool-use rounds before forcing a final response
+
+        Returns:
+            Reasoning text (str).
+        """
+        file_contents = prior_outputs.get("_file_contents", {})
+        generate_with_tools = getattr(client, "generate_with_tools", None)
+
+        if not file_contents or generate_with_tools is None:
+            return await client.generate(messages=messages)
+
+        def read_file(path: str) -> str:
+            """Read the full source code of a file. Use this to inspect implementation details."""
+            content = file_contents.get(path)
+            if content is not None:
+                return content
+            return f"File not found: {path}"
+
+        tools = [read_file]
+
+        # Add tool hint to the last user message
+        available = ", ".join(sorted(file_contents.keys()))
+        tool_hint = (
+            "\n\nYou have a read_file tool to inspect the full source of any file "
+            "in the structural overview. Use it when you need implementation details. "
+            f"Available files: {available}"
+        )
+        messages = [m.copy() for m in messages]
+        messages[-1]["content"] += tool_hint
+
+        for _round in range(max_rounds):
+            msg = await generate_with_tools(messages=messages, tools=tools)
+
+            if not msg.tool_calls:
+                return msg.content or ""
+
+            # Execute tool calls and continue conversation
+            messages.append(msg.assistant_dict)
+            for tc in msg.tool_calls:
+                if tc.name == "read_file":
+                    result = read_file(**tc.arguments)
+                else:
+                    result = f"Unknown tool: {tc.name}"
+                messages.append(
+                    client.tool_result_message(tc.id, result)
+                )
+            logger.info(
+                f"Stage '{self.name}': tool round {_round + 1}, "
+                f"{len(msg.tool_calls)} file(s) requested"
+            )
+
+        # Max rounds reached — get final text response without tools
+        return await client.generate(messages=messages)
+
     def _get_implementation_check(self, prior_outputs: dict[str, Any]) -> str:
         """Format the implementation check result for injection into prompts.
 

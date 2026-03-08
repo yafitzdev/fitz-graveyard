@@ -57,12 +57,6 @@ class AgentConfig(BaseModel):
     max_file_bytes: int = Field(
         default=50_000, description="Maximum bytes to read per file"
     )
-    max_context_chars: int = Field(
-        default=60_000,
-        ge=10_000,
-        le=200_000,
-        description="Maximum chars of raw source to include in planning context",
-    )
     source_dir: str | None = Field(
         default=None,
         description=(

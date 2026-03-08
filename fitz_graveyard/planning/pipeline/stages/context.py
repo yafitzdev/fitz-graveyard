@@ -96,11 +96,13 @@ class ContextStage(PipelineStage):
 
     async def execute(self, client: Any, job_description: str, prior_outputs: dict[str, Any]) -> StageResult:
         try:
-            # 1. Reasoning pass
+            # 1. Reasoning pass (with file access tool)
             messages = self.build_prompt(job_description, prior_outputs)
             await self._report_substep("reasoning")
             t0 = time.monotonic()
-            reasoning = await client.generate(messages=messages)
+            reasoning = await self._reason_with_tools(
+                client, messages, prior_outputs,
+            )
             t1 = time.monotonic()
             logger.info(f"Stage '{self.name}': reasoning took {t1 - t0:.1f}s ({len(reasoning)} chars)")
 

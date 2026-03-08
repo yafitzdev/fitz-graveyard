@@ -313,26 +313,81 @@ class AgentContextGatherer:
                 )
                 selected = selected[:self._config.max_summary_files]
 
-            # Pass 9: Read raw source (pure Python)
+            # Pass 9: Read selected files (pure Python)
             await self._report(progress_callback, 0.080, "agent:reading")
-            raw_source, included, fwd_map, rev_count = self._read_raw_source(
-                selected, file_paths, forward_map,
-            )
+            file_contents, included = self._read_selected_files(selected)
 
-            if not raw_source:
+            if not file_contents:
                 logger.warning("AgentContextGatherer: no readable source files")
                 return empty
 
+            # Build structural overview (compact, covers ALL selected files)
+            selected_index = build_structural_index(
+                self._source_dir, included, self._config.max_file_bytes,
+            )
+            signatures = extract_interface_signatures(
+                self._source_dir, included, self._config.max_file_bytes,
+            )
+            lib_sigs = extract_library_signatures(
+                self._source_dir, included, file_paths,
+                self._config.max_file_bytes,
+            )
+
+            overview_parts: list[str] = []
+            if signatures:
+                overview_parts.append(
+                    "--- INTERFACE SIGNATURES (auto-extracted, ground truth) ---\n"
+                    + signatures
+                )
+            if lib_sigs:
+                overview_parts.append(
+                    "--- LIBRARY API REFERENCE (installed packages, ground truth) ---\n"
+                    + lib_sigs
+                )
+            overview_parts.append(
+                "--- STRUCTURAL OVERVIEW (all selected files) ---\n"
+                + selected_index
+            )
+            structural_overview = "\n\n".join(overview_parts)
+
+            # Build scan hit source blocks (for reasoning context)
+            scan_blocks: list[str] = []
+            for path in scan_hits:
+                if path in file_contents:
+                    scan_blocks.append(
+                        f"### {path}\n```\n{file_contents[path]}\n```"
+                    )
+
+            # Assemble context strings
+            # synthesized = structural overview (compact, for extraction prompts)
+            # raw_summaries = overview + scan hit source (for reasoning prompts)
+            # file_contents = all files (for read_file tool during planning)
+            raw_summaries = structural_overview
+            if scan_blocks:
+                raw_summaries += (
+                    "\n\n--- FULL SOURCE (key files from structural scan) ---\n\n"
+                    + "\n\n".join(scan_blocks)
+                )
+
+            # Compute reverse import counts for diagnostics
+            reverse_count: dict[str, int] = {}
+            for deps in forward_map.values():
+                for dep in deps:
+                    reverse_count[dep] = reverse_count.get(dep, 0) + 1
+
             t_total = time.monotonic() - t_pipeline
+            total_chars = sum(len(c) for c in file_contents.values())
             logger.info(
-                f"AgentContextGatherer: stuffed {len(included)}/{len(selected)} "
-                f"files ({len(raw_source)} chars) into context — "
+                f"AgentContextGatherer: {len(included)} files "
+                f"({total_chars} chars source, "
+                f"{len(structural_overview)} chars overview) — "
                 f"pipeline total {t_total:.1f}s"
             )
-            serializable_fwd = {k: sorted(v) for k, v in fwd_map.items()}
+            serializable_fwd = {k: sorted(v) for k, v in forward_map.items()}
             return {
-                "synthesized": raw_source,
-                "raw_summaries": raw_source,
+                "synthesized": structural_overview,
+                "raw_summaries": raw_summaries,
+                "file_contents": file_contents,
                 "agent_files": {
                     "total_screened": len(file_paths),
                     "bm25_candidates": bm25_candidates[:20],
@@ -342,7 +397,7 @@ class AgentContextGatherer:
                     "selected": selected,
                     "included": included,
                     "forward_map": serializable_fwd,
-                    "reverse_count": rev_count,
+                    "reverse_count": reverse_count,
                 },
             }
 
@@ -827,89 +882,26 @@ class AgentContextGatherer:
     # Pass 9: Read raw source
     # ------------------------------------------------------------------
 
-    def _read_raw_source(
+    def _read_selected_files(
         self,
         selected: list[str],
-        all_paths: list[str],
-        forward_map: dict[str, set[str]],
-    ) -> tuple[str, list[str], dict[str, set[str]], dict[str, int]]:
-        """Read actual source code of selected files into a context string.
-
-        Files are sorted by import connectivity (most-connected first)
-        so that architecturally central files survive budget truncation.
+    ) -> tuple[dict[str, str], list[str]]:
+        """Read all selected files into a dict.
 
         Returns:
-            (raw_source_string, included_paths, forward_map, reverse_count)
+            (file_contents_dict, included_paths)
         """
-        reverse_count: dict[str, int] = {}
-        for deps in forward_map.values():
-            for dep in deps:
-                reverse_count[dep] = reverse_count.get(dep, 0) + 1
-
-        def _connectivity(path: str) -> int:
-            return len(forward_map.get(path, set())) + reverse_count.get(path, 0)
-
-        # Sort: most-connected first (survives truncation)
-        sorted_files = sorted(selected, key=_connectivity, reverse=True)
-
-        budget = self._config.max_context_chars
-        blocks: list[str] = []
+        file_contents: dict[str, str] = {}
         included: list[str] = []
-        used = 0
 
-        for rel_path in sorted_files:
-            try:
-                resolved = sanitize_agent_path(rel_path, self._source_dir)
-            except ValueError:
-                continue
-            if not resolved.is_file():
-                continue
-            try:
-                raw = resolved.read_bytes()[:self._config.max_file_bytes]
-                content = raw.decode("utf-8", errors="replace")
-            except OSError:
-                continue
+        for rel_path in selected:
+            content = self._read_file_content(rel_path)
             if not content.strip():
                 continue
-
-            block = f"### {rel_path}\n```\n{content}\n```"
-            if used + len(block) > budget:
-                logger.info(
-                    f"AgentContextGatherer: budget exhausted at "
-                    f"{len(included)} files ({used} chars), "
-                    f"dropping {len(sorted_files) - len(included)} remaining"
-                )
-                break
-
-            blocks.append(block)
+            file_contents[rel_path] = content
             included.append(rel_path)
-            used += len(block)
 
-        # Prepend interface signatures cheat sheet
-        signatures = extract_interface_signatures(
-            self._source_dir, included, self._config.max_file_bytes,
-        )
-        if signatures:
-            header = (
-                "--- INTERFACE SIGNATURES (auto-extracted, ground truth) ---\n"
-                + signatures
-            )
-            blocks.insert(0, header)
-
-        # Prepend library API reference (after interface signatures)
-        lib_sigs = extract_library_signatures(
-            self._source_dir, included, all_paths, self._config.max_file_bytes,
-        )
-        if lib_sigs:
-            lib_header = (
-                "--- LIBRARY API REFERENCE (installed packages, ground truth) ---\n"
-                + lib_sigs
-            )
-            # Insert after interface signatures (position 1) or at 0
-            insert_pos = 1 if signatures else 0
-            blocks.insert(insert_pos, lib_header)
-
-        return "\n\n".join(blocks), included, forward_map, reverse_count
+        return file_contents, included
 
     # ------------------------------------------------------------------
     # Parsers
