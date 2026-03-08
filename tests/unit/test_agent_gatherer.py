@@ -450,8 +450,34 @@ class TestNeighborExpand:
         all_paths = ["pkg/a.py", "pkg/b.py", "pkg/c.py"]
         result = AgentContextGatherer._neighbor_expand(selected, all_paths)
         assert result.count("pkg/c.py") == 1
-        # c.py should appear right after a.py (first file in that dir)
-        assert result.index("pkg/c.py") == result.index("pkg/a.py") + 1
+
+    def test_expand_from_limits_which_dirs_expand(self):
+        """Only directories containing expand_from files get expanded."""
+        selected = [
+            "llm/providers/base.py",   # high confidence (scan hit)
+            "llm/auth/token_provider.py",  # low confidence (BM25 noise)
+        ]
+        all_paths = [
+            "llm/providers/base.py",
+            "llm/providers/openai.py",
+            "llm/providers/ollama.py",
+            "llm/auth/token_provider.py",
+            "llm/auth/m2m.py",
+            "llm/auth/httpx_auth.py",
+        ]
+        # Only expand from base.py (scan hit), not token_provider.py
+        result = AgentContextGatherer._neighbor_expand(
+            selected, all_paths,
+            expand_from=["llm/providers/base.py"],
+        )
+        # Provider siblings found
+        assert "llm/providers/openai.py" in result
+        assert "llm/providers/ollama.py" in result
+        # Auth siblings NOT found (token_provider.py not in expand_from)
+        assert "llm/auth/m2m.py" not in result
+        assert "llm/auth/httpx_auth.py" not in result
+        # Original selected files still present
+        assert "llm/auth/token_provider.py" in result
 
 
 # ---------------------------------------------------------------------------

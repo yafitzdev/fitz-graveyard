@@ -292,16 +292,25 @@ class AgentContextGatherer:
                 )
 
             # Pass 8: Neighbor expansion (pure Python, same-directory files)
+            # Only expand from high-confidence sources: scan hits (LLM-picked
+            # from structural index) and files import-reachable from scan hits
+            # (structurally connected). BM25/embedding-only hits are noisy
+            # keyword matches that would expand irrelevant directories.
             await self._report(progress_callback, 0.078, "agent:neighbor_expand")
-            neighbor_expanded = self._neighbor_expand(expanded, file_paths)
+            high_confidence = self._import_reachable(
+                scan_hits, forward_map, set(expanded),
+            )
+            neighbor_expanded = self._neighbor_expand(
+                expanded, file_paths, expand_from=high_confidence,
+            )
             neighbor_added = len(neighbor_expanded) - len(expanded)
             if neighbor_added > 0:
                 logger.info(
                     f"AgentContextGatherer: neighbor expansion added "
-                    f"{neighbor_added} files"
+                    f"{neighbor_added} files (from {len(high_confidence)} "
+                    f"high-confidence triggers)"
                 )
 
-            # Prioritize and cap
             selected = self._prioritize_for_summary(neighbor_expanded)
 
             # Pass 9: Read selected files (pure Python)
@@ -811,6 +820,41 @@ class AgentContextGatherer:
         return list(relevant) + sorted(relevant_set - set(relevant))
 
     @staticmethod
+    def _import_reachable(
+        seeds: list[str],
+        forward_map: dict[str, set[str]],
+        candidates: set[str],
+    ) -> list[str]:
+        """Return files from candidates that are import-reachable from seeds.
+
+        BFS depth 2, both directions (forward + reverse imports).
+        Always includes the seeds themselves.
+        """
+        reverse_map: dict[str, set[str]] = {}
+        for src, deps in forward_map.items():
+            for dep in deps:
+                reverse_map.setdefault(dep, set()).add(src)
+
+        reachable = set(seeds)
+        frontier = set(seeds)
+        for _depth in range(2):
+            next_frontier: set[str] = set()
+            for path in frontier:
+                for dep in forward_map.get(path, set()):
+                    if dep not in reachable and dep in candidates:
+                        reachable.add(dep)
+                        next_frontier.add(dep)
+                for importer in reverse_map.get(path, set()):
+                    if importer not in reachable and importer in candidates:
+                        reachable.add(importer)
+                        next_frontier.add(importer)
+            frontier = next_frontier
+            if not frontier:
+                break
+
+        return sorted(reachable)
+
+    @staticmethod
     def _prioritize_for_summary(paths: list[str]) -> list[str]:
         """Sort paths so code files come before docs/tests/examples.
 
@@ -843,16 +887,32 @@ class AgentContextGatherer:
 
     @staticmethod
     def _neighbor_expand(
-        selected: list[str], all_paths: list[str],
+        selected: list[str],
+        all_paths: list[str],
+        expand_from: list[str] | None = None,
     ) -> list[str]:
-        """Add sibling files immediately after the selected file that shares their directory.
+        """Add sibling files immediately after a high-confidence trigger file.
 
-        If the pipeline picks ``providers/base.py``, its siblings
-        (``openai.py``, ``ollama.py``, etc.) are inserted right after it.
-        This keeps siblings grouped with their trigger file in priority
-        order instead of being appended at the end.
+        Only directories containing an ``expand_from`` file get expanded.
+        This prevents noisy BM25/embedding hits from pulling in entire
+        irrelevant directories. Siblings are inserted right after the
+        first trigger file in each directory.
+
+        Args:
+            selected:    All selected files (full list to output).
+            all_paths:   Every file in the codebase.
+            expand_from: Subset of selected that triggers expansion
+                         (default: all of selected for backwards compat).
         """
+        triggers = expand_from if expand_from is not None else selected
         selected_set = set(selected)
+
+        # Directories eligible for expansion (only from triggers)
+        expand_dirs: set[str] = set()
+        for path in triggers:
+            parent = str(PurePosixPath(path).parent)
+            if parent != ".":
+                expand_dirs.add(parent)
 
         # Group all_paths by directory for fast lookup
         dir_files: dict[str, list[str]] = {}
@@ -860,16 +920,16 @@ class AgentContextGatherer:
             if path in selected_set:
                 continue
             parent = str(PurePosixPath(path).parent)
-            if parent != ".":
+            if parent in expand_dirs:
                 dir_files.setdefault(parent, []).append(path)
 
-        # Insert siblings right after the first selected file in each dir
+        # Insert siblings right after the first trigger file in each dir
         result: list[str] = []
         expanded_dirs: set[str] = set()
         for path in selected:
             result.append(path)
             parent = str(PurePosixPath(path).parent)
-            if parent != "." and parent not in expanded_dirs:
+            if parent in expand_dirs and parent not in expanded_dirs:
                 expanded_dirs.add(parent)
                 for sibling in dir_files.get(parent, []):
                     result.append(sibling)
