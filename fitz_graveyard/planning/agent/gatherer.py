@@ -825,32 +825,18 @@ class AgentContextGatherer:
         forward_map: dict[str, set[str]],
         candidates: set[str],
     ) -> list[str]:
-        """Return files from candidates that are import-reachable from seeds.
+        """Return files from candidates that are forward-imported by seeds.
 
-        BFS depth 2, both directions (forward + reverse imports).
+        Forward-only, depth 1: "seed imports X" → X is reachable.
+        Reverse imports ("Y imports seed") are excluded — they explode
+        because hub files like engine.py are imported by half the codebase.
         Always includes the seeds themselves.
         """
-        reverse_map: dict[str, set[str]] = {}
-        for src, deps in forward_map.items():
-            for dep in deps:
-                reverse_map.setdefault(dep, set()).add(src)
-
         reachable = set(seeds)
-        frontier = set(seeds)
-        for _depth in range(2):
-            next_frontier: set[str] = set()
-            for path in frontier:
-                for dep in forward_map.get(path, set()):
-                    if dep not in reachable and dep in candidates:
-                        reachable.add(dep)
-                        next_frontier.add(dep)
-                for importer in reverse_map.get(path, set()):
-                    if importer not in reachable and importer in candidates:
-                        reachable.add(importer)
-                        next_frontier.add(importer)
-            frontier = next_frontier
-            if not frontier:
-                break
+        for path in seeds:
+            for dep in forward_map.get(path, set()):
+                if dep in candidates:
+                    reachable.add(dep)
 
         return sorted(reachable)
 
