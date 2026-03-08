@@ -130,7 +130,7 @@ class LMStudioClient:
         self, model_name: str, context_size: int | None = None,
     ) -> None:
         """Ensure the requested model is loaded in LM Studio."""
-        if await self._is_model_loaded():
+        if await self.is_model_loaded():
             return
         await self._load_model_via_cli()
 
@@ -149,13 +149,13 @@ class LMStudioClient:
             logger.error(f"LM Studio health check failed: {e}")
             return False
 
-        if await self._is_model_loaded():
+        if await self.is_model_loaded():
             return True
 
         logger.info(f"No model loaded in LM Studio, auto-loading {self.model}")
         return await self._load_model_via_cli()
 
-    async def _is_model_loaded(self) -> bool:
+    async def is_model_loaded(self) -> bool:
         """Check if any model is currently loaded (not just available)."""
         lms = shutil.which("lms")
         if not lms:
@@ -214,6 +214,37 @@ class LMStudioClient:
         except Exception as e:
             logger.error(f"lms load failed: {e}")
             return False
+
+    async def unload_model(self) -> bool:
+        """Unload the current model via ``lms unload`` to free VRAM."""
+        lms = shutil.which("lms")
+        if not lms:
+            logger.warning("lms CLI not found in PATH — cannot unload model")
+            return False
+
+        logger.info(f"Running: {lms} unload --all")
+        try:
+            result = await asyncio.to_thread(
+                subprocess.run,
+                [lms, "unload", "--all"],
+                capture_output=True, text=True, timeout=30,
+                encoding="utf-8", errors="replace",
+            )
+            output = (result.stdout + result.stderr).strip()
+            if result.returncode == 0:
+                logger.info(f"Model unloaded successfully: {output}")
+                return True
+            logger.warning(
+                f"lms unload failed (code {result.returncode}): {output}"
+            )
+            return False
+        except Exception as e:
+            logger.warning(f"lms unload failed: {e}")
+            return False
+
+    async def reload_model(self) -> bool:
+        """Reload the model after unloading."""
+        return await self._load_model_via_cli()
 
     @lm_studio_retry
     async def generate(

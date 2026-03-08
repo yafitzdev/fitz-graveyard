@@ -10,13 +10,13 @@ Pipeline:
   Pass 5:  Embedding recall   (sentence-transformers — semantic similarity)
   Pass 6:  Cross-encoder rerank (sentence-transformers — rerank merged candidates)
   Pass 7:  Import expand      (pure Python — BFS depth 2, both directions)
-  Pass 8:  LLM judgment       (LLM — final selection with reasoning)
+  Pass 8:  Neighbor expand    (pure Python — same-directory files)
   Pass 9:  Read raw source    (pure Python — stuff into context)
 
-Three LLM calls total (query expand, structural scan, final judgment).
-Embedding and reranking use lightweight in-process models (~360MB VRAM total)
-that coexist with the running llama-server. Falls back to BM25 + LLM
-judgment if sentence-transformers is unavailable.
+Two LLM calls total (query expand, structural scan).
+Structural scan hits are protected — they always survive to final selection.
+Embedding and reranking use lightweight in-process models (~360MB VRAM total).
+Falls back to BM25 if sentence-transformers is unavailable.
 """
 
 import json
@@ -80,14 +80,6 @@ _MAX_CANDIDATES_FOR_RERANK = 200
 # Cross-encoder reranking output size
 _RERANK_TOP_K = 50
 
-# Fraction of context window to use for judgment prompt file snippets.
-# ~75% of context for file content, rest for prompt template + generation.
-_JUDGE_CONTEXT_FRACTION = 0.75
-# Approximate chars per token for budget calculation.
-_CHARS_PER_TOKEN = 3.5
-
-# Lines of source shown per file in judgment prompt
-_JUDGE_SNIPPET_LINES = 200
 
 
 class AgentContextGatherer:
@@ -192,6 +184,13 @@ class AgentContextGatherer:
                 f"({time.monotonic() - t0:.1f}s)"
             )
 
+            # Unload LLM to free VRAM + RAM for embedding/reranking
+            llm_unloaded = False
+            unload = getattr(client, "unload_model", None)
+            if unload is not None:
+                await self._report(progress_callback, 0.069, "agent:unloading_llm")
+                llm_unloaded = await unload()
+
             # Pass 5: Embedding recall (if sentence-transformers available)
             embedding_candidates: list[str] = []
             try:
@@ -262,45 +261,51 @@ class AgentContextGatherer:
                     exc_info=True,
                 )
 
+            # Reload LLM for planning stages
+            if llm_unloaded:
+                await self._report(progress_callback, 0.075, "agent:reloading_llm")
+                reload = getattr(client, "reload_model", None)
+                if reload is not None:
+                    await reload()
+
             # Build import graph once (reused by import expansion + read raw source)
             forward_map, _module_lookup = build_import_graph(
                 self._source_dir, file_paths, self._config.max_file_bytes,
             )
 
+            # Combine scan hits (protected) + reranked candidates
+            selected_set = set(scan_hits)
+            combined = list(scan_hits)
+            for path in reranked:
+                if path not in selected_set:
+                    selected_set.add(path)
+                    combined.append(path)
+            logger.info(
+                f"AgentContextGatherer: combined {len(combined)} candidates "
+                f"(scan={len(scan_hits)}, reranked={len(reranked)})"
+            )
+
             # Pass 7: Import expansion (pure Python, BFS depth 2)
-            expanded = self._import_expand(reranked, file_paths, forward_map)
-            import_added = len(expanded) - len(reranked)
+            expanded = self._import_expand(combined, file_paths, forward_map)
+            import_added = len(expanded) - len(combined)
             if import_added > 0:
                 logger.info(
                     f"AgentContextGatherer: import expansion added "
                     f"{import_added} files"
                 )
 
-            # Pass 8: LLM final judgment with reasoning (1 LLM call)
-            await self._report(progress_callback, 0.076, "agent:judging")
-            t0 = time.monotonic()
-            judge_result = await self._judge_files(
-                client, smart, expanded, job_description,
-            )
-            selected = list(judge_result.keys()) if judge_result else []
-
-            if not selected:
+            # Pass 8: Neighbor expansion (pure Python, same-directory files)
+            await self._report(progress_callback, 0.078, "agent:neighbor_expand")
+            neighbor_expanded = self._neighbor_expand(expanded, file_paths)
+            neighbor_added = len(neighbor_expanded) - len(expanded)
+            if neighbor_added > 0:
                 logger.info(
-                    "AgentContextGatherer: judgment returned empty, "
-                    "falling back to reranked top"
-                )
-                selected = reranked[:self._config.max_summary_files]
-            else:
-                logger.info(
-                    f"AgentContextGatherer: judgment selected "
-                    f"{len(selected)} files ({time.monotonic() - t0:.1f}s):\n"
-                    + "\n".join(
-                        f"  {p}: {r}" for p, r in judge_result.items()
-                    )
+                    f"AgentContextGatherer: neighbor expansion added "
+                    f"{neighbor_added} files"
                 )
 
             # Prioritize and cap
-            selected = self._prioritize_for_summary(selected)
+            selected = self._prioritize_for_summary(neighbor_expanded)
             if len(selected) > self._config.max_summary_files:
                 logger.info(
                     f"AgentContextGatherer: capping {len(selected)} to "
@@ -400,7 +405,7 @@ class AgentContextGatherer:
     @staticmethod
     def _should_skip_dir(name: str) -> bool:
         """Check if a directory name should be skipped."""
-        return name in _SKIP_DIRS
+        return name in _SKIP_DIRS or name.startswith(".")
 
     # ------------------------------------------------------------------
     # Pass 2: Query expansion + HyDE
@@ -787,67 +792,36 @@ class AgentContextGatherer:
         return sorted(paths, key=_tier)
 
     # ------------------------------------------------------------------
-    # Pass 8: LLM judgment
+    # Pass 8: Neighbor expansion
     # ------------------------------------------------------------------
 
-    async def _judge_files(
-        self,
-        client: Any,
-        model: str,
-        candidates: list[str],
-        job_description: str,
-    ) -> dict[str, str]:
-        """LLM final judgment with reasoning on candidate files.
+    @staticmethod
+    def _neighbor_expand(
+        selected: list[str], all_paths: list[str],
+    ) -> list[str]:
+        """Add files from the same directories as selected files.
 
-        Returns dict of {file_path: reasoning}. Empty dict on failure.
+        If the structural scan or reranker picks one file from a directory,
+        the other files in that directory likely implement the same interface
+        or pattern and are worth including. The final cap + budget truncation
+        in ``_read_raw_source`` ensures we don't include too many.
         """
-        ctx = getattr(client, "context_size", None)
-        if not isinstance(ctx, int) or ctx <= 0:
-            ctx = 65536
-        max_chars = int(ctx * _CHARS_PER_TOKEN * _JUDGE_CONTEXT_FRACTION)
-        logger.debug(
-            f"AgentContextGatherer: judge budget {max_chars} chars "
-            f"(context_size={ctx})"
-        )
+        selected_set = set(selected)
+        dirs: set[str] = set()
+        for path in selected:
+            parent = str(PurePosixPath(path).parent)
+            if parent != ".":
+                dirs.add(parent)
 
-        file_blocks = []
-        total_chars = 0
-        for path in candidates:
-            content = self._read_file_content(path)
-            if not content.strip():
+        neighbors: list[str] = []
+        for path in all_paths:
+            if path in selected_set:
                 continue
-            lines = content.splitlines()[:_JUDGE_SNIPPET_LINES]
-            snippet = "\n".join(lines)
-            block = f"### FILE: {path}\n```\n{snippet}\n```"
-            if total_chars + len(block) > max_chars:
-                logger.info(
-                    f"AgentContextGatherer: judgment prompt capped at "
-                    f"{len(file_blocks)} files (budget {max_chars} chars)"
-                )
-                break
-            file_blocks.append(block)
-            total_chars += len(block)
+            parent = str(PurePosixPath(path).parent)
+            if parent in dirs:
+                neighbors.append(path)
 
-        if not file_blocks:
-            return {}
-
-        prompt = load_prompt("agent_judge").format(
-            job_description=job_description,
-            file_blocks="\n\n".join(file_blocks),
-        )
-
-        try:
-            response = await client.generate(
-                messages=[{"role": "user", "content": prompt}],
-                model=model,
-                temperature=0,
-            )
-            return self._parse_judge_response(response)
-        except Exception:
-            logger.warning(
-                "AgentContextGatherer: judgment failed", exc_info=True,
-            )
-            return {}
+        return selected + neighbors
 
     # ------------------------------------------------------------------
     # Pass 9: Read raw source
@@ -982,28 +956,6 @@ class AgentContextGatherer:
             hyde = code_match.group(1).strip()
 
         return terms, hyde
-
-    @staticmethod
-    def _parse_judge_response(response: str) -> dict[str, str]:
-        """Parse judge response into {file_path: reasoning}."""
-        text = response.strip()
-        fence_match = re.search(
-            r"```(?:json)?\s*\n?(.*?)\n?\s*```", text, re.DOTALL,
-        )
-        if fence_match:
-            text = fence_match.group(1).strip()
-
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError:
-            return {}
-
-        if isinstance(parsed, dict):
-            return {
-                str(k): str(v) for k, v in parsed.items()
-                if isinstance(k, str)
-            }
-        return {}
 
     # ------------------------------------------------------------------
     # Helpers

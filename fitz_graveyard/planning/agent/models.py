@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 # Minimum available system RAM (GB) to attempt loading torch + models.
 # Below this, the paging file can exhaust and crash the asyncio event loop.
-_MIN_AVAILABLE_RAM_GB = 4.0
+_MIN_AVAILABLE_RAM_GB = 2.0
 
 
 def _check_system_memory() -> None:
@@ -53,14 +53,20 @@ def _check_system_memory() -> None:
 
 
 def _pick_device() -> str:
-    """Always CPU — the LLM server owns the GPU.
+    """Choose device for embedding/reranking models.
 
-    These models are tiny (~360MB) and encode fast enough on CPU
-    (~40-60s for 740 files). Sharing VRAM with llama-server or
-    LM Studio causes OOM from PyTorch fragmentation even with
-    20+ GB nominally free.
+    Caller is responsible for unloading the LLM model first so the
+    GPU is free. Returns ``"cuda"`` if available, ``"cpu"`` otherwise.
     """
-    return "cpu"
+    try:
+        import torch
+    except ImportError:
+        return "cpu"
+
+    if not torch.cuda.is_available():
+        return "cpu"
+
+    return "cuda"
 
 
 class EmbeddingModel:

@@ -142,10 +142,19 @@ _PHASE_DESCRIPTIONS = {
     "starting": "Starting up...",
     "initializing": "Initializing...",
     "health_check": "Checking LLM connectivity...",
+    "loading_model": "Loading LLM model...",
     "agent:mapping": "Mapping codebase...",
+    "agent:expanding_query": "Expanding search query (LLM)...",
+    "agent:scanning_index": "Scanning structural index (LLM)...",
+    "agent:bm25": "BM25 keyword screening...",
+    "agent:unloading_llm": "Unloading LLM for embedding...",
+    "agent:embedding": "Embedding recall (semantic search)...",
+    "agent:reranking": "Cross-encoder reranking...",
+    "agent:reloading_llm": "Reloading LLM model...",
+    "agent:neighbor_expand": "Expanding to neighboring files...",
+    "agent:reading": "Reading source files...",
     "agent:screening": "BM25 screening...",
     "agent:confirming": "Confirming files with LLM...",
-    "agent:reading": "Reading source files...",
     "agent:selecting": "Selecting relevant files...",
     "agent:selecting_dirs": "Selecting relevant directories...",
     "agent:synthesizing": "Synthesizing context...",
@@ -492,13 +501,13 @@ def plan(
     async def _plan():
         import logging as _logging
         from rich.console import Console as _Console
+        from rich.live import Live
 
-        store = await _get_store()
         config = load_config()
         enriched_description = description
         pre_gathered_context: str | None = None
 
-        # Clarification flow: gather context first, then ask questions with that context
+        # Clarification flow needs interactive terminal — runs before GUI
         if clarify and not detach and sys.stdin.isatty():
             try:
                 from fitz_graveyard.planning.clarification import get_clarifying_questions
@@ -533,33 +542,55 @@ def plan(
             except Exception as e:
                 _logging.getLogger(__name__).warning(f"Clarification skipped: {e}")
 
-        try:
-            result = await create_plan(
-                description=enriched_description,
-                timeline=timeline,
-                context=context,
-                integration_points=None,
-                api_review=api_review,
-                store=store,
-                config=config,
-                source_dir=source_dir,
-            )
-        except Exception:
-            await store.close()
-            raise
-
-        job_id = result["job_id"]
-
         if detach:
-            await store.close()
-            typer.echo(f"Queued job {job_id}. Run 'fitz-graveyard run' to start processing.")
+            store = await _get_store()
+            try:
+                result = await create_plan(
+                    description=enriched_description, timeline=timeline,
+                    context=context, integration_points=None,
+                    api_review=api_review, store=store, config=config,
+                    source_dir=source_dir,
+                )
+            finally:
+                await store.close()
+            typer.echo(f"Queued job {result['job_id']}. Run 'fitz-graveyard run' to start processing.")
             return
 
+        # Resolve model name for display (sync, instant)
+        if config.provider == "lm_studio":
+            model_name = config.lm_studio.model
+        elif config.provider == "llama_cpp":
+            model_name = config.llama_cpp.fast_model.path
+        else:
+            model_name = config.ollama.model
+
+        # Show GUI immediately, do setup in background
+        console = _Console(stderr=True)
+        live = Live(
+            _make_live_display(enriched_description, 0.0, 0.0, model_name=model_name),
+            console=console,
+            refresh_per_second=4,
+        )
+        live.start()
+
         try:
+            store = await _get_store()
+            result = await create_plan(
+                description=enriched_description, timeline=timeline,
+                context=context, integration_points=None,
+                api_review=api_review, store=store, config=config,
+                source_dir=source_dir,
+            )
+            job_id = result["job_id"]
+
             await _run_inline(
                 job_id, store, config, enriched_description,
                 pre_gathered_context=pre_gathered_context,
+                live=live, console=console,
             )
+        except Exception:
+            live.stop()
+            raise
         finally:
             await store.close()
 

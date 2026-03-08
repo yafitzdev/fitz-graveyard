@@ -31,6 +31,8 @@ def mock_client():
     client.smart_model = "test-model"
     client.context_size = 65536
     client.generate = AsyncMock(return_value="LLM response")
+    client.unload_model = AsyncMock(return_value=True)
+    client.reload_model = AsyncMock(return_value=True)
     return client
 
 
@@ -381,60 +383,48 @@ class TestMergeCandidates:
 
 
 # ---------------------------------------------------------------------------
-# Pass 8: LLM judgment
+# Pass 8: Neighbor expansion
 # ---------------------------------------------------------------------------
-class TestJudgeFiles:
-    @pytest.mark.asyncio
-    async def test_returns_selected_files(self, tmp_path, mock_client):
-        (tmp_path / "engine.py").write_text("class Engine:\n    pass")
-        (tmp_path / "utils.py").write_text("def helper(): pass")
-        mock_client.generate = AsyncMock(return_value=(
-            '```json\n{"engine.py": "Main engine class"}\n```'
-        ))
-        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        result = await gatherer._judge_files(
-            mock_client, "test-model", ["engine.py", "utils.py"], "build engine",
-        )
-        assert "engine.py" in result
-        assert result["engine.py"] == "Main engine class"
+class TestNeighborExpand:
+    def test_adds_same_directory_files(self):
+        selected = ["pkg/providers/base.py"]
+        all_paths = [
+            "pkg/providers/base.py",
+            "pkg/providers/openai.py",
+            "pkg/providers/anthropic.py",
+            "pkg/core/engine.py",
+        ]
+        result = AgentContextGatherer._neighbor_expand(selected, all_paths)
+        assert "pkg/providers/base.py" in result
+        assert "pkg/providers/openai.py" in result
+        assert "pkg/providers/anthropic.py" in result
+        assert "pkg/core/engine.py" not in result
 
-    @pytest.mark.asyncio
-    async def test_llm_failure_returns_empty(self, tmp_path, mock_client):
-        (tmp_path / "a.py").write_text("x = 1")
-        mock_client.generate = AsyncMock(side_effect=RuntimeError("boom"))
-        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        result = await gatherer._judge_files(
-            mock_client, "test-model", ["a.py"], "task",
-        )
-        assert result == {}
+    def test_no_duplicates(self):
+        selected = ["pkg/a.py", "pkg/b.py"]
+        all_paths = ["pkg/a.py", "pkg/b.py", "pkg/c.py"]
+        result = AgentContextGatherer._neighbor_expand(selected, all_paths)
+        assert result.count("pkg/a.py") == 1
+        assert result.count("pkg/b.py") == 1
 
-    @pytest.mark.asyncio
-    async def test_invalid_json_returns_empty(self, tmp_path, mock_client):
-        (tmp_path / "a.py").write_text("x = 1")
-        mock_client.generate = AsyncMock(return_value="not json at all")
-        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        result = await gatherer._judge_files(
-            mock_client, "test-model", ["a.py"], "task",
-        )
-        assert result == {}
+    def test_root_files_not_expanded(self):
+        """Files at root (no parent dir) don't trigger expansion."""
+        selected = ["main.py"]
+        all_paths = ["main.py", "setup.py", "pkg/core.py"]
+        result = AgentContextGatherer._neighbor_expand(selected, all_paths)
+        assert result == ["main.py"]
 
-    @pytest.mark.asyncio
-    async def test_uses_temperature_zero(self, tmp_path, mock_client):
-        (tmp_path / "a.py").write_text("x = 1")
-        mock_client.generate = AsyncMock(return_value='{"a.py": "reason"}')
-        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        await gatherer._judge_files(
-            mock_client, "test-model", ["a.py"], "task",
-        )
-        assert mock_client.generate.call_args[1]["temperature"] == 0
+    def test_multiple_directories(self):
+        selected = ["pkg/a.py", "lib/x.py"]
+        all_paths = ["pkg/a.py", "pkg/b.py", "lib/x.py", "lib/y.py", "other/z.py"]
+        result = AgentContextGatherer._neighbor_expand(selected, all_paths)
+        assert "pkg/b.py" in result
+        assert "lib/y.py" in result
+        assert "other/z.py" not in result
 
-    @pytest.mark.asyncio
-    async def test_empty_candidates_returns_empty(self, tmp_path, mock_client):
-        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        result = await gatherer._judge_files(
-            mock_client, "test-model", [], "task",
-        )
-        assert result == {}
+    def test_empty_selected(self):
+        result = AgentContextGatherer._neighbor_expand([], ["a.py", "b.py"])
+        assert result == []
 
 
 # ---------------------------------------------------------------------------
@@ -715,28 +705,6 @@ class TestParseExpandResponse:
         assert hyde == ""
 
 
-class TestParseJudgeResponse:
-    def test_parses_json_object(self):
-        result = AgentContextGatherer._parse_judge_response(
-            '{"engine.py": "Main engine", "utils.py": "Helper functions"}'
-        )
-        assert result == {"engine.py": "Main engine", "utils.py": "Helper functions"}
-
-    def test_fenced_json(self):
-        result = AgentContextGatherer._parse_judge_response(
-            '```json\n{"a.py": "reason"}\n```'
-        )
-        assert result == {"a.py": "reason"}
-
-    def test_invalid_json_returns_empty(self):
-        result = AgentContextGatherer._parse_judge_response("not json")
-        assert result == {}
-
-    def test_non_dict_returns_empty(self):
-        result = AgentContextGatherer._parse_judge_response('["a.py"]')
-        assert result == {}
-
-
 class TestReadFileContent:
     def test_reads_existing_file(self, tmp_path):
         (tmp_path / "main.py").write_text("x = 1")
@@ -781,14 +749,12 @@ class TestGatherEndToEnd:
         )
         (tmp_path / "util.py").write_text("def helper(): pass")
 
-        # LLM calls: expand, scan, judge
+        # LLM calls: expand, scan (no judgment)
         mock_client.generate = AsyncMock(side_effect=[
             # expand: terms + HyDE
             "TERMS:\nopenai\nchat\nprovider\n\nHYPOTHETICAL:\n```python\nclass Chat: pass\n```",
             # scan: structural index scan
             '```json\n["main.py"]\n```',
-            # judge: final judgment
-            '```json\n{"main.py": "Contains provider interface"}\n```',
         ])
         gatherer = AgentContextGatherer(
             config=_make_config(), source_dir=str(tmp_path),
@@ -815,7 +781,6 @@ class TestGatherEndToEnd:
         mock_client.generate = AsyncMock(side_effect=[
             "TERMS:\nfoo\n\nHYPOTHETICAL:\n```python\nx=1\n```",
             '["main.py"]',
-            '{"main.py": "reason"}',
         ])
         gatherer = AgentContextGatherer(
             config=_make_config(), source_dir=str(tmp_path),
@@ -830,7 +795,6 @@ class TestGatherEndToEnd:
         mock_client.generate = AsyncMock(side_effect=[
             "TERMS:\nfoo\n\nHYPOTHETICAL:\n```python\nx=1\n```",
             '["main.py"]',
-            '{"main.py": "reason"}',
         ])
         gatherer = AgentContextGatherer(
             config=_make_config(agent_model="custom-model"),
@@ -841,36 +805,19 @@ class TestGatherEndToEnd:
             assert call[1]["model"] == "custom-model"
 
     @pytest.mark.asyncio
-    async def test_judgment_fallback_to_reranked(self, tmp_path, mock_client):
-        """If judgment returns empty, falls back to reranked top files."""
-        (tmp_path / "main.py").write_text("openai provider chat interface")
-        mock_client.generate = AsyncMock(side_effect=[
-            "TERMS:\nopenai\n\nHYPOTHETICAL:\n```python\nx=1\n```",
-            '["main.py"]',
-            "invalid json garbage",  # judgment fails to parse
-        ])
-        gatherer = AgentContextGatherer(
-            config=_make_config(max_summary_files=5),
-            source_dir=str(tmp_path),
-        )
-        result = await gatherer.gather(mock_client, "openai chat")
-        assert result["synthesized"] != ""
-        assert "main.py" in result["agent_files"]["selected"]
-
     @pytest.mark.asyncio
-    async def test_three_llm_calls(self, tmp_path, mock_client):
-        """Pipeline makes exactly 3 LLM calls: expand, scan, judge."""
+    async def test_two_llm_calls(self, tmp_path, mock_client):
+        """Pipeline makes exactly 2 LLM calls: expand and scan."""
         (tmp_path / "a.py").write_text("openai provider chat")
         mock_client.generate = AsyncMock(side_effect=[
             "TERMS:\nopenai\n\nHYPOTHETICAL:\n```python\nx=1\n```",
             '["a.py"]',
-            '{"a.py": "reason"}',
         ])
         gatherer = AgentContextGatherer(
             config=_make_config(), source_dir=str(tmp_path),
         )
         await gatherer.gather(mock_client, "openai provider")
-        assert mock_client.generate.call_count == 3
+        assert mock_client.generate.call_count == 2
 
     @pytest.mark.asyncio
     async def test_total_failure_returns_empty(self, tmp_path, mock_client):
@@ -878,7 +825,7 @@ class TestGatherEndToEnd:
         mock_client.generate = AsyncMock(side_effect=RuntimeError("total fail"))
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
         result = await gatherer.gather(mock_client, "openai chat")
-        # expand fails -> empty query -> BM25 uses original -> judge fails -> fallback
+        # expand fails -> empty query -> BM25 uses original -> pipeline exception
         # or pipeline exception caught -> empty
         assert isinstance(result, dict)
 
@@ -887,12 +834,9 @@ class TestGatherEndToEnd:
         for i in range(5):
             (tmp_path / f"f{i}.py").write_text(f"target keyword relevant {i}")
 
-        # Judge returns all 5
-        judge_response = json.dumps({f"f{i}.py": "reason" for i in range(5)})
         mock_client.generate = AsyncMock(side_effect=[
             "TERMS:\ntarget\nkeyword\n\nHYPOTHETICAL:\n```python\nx=1\n```",
             json.dumps([f"f{i}.py" for i in range(5)]),
-            judge_response,
         ])
         gatherer = AgentContextGatherer(
             config=_make_config(max_summary_files=2),
@@ -908,7 +852,6 @@ class TestGatherEndToEnd:
         mock_client.generate = AsyncMock(side_effect=[
             "TERMS:\nopenai\nchat\n\nHYPOTHETICAL:\n```python\nx=1\n```",
             '["a.py"]',
-            '{"a.py": "reason"}',
         ])
         gatherer = AgentContextGatherer(
             config=_make_config(), source_dir=str(tmp_path),
@@ -933,7 +876,6 @@ class TestProgressCallback:
         mock_client.generate = AsyncMock(side_effect=[
             "TERMS:\nopenai\n\nHYPOTHETICAL:\n```python\nx=1\n```",
             '["main.py"]',
-            '{"main.py": "reason"}',
         ])
         phases = []
 
@@ -948,7 +890,7 @@ class TestProgressCallback:
         assert "expanding_query" in phase_names
         assert "scanning_index" in phase_names
         assert "bm25" in phase_names
-        assert "judging" in phase_names
+        assert "neighbor_expand" in phase_names
         assert "reading" in phase_names
 
     @pytest.mark.asyncio
@@ -957,7 +899,6 @@ class TestProgressCallback:
         mock_client.generate = AsyncMock(side_effect=[
             "TERMS:\nopenai\n\nHYPOTHETICAL:\n```python\nx=1\n```",
             '["main.py"]',
-            '{"main.py": "reason"}',
         ])
         calls = []
 

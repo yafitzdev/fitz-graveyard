@@ -250,6 +250,18 @@ class BackgroundWorker:
                 await self._store.update(job.job_id, progress=0.05, current_phase="health_check")
             else:
                 await self._store.update(job.job_id, current_phase="health_check")
+
+            # For LM Studio: split check into connectivity + model loading
+            # so the GUI shows "Loading model..." during the slow part
+            if isinstance(self._ollama_client, LMStudioClient):
+                if not await self._ollama_client.is_model_loaded():
+                    await self._store.update(
+                        job.job_id, current_phase="loading_model",
+                    )
+                    logger.info(
+                        f"No model loaded — auto-loading {self._ollama_client.model}"
+                    )
+
             healthy = await self._ollama_client.health_check()
             if not healthy:
                 raise ConnectionError(
