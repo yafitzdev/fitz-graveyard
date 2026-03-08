@@ -53,6 +53,11 @@ class OllamaClient:
         self._call_metrics: list[dict] = []
 
     @property
+    def context_size(self) -> int:
+        """Context window size in tokens (Ollama default: 128K)."""
+        return 131072
+
+    @property
     def fast_model(self) -> str:
         """Model name for fast/screening tasks (same as primary for Ollama)."""
         return self.model

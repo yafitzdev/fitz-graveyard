@@ -43,6 +43,7 @@ api-review = [
     "CurrencyConverter>=0.17",
 ]
 lm-studio = ["openai>=1.0.0"]
+retrieval = ["sentence-transformers>=3.0", "einops>=0.7"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23.0",

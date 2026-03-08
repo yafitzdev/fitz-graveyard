@@ -198,6 +198,11 @@ class LlamaCppClient:
     # ------------------------------------------------------------------
 
     @property
+    def context_size(self) -> int:
+        """Active context window size in tokens."""
+        return self._active_context_size or self._fast_model.context_size
+
+    @property
     def fast_model(self) -> str:
         """Model name for fast/screening tasks."""
         return self._fast_model.path
@@ -504,7 +509,7 @@ class LlamaCppClient:
                     resp = await http.get(url)
                     if resp.status_code == 200:
                         return
-                except httpx.ConnectError:
+                except (httpx.ConnectError, httpx.TimeoutException):
                     pass
                 await asyncio.sleep(1.0)
 
@@ -536,6 +541,29 @@ class LlamaCppClient:
                 await asyncio.sleep(3)
 
             await self.start(tier)
+
+    async def _auto_reset_gpu(self) -> None:
+        """Stop llama-server, reset GPU driver, restart.
+
+        WDDM Blackwell consumer GPUs degrade after CUDA context churn.
+        Resetting the display driver (Ctrl+Win+Shift+B) recovers performance.
+        """
+        tier = self._active_tier or "fast"
+        ctx = self._active_context_size
+
+        logger.info("Auto-reset: stopping llama-server for GPU driver reset")
+        await self.stop()
+
+        if self._reset_gpu_driver():
+            # Driver reset takes a few seconds to complete
+            await asyncio.sleep(5)
+            logger.info("Auto-reset: GPU driver reset complete, restarting server")
+        else:
+            logger.warning("Auto-reset: GPU driver reset failed, restarting anyway")
+            await asyncio.sleep(1)
+
+        await self.start(tier, context_size=ctx)
+        self._degradation_warned = False  # allow re-detection after reset
 
     # ------------------------------------------------------------------
     # Interface methods (match OllamaClient / LMStudioClient)
@@ -623,15 +651,21 @@ class LlamaCppClient:
             f"gen ~{gen_tok_s:.1f} tok/s)"
         )
 
-        # Track prefill tok/s baseline and warn on degradation
+        # Track prefill tok/s baseline and auto-reset GPU on degradation
         ctx = self._active_context_size or 0
         if ctx > 0:
-            if not self._degradation_warned and self._baseline.is_degraded(effective_model, ctx, prefill_tok_s, prefill_s):
-                logger.warning(
-                    "GPU degradation detected. Reset drivers with Ctrl+Win+Shift+B"
-                )
+            degraded = not self._degradation_warned and self._baseline.is_degraded(
+                effective_model, ctx, prefill_tok_s, prefill_s,
+            )
+            if degraded:
                 self._degradation_warned = True
-            self._baseline.record(effective_model, ctx, prefill_tok_s, prefill_s)
+                logger.warning(
+                    "GPU degradation detected — auto-resetting GPU driver"
+                )
+                await self._auto_reset_gpu()
+                # Don't record the degraded sample — it would poison the baseline
+            else:
+                self._baseline.record(effective_model, ctx, prefill_tok_s, prefill_s)
 
         return result
 

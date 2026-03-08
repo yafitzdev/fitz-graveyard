@@ -29,6 +29,7 @@ def create_llm_client(
             model=config.lm_studio.model,
             fallback_model=config.lm_studio.fallback_model,
             timeout=config.lm_studio.timeout,
+            context_length=config.lm_studio.context_length,
         )
     if config.provider == "llama_cpp":
         cfg = config.llama_cpp

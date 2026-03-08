@@ -276,33 +276,44 @@ class PlanRenderer:
                 sections.append("")
                 total = agent_files.get("total_screened", 0)
                 bm25 = agent_files.get("bm25_candidates", [])
-                relevant = agent_files.get("relevant", [])
-                import_expanded = agent_files.get("import_expanded", 0)
+                scan_hits = agent_files.get("scan_hits", [])
+                embed = agent_files.get("embedding_candidates", [])
+                reranked = agent_files.get("reranked", [])
                 selected = agent_files.get("selected", [])
+                included = agent_files.get("included", [])
                 sections.append(
                     f"**Screened**: {total} files"
                 )
                 sections.append("")
                 if bm25:
                     sections.append(
-                        f"**BM25 shortlist** ({len(bm25)} candidates):"
+                        f"**BM25** ({len(bm25)} candidates):"
                     )
                     for f in bm25:
                         sections.append(f"- {f}")
                     sections.append("")
-                sections.append(
-                    f"**LLM confirmed** ({len(relevant)} selected):"
-                )
-                for f in relevant:
-                    sections.append(f"- {f}")
-                sections.append("")
-                if import_expanded > 0:
+                if embed:
                     sections.append(
-                        f"**Import expansion**: +{import_expanded} added"
+                        f"**Embedding recall** ({len(embed)} candidates):"
+                    )
+                    for f in embed:
+                        sections.append(f"- {f}")
+                    sections.append("")
+                if scan_hits:
+                    sections.append(
+                        f"**Structural scan** ({len(scan_hits)} hits):"
+                    )
+                    for f in scan_hits:
+                        sections.append(f"- {f}")
+                    sections.append("")
+                if reranked:
+                    sections.append(
+                        f"**Reranked**: {len(reranked)} candidates"
                     )
                     sections.append("")
                 sections.append(
-                    f"**Selected for summary**: {len(selected)} files"
+                    f"**Selected**: {len(selected)} files, "
+                    f"**Included**: {len(included)} files"
                 )
                 sections.append("")
 

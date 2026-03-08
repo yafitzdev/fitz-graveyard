@@ -70,6 +70,14 @@ class AgentConfig(BaseModel):
             "Resolution order: create_plan(source_dir=) parameter > this config value > cwd at runtime."
         ),
     )
+    embedding_model: str = Field(
+        default="nomic-ai/nomic-embed-text-v1.5",
+        description="Sentence-transformers model for semantic file retrieval (CUDA required)",
+    )
+    reranker_model: str = Field(
+        default="cross-encoder/ms-marco-MiniLM-L-12-v2",
+        description="Cross-encoder model for reranking retrieval candidates (CUDA required)",
+    )
 
 
 class OutputConfig(BaseModel):
@@ -140,6 +148,10 @@ class LMStudioConfig(BaseModel):
     )
     timeout: int = Field(
         default=300, description="Request timeout in seconds"
+    )
+    context_length: int = Field(
+        default=65536,
+        description="Context length to use when auto-loading the model via lms CLI",
     )
 
 

@@ -8,7 +8,7 @@ Polls the job queue, processes jobs one at a time, and handles graceful shutdown
 import asyncio
 import logging
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -466,7 +466,7 @@ class BackgroundWorker:
             output_dir = plans_dir
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
         file_name = f"plan_{job.job_id}_{timestamp}.md"
         file_path = output_dir / file_name
 

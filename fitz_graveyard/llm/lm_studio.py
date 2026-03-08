@@ -5,6 +5,8 @@ import asyncio
 import inspect
 import json
 import logging
+import shutil
+import subprocess
 import time
 from typing import TYPE_CHECKING
 
@@ -88,16 +90,8 @@ class LMStudioClient:
         model: str = "local-model",
         fallback_model: str | None = None,
         timeout: int = 300,
+        context_length: int = 32768,
     ):
-        """
-        Initialize LM Studio client.
-
-        Args:
-            base_url:       LM Studio API base URL
-            model:          Primary model name
-            fallback_model: Unused (kept for interface parity with OllamaClient)
-            timeout:        Request timeout in seconds
-        """
         if AsyncOpenAI is None:
             raise ImportError(
                 "openai package required for LM Studio support. "
@@ -108,8 +102,14 @@ class LMStudioClient:
         self.model = model
         self.fallback_model = fallback_model
         self._timeout = timeout
+        self._context_length = context_length
         self._client = AsyncOpenAI(base_url=base_url, api_key="lm-studio", timeout=timeout)
         self._call_metrics: list[dict] = []
+
+    @property
+    def context_size(self) -> int:
+        """Configured context window size in tokens."""
+        return self._context_length
 
     @property
     def fast_model(self) -> str:
@@ -126,22 +126,93 @@ class LMStudioClient:
         """Model name for smart/reasoning tasks (same as primary for LM Studio)."""
         return self.model
 
-    async def ensure_model(self, model_name: str) -> None:
-        """No-op for LM Studio (single model, no tier switching)."""
+    async def ensure_model(
+        self, model_name: str, context_size: int | None = None,
+    ) -> None:
+        """Ensure the requested model is loaded in LM Studio."""
+        if await self._is_model_loaded():
+            return
+        await self._load_model_via_cli()
 
     async def health_check(self) -> bool:
-        """
-        Check LM Studio server health by listing available models.
+        """Check LM Studio is reachable and the configured model is loaded.
 
-        Returns:
-            True if server is reachable, False otherwise.
+        If LM Studio is running but no model is loaded, auto-loads the
+        configured model via the ``lms`` CLI.
         """
         try:
             async with httpx.AsyncClient(timeout=5.0) as http:
                 response = await http.get(f"{self.base_url}/models")
-            return response.status_code == 200
+            if response.status_code != 200:
+                return False
         except Exception as e:
             logger.error(f"LM Studio health check failed: {e}")
+            return False
+
+        if await self._is_model_loaded():
+            return True
+
+        logger.info(f"No model loaded in LM Studio, auto-loading {self.model}")
+        return await self._load_model_via_cli()
+
+    async def _is_model_loaded(self) -> bool:
+        """Check if any model is currently loaded (not just available)."""
+        lms = shutil.which("lms")
+        if not lms:
+            return True  # Can't check, assume loaded
+
+        try:
+            result = await asyncio.to_thread(
+                subprocess.run,
+                [lms, "ps"],
+                capture_output=True, text=True, timeout=10,
+                encoding="utf-8", errors="replace",
+            )
+            # lms ps writes to stderr, not stdout
+            output = result.stdout + result.stderr
+            if "No models" in output:
+                return False
+            return True
+        except Exception:
+            return True  # Can't check, assume loaded
+
+    async def _load_model_via_cli(self) -> bool:
+        """Load the configured model via ``lms load``."""
+        lms = shutil.which("lms")
+        if not lms:
+            logger.warning(
+                "lms CLI not found — cannot auto-load model. "
+                "Load it manually in LM Studio."
+            )
+            return False
+
+        logger.info(
+            f"Running: lms load {self.model} -y -c {self._context_length} --parallel 1"
+        )
+        try:
+            result = await asyncio.to_thread(
+                subprocess.run,
+                [
+                    lms, "load", self.model, "-y",
+                    "-c", str(self._context_length),
+                    "--parallel", "1",
+                ],
+                capture_output=True, text=True, timeout=300,
+                encoding="utf-8", errors="replace",
+            )
+            if result.returncode == 0:
+                logger.info(f"Model {self.model} loaded successfully")
+                return True
+            logger.error(
+                f"lms load failed (code {result.returncode}): "
+                f"{result.stderr[:300]}"
+            )
+            return False
+        except subprocess.TimeoutExpired:
+            logger.error("lms load timed out after 300s")
+            return False
+        except Exception as e:
+            logger.error(f"lms load failed: {e}")
             return False
 
     @lm_studio_retry

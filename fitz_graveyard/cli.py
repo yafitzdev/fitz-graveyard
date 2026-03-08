@@ -311,8 +311,14 @@ async def _run_inline(
     description: str,
     pre_gathered_context: str | None = None,
     resume: bool = False,
+    live=None,
+    console=None,
 ) -> None:
-    """Run a job inline with live rich progress display, then print the plan."""
+    """Run a job inline with live rich progress display, then print the plan.
+
+    If ``live`` is provided, uses the existing Live display instead of
+    creating a new one (allows the caller to show the GUI before setup).
+    """
     from rich.live import Live
     from rich.console import Console
 
@@ -334,7 +340,8 @@ async def _run_inline(
         memory_threshold=config.ollama.memory_threshold,
     )
 
-    console = Console(stderr=True)
+    if console is None:
+        console = Console(stderr=True)
     start = time.monotonic()
 
     # Resolve display model name from active provider
@@ -359,63 +366,68 @@ async def _run_inline(
     last_phase = ""
     tick = 0
 
+    owns_live = live is None
+
     try:
-        with Live(
-            _make_live_display(description, 0.0, 0.0, model_name=model_name),
-            console=console,
-            refresh_per_second=4,
-        ) as live:
-            while not job_task.done():
-                job = await store.get(job_id)
-                if job:
-                    elapsed = time.monotonic() - start
-                    progress = job.progress or 0.0
-                    phase = job.current_phase or ""
+        if owns_live:
+            live = Live(
+                _make_live_display(description, 0.0, 0.0, model_name=model_name),
+                console=console,
+                refresh_per_second=4,
+            )
+            live.start()
 
-                    # Track stage transitions for timing
-                    for i, (name, threshold) in enumerate(_DISPLAY_STAGES):
-                        if progress >= threshold and i not in stage_durations:
-                            if i in stage_started:
-                                stage_durations[i] = time.monotonic() - stage_started[i]
-                        elif progress >= prev_thresholds[i] and i not in stage_started and i not in stage_durations:
-                            stage_started[i] = time.monotonic()
-
-                    # Track phase changes for activity log
-                    if phase and phase != last_phase:
-                        desc = _get_phase_description(phase)
-                        if desc:
-                            log_lines.append(f"{time.strftime('%H:%M:%S')} {desc}")
-                        last_phase = phase
-
-                    # Update model name dynamically for llama_cpp
-                    if isinstance(client, LlamaCppClient):
-                        model_name = client.active_model
-
-                    live.update(_make_live_display(
-                        description, progress, elapsed,
-                        current_phase=phase,
-                        stage_durations=stage_durations,
-                        stage_started=stage_started,
-                        log_lines=list(log_lines),
-                        tick=tick,
-                        model_name=model_name,
-                    ))
-                tick += 1
-                await asyncio.sleep(0.3)
-
-            # Final update
+        while not job_task.done():
             job = await store.get(job_id)
             if job:
                 elapsed = time.monotonic() - start
+                progress = job.progress or 0.0
+                phase = job.current_phase or ""
+
+                # Track stage transitions for timing
+                for i, (name, threshold) in enumerate(_DISPLAY_STAGES):
+                    if progress >= threshold and i not in stage_durations:
+                        if i in stage_started:
+                            stage_durations[i] = time.monotonic() - stage_started[i]
+                    elif progress >= prev_thresholds[i] and i not in stage_started and i not in stage_durations:
+                        stage_started[i] = time.monotonic()
+
+                # Track phase changes for activity log
+                if phase and phase != last_phase:
+                    desc = _get_phase_description(phase)
+                    if desc:
+                        log_lines.append(f"{time.strftime('%H:%M:%S')} {desc}")
+                    last_phase = phase
+
+                # Update model name dynamically for llama_cpp
+                if isinstance(client, LlamaCppClient):
+                    model_name = client.active_model
+
                 live.update(_make_live_display(
-                    description, job.progress or 0.0, elapsed,
-                    current_phase=job.current_phase or "",
+                    description, progress, elapsed,
+                    current_phase=phase,
                     stage_durations=stage_durations,
                     stage_started=stage_started,
                     log_lines=list(log_lines),
                     tick=tick,
                     model_name=model_name,
                 ))
+            tick += 1
+            await asyncio.sleep(0.3)
+
+        # Final update
+        job = await store.get(job_id)
+        if job:
+            elapsed = time.monotonic() - start
+            live.update(_make_live_display(
+                description, job.progress or 0.0, elapsed,
+                current_phase=job.current_phase or "",
+                stage_durations=stage_durations,
+                stage_started=stage_started,
+                log_lines=list(log_lines),
+                tick=tick,
+                model_name=model_name,
+            ))
 
     except (KeyboardInterrupt, asyncio.CancelledError):
         job_task.cancel()
@@ -425,8 +437,12 @@ async def _run_inline(
             pass
         if isinstance(client, LlamaCppClient):
             await client.stop()
+        if owns_live:
+            live.stop()
         raise KeyboardInterrupt
     finally:
+        if owns_live:
+            live.stop()
         if isinstance(client, LlamaCppClient):
             await client.stop()
 
