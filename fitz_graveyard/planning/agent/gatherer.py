@@ -171,10 +171,7 @@ class AgentContextGatherer:
             # Pass 4: BM25 screen with expanded query (pure Python)
             await self._report(progress_callback, 0.068, "agent:bm25")
             t0 = time.monotonic()
-            bm25_top_k = min(
-                self._config.max_summary_files * 8,
-                len(file_paths),
-            )
+            bm25_top_k = min(200, len(file_paths))
             bm25_candidates, bm25_scores = self._bm25_screen(
                 file_paths, expanded_query, bm25_top_k,
             )
@@ -198,7 +195,7 @@ class AgentContextGatherer:
                 t0 = time.monotonic()
                 embedding_candidates = self._embedding_recall(
                     file_paths, job_description, hyde_code,
-                    top_k=self._config.max_summary_files * 4,
+                    top_k=100,
                 )
                 logger.info(
                     f"AgentContextGatherer: embedding recall found "
@@ -233,7 +230,7 @@ class AgentContextGatherer:
             # Pass 6: Cross-encoder rerank (if sentence-transformers available)
             reranked = merged
             try:
-                if len(merged) > self._config.max_summary_files:
+                if len(merged) > _RERANK_TOP_K:
                     await self._report(
                         progress_callback, 0.073, "agent:reranking",
                     )
@@ -306,12 +303,6 @@ class AgentContextGatherer:
 
             # Prioritize and cap
             selected = self._prioritize_for_summary(neighbor_expanded)
-            if len(selected) > self._config.max_summary_files:
-                logger.info(
-                    f"AgentContextGatherer: capping {len(selected)} to "
-                    f"{self._config.max_summary_files}"
-                )
-                selected = selected[:self._config.max_summary_files]
 
             # Pass 9: Read selected files (pure Python)
             await self._report(progress_callback, 0.080, "agent:reading")
@@ -858,8 +849,8 @@ class AgentContextGatherer:
 
         If the pipeline picks ``providers/base.py``, its siblings
         (``openai.py``, ``ollama.py``, etc.) are inserted right after it.
-        This ensures siblings survive the downstream ``max_summary_files``
-        cap instead of being appended at the end and truncated.
+        This keeps siblings grouped with their trigger file in priority
+        order instead of being appended at the end.
         """
         selected_set = set(selected)
 

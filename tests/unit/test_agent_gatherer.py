@@ -17,7 +17,7 @@ from fitz_graveyard.planning.agent.indexer import build_import_graph
 
 
 def _make_config(**kwargs):
-    defaults = dict(enabled=True, max_summary_files=15, max_file_bytes=50_000)
+    defaults = dict(enabled=True, max_file_bytes=50_000)
     defaults.update(kwargs)
     return AgentConfig(**defaults)
 
@@ -825,23 +825,6 @@ class TestGatherEndToEnd:
         # expand fails -> empty query -> BM25 uses original -> pipeline exception
         # or pipeline exception caught -> empty
         assert isinstance(result, dict)
-
-    @pytest.mark.asyncio
-    async def test_caps_at_max_summary_files(self, tmp_path, mock_client):
-        for i in range(5):
-            (tmp_path / f"f{i}.py").write_text(f"target keyword relevant {i}")
-
-        mock_client.generate = AsyncMock(side_effect=[
-            "TERMS:\ntarget\nkeyword\n\nHYPOTHETICAL:\n```python\nx=1\n```",
-            json.dumps([f"f{i}.py" for i in range(5)]),
-        ])
-        gatherer = AgentContextGatherer(
-            config=_make_config(max_summary_files=2),
-            source_dir=str(tmp_path),
-        )
-        result = await gatherer.gather(mock_client, "target keyword relevant")
-        agent_files = result["agent_files"]
-        assert len(agent_files["selected"]) == 2
 
     @pytest.mark.asyncio
     async def test_metadata_has_all_signals(self, tmp_path, mock_client):
