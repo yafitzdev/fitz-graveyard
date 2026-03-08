@@ -1,7 +1,7 @@
 # fitz_graveyard/planning/schemas/design.py
 """Schema for design decisions stage output."""
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 
 class ADR(BaseModel):
@@ -117,6 +117,14 @@ class DesignOutput(BaseModel):
         default_factory=dict,
         description="Key entities and their primary attributes",
     )
+
+    @field_validator("data_model", mode="before")
+    @classmethod
+    def _coerce_data_model_values(cls, v: dict) -> dict:
+        """LLMs sometimes produce type annotations as strings instead of field lists."""
+        if not isinstance(v, dict):
+            return v
+        return {k: [val] if isinstance(val, str) else val for k, val in v.items()}
 
     integration_points: list[str] = Field(
         default_factory=list,

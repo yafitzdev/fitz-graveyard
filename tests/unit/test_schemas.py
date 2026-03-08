@@ -217,6 +217,19 @@ class TestDesignOutput:
         assert len(design.components) == 1
         assert "Task" in design.data_model
 
+    def test_data_model_string_values_coerced_to_lists(self):
+        """LLMs sometimes produce type annotations as strings instead of field lists."""
+        design = DesignOutput(
+            data_model={
+                "Message": "list[dict[str, Any]]",
+                "DetectionCategory": "str",
+                "Task": ["id: str", "title: str"],
+            }
+        )
+        assert design.data_model["Message"] == ["list[dict[str, Any]]"]
+        assert design.data_model["DetectionCategory"] == ["str"]
+        assert design.data_model["Task"] == ["id: str", "title: str"]
+
 
 class TestRoadmapOutput:
     """Tests for RoadmapOutput schema."""
