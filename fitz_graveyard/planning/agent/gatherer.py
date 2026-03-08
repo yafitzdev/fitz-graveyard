@@ -771,13 +771,14 @@ class AgentContextGatherer:
         file_paths: list[str],
         forward_map: dict[str, set[str]],
     ) -> list[str]:
-        """Recursive import expansion (BFS, depth 2, both directions).
+        """Forward-only import expansion, depth 1.
 
-        Traces forward imports ("file A imports B") and reverse imports
-        ("B is imported by A") from each relevant file. This catches
-        architecturally central files (e.g. base.py, protocols) that
-        are imported by relevant files but contain no task keywords,
-        AND files that depend on relevant files.
+        Traces forward imports ("file A imports B") from each relevant file.
+        This catches dependencies (e.g. base.py, protocols) that relevant
+        files import but that contain no task keywords.
+
+        Reverse imports ("B is imported by A") are excluded — hub files
+        like engine.py are imported by half the codebase, causing explosion.
 
         Args:
             relevant: Paths the pipeline marked as relevant.
@@ -785,39 +786,22 @@ class AgentContextGatherer:
             forward_map: Pre-computed {file: {imported_files}} from build_import_graph.
 
         Returns:
-            Merged list: relevant + newly discovered imports.
+            Merged list: relevant + newly discovered forward imports.
         """
-        # Build reverse map: {file -> set of files that import it}
-        reverse_map: dict[str, set[str]] = {}
-        for src, deps in forward_map.items():
-            for dep in deps:
-                reverse_map.setdefault(dep, set()).add(src)
-
-        # BFS both directions, depth 2
         relevant_set = set(relevant)
-        frontier = set(relevant)
-        for depth in range(2):
-            next_frontier: set[str] = set()
-            for rel_path in frontier:
-                # Forward: files this file imports
-                for dep in forward_map.get(rel_path, set()):
-                    if dep not in relevant_set:
-                        relevant_set.add(dep)
-                        next_frontier.add(dep)
-                # Reverse: files that import this file
-                for importer in reverse_map.get(rel_path, set()):
-                    if importer not in relevant_set:
-                        relevant_set.add(importer)
-                        next_frontier.add(importer)
-            frontier = next_frontier
-            if not frontier:
-                break
+        added: list[str] = []
+        for rel_path in relevant:
+            for dep in forward_map.get(rel_path, set()):
+                if dep not in relevant_set:
+                    relevant_set.add(dep)
+                    added.append(dep)
+
+        if added:
             logger.info(
-                f"AgentContextGatherer: import expand depth {depth + 1} "
-                f"added {len(frontier)} files"
+                f"AgentContextGatherer: import expand added {len(added)} files"
             )
 
-        return list(relevant) + sorted(relevant_set - set(relevant))
+        return list(relevant) + sorted(added)
 
     @staticmethod
     def _import_reachable(

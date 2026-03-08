@@ -570,8 +570,8 @@ class TestImportExpand:
         result = gatherer._import_expand(["a.py"], paths, self._graph(tmp_path, paths))
         assert result == ["a.py"]
 
-    def test_depth_two_forward(self, tmp_path):
-        """Depth 2 BFS catches transitive imports (a->b->c)."""
+    def test_forward_only_depth_one(self, tmp_path):
+        """Forward-only depth 1: a imports b, but b's transitive import c is not reached."""
         (tmp_path / "a.py").write_text("from b import x")
         (tmp_path / "b.py").write_text("from c import y\nx = 1")
         (tmp_path / "c.py").write_text("y = 2")
@@ -579,33 +579,19 @@ class TestImportExpand:
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
         result = gatherer._import_expand(["a.py"], paths, self._graph(tmp_path, paths))
         assert "a.py" in result
-        assert "b.py" in result
-        assert "c.py" in result  # depth 2 catches this
+        assert "b.py" in result  # direct forward import
+        assert "c.py" not in result  # transitive, not depth 1
 
-    def test_depth_three_not_reached(self, tmp_path):
-        """Depth 2 BFS stops — d.py at depth 3 is not reached."""
-        (tmp_path / "a.py").write_text("from b import x")
-        (tmp_path / "b.py").write_text("from c import y\nx = 1")
-        (tmp_path / "c.py").write_text("from d import z\ny = 2")
-        (tmp_path / "d.py").write_text("z = 3")
-        paths = ["a.py", "b.py", "c.py", "d.py"]
-        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        result = gatherer._import_expand(["a.py"], paths, self._graph(tmp_path, paths))
-        assert "a.py" in result
-        assert "b.py" in result
-        assert "c.py" in result
-        assert "d.py" not in result  # depth 3, beyond BFS limit
-
-    def test_reverse_imports(self, tmp_path):
-        """Reverse direction: files that import a relevant file are discovered."""
+    def test_no_reverse_imports(self, tmp_path):
+        """Reverse imports are excluded to prevent hub-file explosion."""
         (tmp_path / "base.py").write_text("class Base: pass")
         (tmp_path / "child.py").write_text("from base import Base")
         paths = ["base.py", "child.py"]
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        # base.py is relevant; child.py imports it -> discovered via reverse
+        # base.py is relevant; child.py imports it but reverse is excluded
         result = gatherer._import_expand(["base.py"], paths, self._graph(tmp_path, paths))
         assert "base.py" in result
-        assert "child.py" in result
+        assert "child.py" not in result  # reverse import, excluded
 
 
 # ---------------------------------------------------------------------------
