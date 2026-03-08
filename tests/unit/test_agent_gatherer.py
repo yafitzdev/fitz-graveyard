@@ -426,6 +426,33 @@ class TestNeighborExpand:
         result = AgentContextGatherer._neighbor_expand([], ["a.py", "b.py"])
         assert result == []
 
+    def test_siblings_inserted_after_trigger(self):
+        """Siblings appear right after the selected file, not at the end."""
+        selected = ["core/engine.py", "llm/providers/base.py", "api/server.py"]
+        all_paths = [
+            "core/engine.py", "core/utils.py",
+            "llm/providers/base.py", "llm/providers/openai.py", "llm/providers/ollama.py",
+            "api/server.py", "api/routes.py",
+        ]
+        result = AgentContextGatherer._neighbor_expand(selected, all_paths)
+        # providers siblings should appear right after base.py, not at end
+        base_idx = result.index("llm/providers/base.py")
+        openai_idx = result.index("llm/providers/openai.py")
+        ollama_idx = result.index("llm/providers/ollama.py")
+        server_idx = result.index("api/server.py")
+        assert openai_idx == base_idx + 1 or ollama_idx == base_idx + 1
+        assert openai_idx < server_idx
+        assert ollama_idx < server_idx
+
+    def test_siblings_not_duplicated_across_dirs(self):
+        """If two selected files share a directory, siblings only appear once."""
+        selected = ["pkg/a.py", "pkg/b.py"]
+        all_paths = ["pkg/a.py", "pkg/b.py", "pkg/c.py"]
+        result = AgentContextGatherer._neighbor_expand(selected, all_paths)
+        assert result.count("pkg/c.py") == 1
+        # c.py should appear right after a.py (first file in that dir)
+        assert result.index("pkg/c.py") == result.index("pkg/a.py") + 1
+
 
 # ---------------------------------------------------------------------------
 # Pass 9: _read_selected_files

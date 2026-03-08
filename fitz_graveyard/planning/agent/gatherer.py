@@ -854,29 +854,36 @@ class AgentContextGatherer:
     def _neighbor_expand(
         selected: list[str], all_paths: list[str],
     ) -> list[str]:
-        """Add files from the same directories as selected files.
+        """Add sibling files immediately after the selected file that shares their directory.
 
-        If the structural scan or reranker picks one file from a directory,
-        the other files in that directory likely implement the same interface
-        or pattern and are worth including. The final cap + budget truncation
-        in ``_read_raw_source`` ensures we don't include too many.
+        If the pipeline picks ``providers/base.py``, its siblings
+        (``openai.py``, ``ollama.py``, etc.) are inserted right after it.
+        This ensures siblings survive the downstream ``max_summary_files``
+        cap instead of being appended at the end and truncated.
         """
         selected_set = set(selected)
-        dirs: set[str] = set()
-        for path in selected:
-            parent = str(PurePosixPath(path).parent)
-            if parent != ".":
-                dirs.add(parent)
 
-        neighbors: list[str] = []
+        # Group all_paths by directory for fast lookup
+        dir_files: dict[str, list[str]] = {}
         for path in all_paths:
             if path in selected_set:
                 continue
             parent = str(PurePosixPath(path).parent)
-            if parent in dirs:
-                neighbors.append(path)
+            if parent != ".":
+                dir_files.setdefault(parent, []).append(path)
 
-        return selected + neighbors
+        # Insert siblings right after the first selected file in each dir
+        result: list[str] = []
+        expanded_dirs: set[str] = set()
+        for path in selected:
+            result.append(path)
+            parent = str(PurePosixPath(path).parent)
+            if parent != "." and parent not in expanded_dirs:
+                expanded_dirs.add(parent)
+                for sibling in dir_files.get(parent, []):
+                    result.append(sibling)
+
+        return result
 
     # ------------------------------------------------------------------
     # Pass 9: Read raw source
