@@ -198,7 +198,7 @@ def _get_phase_description(phase: str | None) -> str:
         return f"Extracting {group_label}..."
     # Stage name without sub-step
     if phase in ("context", "architecture_design", "roadmap_risk"):
-        return _PHASE_DESCRIPTIONS.get(f"{phase}:generating", f"Working on {phase}...")
+        return _PHASE_DESCRIPTIONS.get(f"{phase}:reasoning", f"Working on {phase}...")
     return phase
 
 
