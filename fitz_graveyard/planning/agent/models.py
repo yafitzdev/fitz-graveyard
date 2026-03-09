@@ -55,8 +55,9 @@ def _check_system_memory() -> None:
 def _pick_device() -> str:
     """Choose device for embedding/reranking models.
 
-    Caller is responsible for unloading the LLM model first so the
-    GPU is free. Returns ``"cuda"`` if available, ``"cpu"`` otherwise.
+    Returns ``"cuda"`` if available, ``"cpu"`` otherwise.
+    Embedding + reranking models are small (~360MB) and can coexist
+    with the LLM on GPUs with sufficient VRAM headroom.
     """
     try:
         import torch

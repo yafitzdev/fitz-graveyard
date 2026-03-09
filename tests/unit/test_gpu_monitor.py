@@ -9,6 +9,27 @@ import pytest
 from fitz_graveyard.llm.gpu_monitor import GPUTemperatureGuard
 
 
+class TestGetFreeVram:
+    """Tests for nvidia-smi free VRAM query."""
+
+    def test_returns_int_on_success(self):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = "28456\n"
+            assert GPUTemperatureGuard.get_free_vram_mb() == 28456
+
+    def test_returns_none_when_no_nvidia_smi(self):
+        with patch("shutil.which", return_value=None):
+            assert GPUTemperatureGuard.get_free_vram_mb() is None
+
+    def test_returns_none_on_bad_returncode(self):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 1
+            mock_run.return_value.stdout = ""
+            with patch("shutil.which", return_value="/usr/bin/nvidia-smi"):
+                assert GPUTemperatureGuard.get_free_vram_mb() is None
+
+
 class TestGetGpuTemp:
     """Tests for nvidia-smi temperature query."""
 

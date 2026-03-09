@@ -42,6 +42,33 @@ class GPUTemperatureGuard:
     # ------------------------------------------------------------------
 
     @staticmethod
+    def get_free_vram_mb() -> int | None:
+        """Query free GPU VRAM via nvidia-smi.
+
+        Returns:
+            Free VRAM in MB, or None if nvidia-smi is unavailable.
+        """
+        smi = shutil.which("nvidia-smi")
+        if not smi:
+            return None
+        try:
+            result = subprocess.run(
+                [
+                    smi,
+                    "--query-gpu=memory.free",
+                    "--format=csv,noheader,nounits",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode != 0:
+                return None
+            return int(result.stdout.strip().splitlines()[0])
+        except (subprocess.TimeoutExpired, ValueError, IndexError, OSError):
+            return None
+
+    @staticmethod
     def get_gpu_temp() -> int | None:
         """Query GPU temperature via nvidia-smi.
 

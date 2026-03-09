@@ -492,6 +492,12 @@ class BackgroundWorker:
             file_path=str(file_path),
         )
 
+        # Step 8: Eject model from LM Studio to free VRAM
+        unload = getattr(self._ollama_client, "unload_model", None)
+        if unload is not None:
+            logger.info("Pipeline complete — ejecting model to free VRAM")
+            await unload()
+
         logger.info(f"Job {job.job_id} completed: plan written to {file_path}")
 
     async def process_job_direct(

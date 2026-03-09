@@ -83,6 +83,11 @@ _RERANK_TOP_K = 20
 # Neighbor expansion: screen siblings via LLM if a directory adds more than this many
 _NEIGHBOR_SCREEN_THRESHOLD = 10
 
+# VRAM headroom (MB) required to keep LLM loaded during embedding/reranking.
+# Embedding (~275MB) + reranker (~85MB) + working memory ≈ 2GB total.
+# 6GB threshold gives comfortable margin for CUDA context overhead.
+_VRAM_HEADROOM_MB = 6_000
+
 
 
 class AgentContextGatherer:
@@ -184,12 +189,31 @@ class AgentContextGatherer:
                 f"({time.monotonic() - t0:.1f}s)"
             )
 
-            # Unload LLM to free VRAM + RAM for embedding/reranking
+            # VRAM router: if >= 6GB free, keep LLM loaded during
+            # embedding/reranking (~360MB). Otherwise unload first.
             llm_unloaded = False
             unload = getattr(client, "unload_model", None)
             if unload is not None:
-                await self._report(progress_callback, 0.069, "agent:unloading_llm")
-                llm_unloaded = await unload()
+                from fitz_graveyard.llm.gpu_monitor import GPUTemperatureGuard
+                free_mb = GPUTemperatureGuard.get_free_vram_mb()
+                if free_mb is not None and free_mb >= _VRAM_HEADROOM_MB:
+                    logger.info(
+                        f"AgentContextGatherer: {free_mb} MB VRAM free "
+                        f"(>= {_VRAM_HEADROOM_MB} MB), keeping LLM loaded"
+                    )
+                else:
+                    reason = (
+                        f"{free_mb} MB free" if free_mb is not None
+                        else "VRAM unknown"
+                    )
+                    logger.info(
+                        f"AgentContextGatherer: {reason} "
+                        f"(< {_VRAM_HEADROOM_MB} MB), unloading LLM"
+                    )
+                    await self._report(
+                        progress_callback, 0.069, "agent:unloading_llm",
+                    )
+                    llm_unloaded = await unload()
 
             # Pass 5: Embedding recall (if sentence-transformers available)
             embedding_candidates: list[str] = []
@@ -261,7 +285,7 @@ class AgentContextGatherer:
                     exc_info=True,
                 )
 
-            # Reload LLM for planning stages
+            # Reload LLM if it was unloaded
             if llm_unloaded:
                 await self._report(progress_callback, 0.075, "agent:reloading_llm")
                 reload = getattr(client, "reload_model", None)
