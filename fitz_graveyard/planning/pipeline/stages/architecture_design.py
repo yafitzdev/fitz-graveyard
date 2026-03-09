@@ -127,6 +127,10 @@ class ArchitectureDesignStage(PipelineStage):
     Returns split output: {"architecture": {...}, "design": {...}}.
     """
 
+    # Budget for codebase context in the reasoning prompt (~50K tokens).
+    # Leaves room for template text, response generation, and tool-use overhead.
+    _REASONING_KRAG_BUDGET_CHARS = 200_000
+
     @property
     def name(self) -> str:
         return "architecture_design"
@@ -135,7 +139,9 @@ class ArchitectureDesignStage(PipelineStage):
     def progress_range(self) -> tuple[float, float]:
         return (0.25, 0.65)
 
-    def build_prompt(self, job_description: str, prior_outputs: dict[str, Any], *, findings: str = "") -> list[dict]:
+    def build_prompt(
+        self, job_description: str, prior_outputs: dict[str, Any], *, findings: str = "",
+    ) -> list[dict]:
         prompt_template = load_prompt("architecture_design")
 
         context_str = job_description
@@ -179,16 +185,38 @@ class ArchitectureDesignStage(PipelineStage):
                     parts.append(f"Out of scope: {', '.join(out_of_scope)}")
             binding = "\n".join(parts) if parts else "No specific constraints from context stage."
 
-        # Use raw summaries for reasoning prompt — more detail for accurate architecture
-        krag_context = self._get_raw_summaries(prior_outputs)
+        # Adaptive context delivery: maximize signal to the reasoning LLM.
+        #
+        # Full signal:    findings + raw_summaries (pre-digested facts + full source code)
+        # Degraded signal: findings + gathered_context (pre-digested facts + AST structural overview)
+        #
+        # raw_summaries already contains the structural overview, so gathered_context
+        # is redundant when raw_summaries fits. We degrade only when the combined
+        # context exceeds the budget (large codebases with many retrieved files).
+        raw_summaries = self._get_raw_summaries(prior_outputs)
+        gathered_context = self._get_gathered_context(prior_outputs)
+
+        full_krag = (findings + "\n\n" + raw_summaries) if findings else raw_summaries
+        if len(full_krag) <= self._REASONING_KRAG_BUDGET_CHARS:
+            krag_context = full_krag
+            logger.info(
+                f"Stage '{self.name}': full signal delivery ({len(full_krag)} chars: "
+                f"findings={len(findings)}, raw_summaries={len(raw_summaries)})"
+            )
+        else:
+            krag_context = (findings + "\n\n" + gathered_context) if findings else gathered_context
+            logger.info(
+                f"Stage '{self.name}': degraded signal delivery ({len(krag_context)} chars: "
+                f"findings={len(findings)}, gathered_context={len(gathered_context)}). "
+                f"Full would be {len(full_krag)} chars"
+            )
+
         impl_check = self._get_implementation_check(prior_outputs)
         prompt = prompt_template.format(
             context=context_str.strip(),
             krag_context=krag_context,
             binding_constraints=binding,
         )
-        if findings:
-            prompt = f"{findings}\n\n{prompt}"
         if impl_check:
             prompt = f"{impl_check}\n\n{prompt}"
         return self._make_messages(prompt)
@@ -239,10 +267,12 @@ class ArchitectureDesignStage(PipelineStage):
 
     async def execute(self, client: Any, job_description: str, prior_outputs: dict[str, Any]) -> StageResult:
         try:
-            # 1. Focused investigations (parallel)
+            # 1. Focused investigations (parallel) — pre-digest the source code
             findings = await self._investigate(client, job_description, prior_outputs)
 
-            # 2. Reasoning pass (with investigation findings + file access tool)
+            # 2. Reasoning pass — adaptive context delivers maximum signal that fits.
+            #    Full signal: findings + raw_summaries (pre-digested + full source).
+            #    Degrades to findings + gathered_context for large codebases.
             messages = self.build_prompt(job_description, prior_outputs, findings=findings)
             await self._report_substep("reasoning")
             t0 = time.monotonic()
@@ -252,7 +282,10 @@ class ArchitectureDesignStage(PipelineStage):
             t1 = time.monotonic()
             logger.info(f"Stage '{self.name}': reasoning took {t1 - t0:.1f}s ({len(reasoning)} chars)")
 
-            # 3. Self-critique pass
+            # 3. Self-critique pass — uses compact structural overview (AST-extracted).
+            #    Findings are in the reasoning prompt (step 2), NOT repeated here.
+            #    Including findings in critique makes it over-aggressive, treating
+            #    new proposals as "hallucinations" because they don't exist yet.
             krag_context = self._get_gathered_context(prior_outputs)
             reasoning = await self._self_critique(
                 client, reasoning, job_description, krag_context=krag_context,
@@ -263,13 +296,13 @@ class ArchitectureDesignStage(PipelineStage):
                 client, reasoning, job_description, krag_context=krag_context,
             )
 
-            # 5. Per-field-group extraction
-            # Selective context: only groups that need codebase evidence get it
+            # 5. Per-field-group extraction — compact structural overview for grounding
             _CONTEXT_GROUPS = {"approaches", "adrs", "artifacts", "components", "integrations"}
+            extract_context = self._get_gathered_context(prior_outputs)
 
             merged: dict[str, Any] = {}
             for group in _FIELD_GROUPS:
-                extra = krag_context if group["label"] in _CONTEXT_GROUPS else ""
+                extra = extract_context if group["label"] in _CONTEXT_GROUPS else ""
                 partial = await self._extract_field_group(
                     client,
                     reasoning,

@@ -371,7 +371,9 @@ class PipelineStage(ABC):
             },
         ]
         t2 = time.monotonic()
-        json_output = await client.generate(messages=extract_messages)
+        json_output = await client.generate(
+            messages=extract_messages, max_tokens=4096,
+        )
         t3 = time.monotonic()
         logger.info(f"Stage '{self.name}': two-pass formatting took {t3 - t2:.1f}s")
         return reasoning, json_output
@@ -483,7 +485,9 @@ class PipelineStage(ABC):
         ]
         try:
             t0 = time.monotonic()
-            raw = await client.generate(messages=extract_messages)
+            raw = await client.generate(
+                messages=extract_messages, max_tokens=4096,
+            )
             t1 = time.monotonic()
             logger.info(
                 f"Stage '{self.name}': extracted '{group_label}' ({t1 - t0:.1f}s, {len(raw)} chars)"
@@ -728,7 +732,8 @@ class PipelineStage(ABC):
         )
         t1 = time.monotonic()
 
-        # Format findings
+        # Format findings. Each investigation answer is bounded by max_tokens=4096,
+        # so total size is naturally limited by question count (max 7).
         findings: list[str] = []
         for r in results:
             if isinstance(r, Exception):
@@ -741,9 +746,10 @@ class PipelineStage(ABC):
         if not findings:
             return ""
 
+        total_chars = sum(len(f) for f in findings)
         logger.info(
             f"Stage '{self.name}': {len(findings)}/{len(questions)} investigations "
-            f"completed in {t1 - t0:.1f}s"
+            f"completed in {t1 - t0:.1f}s ({total_chars} chars)"
         )
         return (
             "--- INVESTIGATION FINDINGS (verified against source code) ---\n\n"
@@ -772,7 +778,9 @@ class PipelineStage(ABC):
             },
         ]
         try:
-            return await client.generate(messages=messages, temperature=0)
+            return await client.generate(
+                messages=messages, temperature=0, max_tokens=4096,
+            )
         except Exception as e:
             logger.warning(f"Stage '{self.name}': _ask_one failed: {e}")
             return ""
