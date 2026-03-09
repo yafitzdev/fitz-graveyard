@@ -3,6 +3,7 @@
 
 from .client import OllamaClient
 from .factory import create_llm_client
+from .gpu_monitor import GPUTemperatureGuard
 from .llama_cpp import LlamaCppClient
 from .lm_studio import LMStudioClient
 from .memory import MemoryMonitor
@@ -13,6 +14,7 @@ __all__ = [
     "OllamaClient",
     "LMStudioClient",
     "LlamaCppClient",
+    "GPUTemperatureGuard",
     "create_llm_client",
     "MemoryMonitor",
     "ollama_retry",

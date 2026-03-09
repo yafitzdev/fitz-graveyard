@@ -186,6 +186,28 @@ class LlamaCppConfig(BaseModel):
     )
 
 
+class GPUConfig(BaseModel):
+    """GPU thermal protection configuration."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    temp_threshold: int = Field(
+        default=80,
+        ge=0,
+        le=95,
+        description=(
+            "Pause/throttle LLM calls when GPU temperature exceeds this (°C). "
+            "0 to disable GPU temperature monitoring."
+        ),
+    )
+    cooldown_margin: int = Field(
+        default=10,
+        ge=5,
+        le=30,
+        description="Resume after pre-flight pause when temp drops this many °C below threshold",
+    )
+
+
 class FitzPlannerConfig(BaseModel):
     """Root configuration for fitz-graveyard."""
 
@@ -201,3 +223,4 @@ class FitzPlannerConfig(BaseModel):
     output: OutputConfig = Field(default_factory=OutputConfig)
     confidence: ConfidenceConfig = Field(default_factory=ConfidenceConfig)
     anthropic: AnthropicConfig = Field(default_factory=AnthropicConfig)
+    gpu: GPUConfig = Field(default_factory=GPUConfig)

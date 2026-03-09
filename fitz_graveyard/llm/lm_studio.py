@@ -16,6 +16,7 @@ from .retry import lm_studio_retry
 from .types import AgentMessage, AgentToolCall
 
 if TYPE_CHECKING:
+    from .gpu_monitor import GPUTemperatureGuard
     from .memory import MemoryMonitor
 
 try:
@@ -91,6 +92,7 @@ class LMStudioClient:
         fallback_model: str | None = None,
         timeout: int = 300,
         context_length: int = 32768,
+        gpu_guard: "GPUTemperatureGuard | None" = None,
     ):
         if AsyncOpenAI is None:
             raise ImportError(
@@ -103,6 +105,7 @@ class LMStudioClient:
         self.fallback_model = fallback_model
         self._timeout = timeout
         self._context_length = context_length
+        self._gpu_guard = gpu_guard
         self._client = AsyncOpenAI(base_url=base_url, api_key="lm-studio", timeout=timeout)
         self._call_metrics: list[dict] = []
 
@@ -264,6 +267,9 @@ class LMStudioClient:
         Returns:
             Full accumulated response text.
         """
+        if self._gpu_guard:
+            await self._gpu_guard.preflight()
+
         model = model or self.model
         logger.info(f"LMStudio.generate: model={model}, messages={len(messages)}")
 
@@ -284,6 +290,8 @@ class LMStudioClient:
             delta = chunk.choices[0].delta if chunk.choices else None
             if delta and delta.content:
                 accumulated.append(delta.content)
+            if self._gpu_guard:
+                await self._gpu_guard.maybe_throttle()
 
         result = "".join(accumulated)
         elapsed = time.monotonic() - t0
@@ -332,6 +340,9 @@ class LMStudioClient:
         Returns:
             AgentMessage with .tool_calls or .content
         """
+        if self._gpu_guard:
+            await self._gpu_guard.preflight()
+
         model = model or self.model
         openai_tools = [_callable_to_openai_tool(fn) for fn in tools]
         logger.info(

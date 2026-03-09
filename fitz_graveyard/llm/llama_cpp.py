@@ -28,6 +28,7 @@ from .types import AgentMessage, AgentToolCall
 if TYPE_CHECKING:
     from fitz_graveyard.config.schema import LlamaCppModelConfig
 
+    from .gpu_monitor import GPUTemperatureGuard
     from .memory import MemoryMonitor
 
 try:
@@ -164,6 +165,7 @@ class LlamaCppClient:
         port: int = 8012,
         timeout: int = 300,
         startup_timeout: int = 120,
+        gpu_guard: "GPUTemperatureGuard | None" = None,
     ):
         if AsyncOpenAI is None:
             raise ImportError(
@@ -179,6 +181,7 @@ class LlamaCppClient:
         self._port = port
         self._timeout = timeout
         self._startup_timeout = startup_timeout
+        self._gpu_guard = gpu_guard
 
         # Public attributes for interface parity with OllamaClient/LMStudioClient
         self.base_url = f"http://127.0.0.1:{port}/v1"
@@ -599,6 +602,9 @@ class LlamaCppClient:
         Returns:
             Full accumulated response text.
         """
+        if self._gpu_guard:
+            await self._gpu_guard.preflight()
+
         await self._ensure_tier(model)
         await self._ensure_alive()
 
@@ -626,6 +632,8 @@ class LlamaCppClient:
                 if t_first_token is None:
                     t_first_token = time.monotonic()
                 accumulated.append(delta.content)
+            if self._gpu_guard:
+                await self._gpu_guard.maybe_throttle()
 
         result = "".join(accumulated)
         t_end = time.monotonic()
@@ -712,6 +720,9 @@ class LlamaCppClient:
         Returns:
             AgentMessage with .tool_calls or .content.
         """
+        if self._gpu_guard:
+            await self._gpu_guard.preflight()
+
         await self._ensure_tier(model)
         await self._ensure_alive()
 
