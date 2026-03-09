@@ -26,7 +26,7 @@ class GPUTemperatureGuard:
 
     def __init__(
         self,
-        threshold: int = 80,
+        threshold: int = 73,
         cooldown_margin: int = 10,
         check_interval: float = 10.0,
         cooldown_timeout: int = 300,

@@ -255,6 +255,7 @@ class LMStudioClient:
         messages: list[dict],
         model: str | None = None,
         temperature: float | None = None,
+        max_tokens: int = 16384,
     ) -> str:
         """
         Generate a streaming response from LM Studio.
@@ -263,6 +264,7 @@ class LMStudioClient:
             messages: Chat messages in format [{"role": "user", "content": "..."}]
             model:    Model override (defaults to self.model)
             temperature: Sampling temperature (0.0 = deterministic). None = server default.
+            max_tokens:  Hard cap on output tokens. Prevents infinite generation.
 
         Returns:
             Full accumulated response text.
@@ -279,6 +281,7 @@ class LMStudioClient:
             "model": model,
             "messages": messages,
             "stream": True,
+            "max_tokens": max_tokens,
             "extra_body": {
                 "chat_template_kwargs": {"enable_thinking": False},
             },

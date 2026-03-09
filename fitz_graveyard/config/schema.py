@@ -192,7 +192,7 @@ class GPUConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     temp_threshold: int = Field(
-        default=80,
+        default=73,
         ge=0,
         le=95,
         description=(

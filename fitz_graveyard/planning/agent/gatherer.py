@@ -78,7 +78,10 @@ _EMBED_MAX_CHARS = 4000
 _MAX_CANDIDATES_FOR_RERANK = 200
 
 # Cross-encoder reranking output size
-_RERANK_TOP_K = 50
+_RERANK_TOP_K = 20
+
+# Neighbor expansion: screen siblings via LLM if a directory adds more than this many
+_NEIGHBOR_SCREEN_THRESHOLD = 10
 
 
 
@@ -270,26 +273,26 @@ class AgentContextGatherer:
                 self._source_dir, file_paths, self._config.max_file_bytes,
             )
 
-            # Combine scan hits (protected) + reranked candidates
-            selected_set = set(scan_hits)
-            combined = list(scan_hits)
-            for path in reranked:
-                if path not in selected_set:
-                    selected_set.add(path)
-                    combined.append(path)
-            logger.info(
-                f"AgentContextGatherer: combined {len(combined)} candidates "
-                f"(scan={len(scan_hits)}, reranked={len(reranked)})"
-            )
-
-            # Pass 7: Import expansion (pure Python, BFS depth 2)
-            expanded = self._import_expand(combined, file_paths, forward_map)
-            import_added = len(expanded) - len(combined)
+            # Pass 7: Import expansion (scan hits only — reranked files are
+            # noisy keyword matches whose imports cascade into irrelevant code)
+            scan_expanded = self._import_expand(scan_hits, file_paths, forward_map)
+            import_added = len(scan_expanded) - len(scan_hits)
             if import_added > 0:
                 logger.info(
                     f"AgentContextGatherer: import expansion added "
-                    f"{import_added} files"
+                    f"{import_added} files (from {len(scan_hits)} scan hits)"
                 )
+            # Merge: scan hits + their imports first (high-confidence), then reranked
+            expanded_set = set(scan_expanded)
+            expanded = list(scan_expanded)
+            for path in reranked:
+                if path not in expanded_set:
+                    expanded_set.add(path)
+                    expanded.append(path)
+            logger.info(
+                f"AgentContextGatherer: combined {len(expanded)} candidates "
+                f"(scan+imports={len(scan_expanded)}, reranked={len(reranked)})"
+            )
 
             # Pass 8: Neighbor expansion (pure Python, same-directory files)
             # Only expand from high-confidence sources: scan hits (LLM-picked
@@ -311,7 +314,18 @@ class AgentContextGatherer:
                     f"high-confidence triggers)"
                 )
 
-            selected = self._prioritize_for_summary(neighbor_expanded)
+            # Pass 8b: Screen large-directory neighbors (1 LLM call per large dir)
+            screened = await self._screen_neighbors(
+                client, smart, job_description, expanded, neighbor_expanded,
+            )
+            screen_removed = len(neighbor_expanded) - len(screened)
+            if screen_removed > 0:
+                logger.info(
+                    f"AgentContextGatherer: neighbor screening removed "
+                    f"{screen_removed} irrelevant siblings"
+                )
+
+            selected = self._prioritize_for_summary(screened)
 
             # Pass 9: Read selected files (pure Python)
             await self._report(progress_callback, 0.080, "agent:reading")
@@ -905,6 +919,117 @@ class AgentContextGatherer:
                     result.append(sibling)
 
         return result
+
+    async def _screen_neighbors(
+        self,
+        client: Any,
+        model: str,
+        job_description: str,
+        before_neighbors: list[str],
+        after_neighbors: list[str],
+    ) -> list[str]:
+        """LLM-screen neighbor siblings in large directories.
+
+        When a directory contributes more than ``_NEIGHBOR_SCREEN_THRESHOLD``
+        new siblings, asks the LLM which ones are actually relevant.
+        Directories below the threshold are kept as-is.
+
+        Args:
+            client:           LLM client.
+            model:            Model name for the screening call.
+            job_description:  Task description for relevance judgment.
+            before_neighbors: File list before neighbor expansion.
+            after_neighbors:  File list after neighbor expansion.
+
+        Returns:
+            Filtered file list with irrelevant large-directory siblings removed.
+        """
+        before_set = set(before_neighbors)
+        # Group new siblings by directory
+        dir_new: dict[str, list[str]] = {}
+        for path in after_neighbors:
+            if path not in before_set:
+                parent = str(PurePosixPath(path).parent)
+                dir_new.setdefault(parent, []).append(path)
+
+        # Find directories that need screening
+        large_dirs = {
+            d: files for d, files in dir_new.items()
+            if len(files) > _NEIGHBOR_SCREEN_THRESHOLD
+        }
+        if not large_dirs:
+            return after_neighbors
+
+        # Screen each large directory with one LLM call
+        prompt_template = load_prompt("agent_neighbor_screen")
+        remove: set[str] = set()
+
+        for parent_dir, siblings in large_dirs.items():
+            # Find the trigger file (first file in before_neighbors from this dir)
+            trigger = ""
+            for path in before_neighbors:
+                if str(PurePosixPath(path).parent) == parent_dir:
+                    trigger = path
+                    break
+            if not trigger:
+                continue
+
+            # Build sibling list with brief descriptions
+            sibling_lines = []
+            for sib in siblings:
+                desc = self._brief_description(sib)
+                sibling_lines.append(f"- {sib}{desc}")
+
+            prompt = prompt_template.format(
+                job_description=job_description,
+                trigger_file=trigger,
+                sibling_list="\n".join(sibling_lines),
+            )
+
+            try:
+                response = await client.generate(
+                    messages=[{"role": "user", "content": prompt}],
+                    model=model,
+                    temperature=0,
+                )
+                keep = self._parse_file_list(response)
+                if keep is not None:
+                    keep_set = set(keep)
+                    removed = [s for s in siblings if s not in keep_set]
+                    remove.update(removed)
+                    logger.info(
+                        f"AgentContextGatherer: screened {parent_dir}/ — "
+                        f"kept {len(keep_set)}/{len(siblings)} siblings"
+                    )
+                else:
+                    logger.warning(
+                        f"AgentContextGatherer: neighbor screen parse failed "
+                        f"for {parent_dir}/, keeping all {len(siblings)} siblings"
+                    )
+            except Exception:
+                logger.warning(
+                    f"AgentContextGatherer: neighbor screen failed for "
+                    f"{parent_dir}/, keeping all siblings",
+                    exc_info=True,
+                )
+
+        if not remove:
+            return after_neighbors
+        return [p for p in after_neighbors if p not in remove]
+
+    def _brief_description(self, rel_path: str) -> str:
+        """Extract a one-line description from a cached file for screening prompts."""
+        content = self._file_cache.get(rel_path, "")
+        if not content:
+            return ""
+        # Try to find module docstring
+        match = re.search(r'"""(.*?)"""', content[:500], re.DOTALL)
+        if not match:
+            match = re.search(r"'''(.*?)'''", content[:500], re.DOTALL)
+        if match:
+            first_line = match.group(1).strip().splitlines()[0]
+            return f" — {first_line}"
+        return ""
 
     # ------------------------------------------------------------------
     # Pass 9: Read raw source

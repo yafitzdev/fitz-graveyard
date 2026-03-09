@@ -1,0 +1,14 @@
+You are filtering files for relevance to a task.
+
+TASK: {job_description}
+
+The file "{trigger_file}" is relevant to this task. The following files are in the same directory. Which siblings are ALSO relevant?
+
+{sibling_list}
+
+A file is relevant if it would need to be read, modified, or understood to implement the task. When in doubt, include it.
+
+Return ONLY a JSON array of relevant file paths:
+```json
+["path/to/file1.py", "path/to/file2.py"]
+```

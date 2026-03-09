@@ -591,6 +591,7 @@ class LlamaCppClient:
         messages: list[dict],
         model: str | None = None,
         temperature: float | None = None,
+        max_tokens: int = 16384,
     ) -> str:
         """Generate a streaming response. Switches tier if model differs.
 
@@ -598,6 +599,8 @@ class LlamaCppClient:
             messages:    Chat messages in OpenAI format.
             model:       Model name (triggers tier switch if needed).
             temperature: Sampling temperature. None = server default.
+            max_tokens:  Hard cap on output tokens. Prevents infinite generation
+                         from llama-server context-shift loops.
 
         Returns:
             Full accumulated response text.
@@ -621,6 +624,10 @@ class LlamaCppClient:
             "model": effective_model,
             "messages": messages,
             "stream": True,
+            "max_tokens": max_tokens,
+            "extra_body": {
+                "chat_template_kwargs": {"enable_thinking": False},
+            },
         }
         if temperature is not None:
             kwargs["temperature"] = temperature
@@ -738,7 +745,11 @@ class LlamaCppClient:
             messages=messages,
             tools=openai_tools,
             tool_choice="auto",
+            max_tokens=16384,
             stream=False,
+            extra_body={
+                "chat_template_kwargs": {"enable_thinking": False},
+            },
         )
 
         choice = response.choices[0]

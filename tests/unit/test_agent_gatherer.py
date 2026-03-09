@@ -481,6 +481,97 @@ class TestNeighborExpand:
 
 
 # ---------------------------------------------------------------------------
+# Pass 8b: Neighbor screening
+# ---------------------------------------------------------------------------
+class TestScreenNeighbors:
+    @pytest.mark.asyncio
+    async def test_small_dirs_not_screened(self, mock_client):
+        """Directories with <= 10 siblings are kept without LLM call."""
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir="/tmp")
+        before = ["core/engine.py"]
+        after = ["core/engine.py", "core/a.py", "core/b.py"]
+        result = await gatherer._screen_neighbors(
+            mock_client, "model", "task", before, after,
+        )
+        assert result == after
+        mock_client.generate.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_large_dir_screened(self, mock_client):
+        """Directory with > 10 siblings triggers LLM screening."""
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir="/tmp")
+        before = ["core/engine.py"]
+        siblings = [f"core/file{i}.py" for i in range(15)]
+        after = ["core/engine.py"] + siblings
+
+        # LLM says only file0, file1, file2 are relevant
+        mock_client.generate = AsyncMock(
+            return_value='["core/file0.py", "core/file1.py", "core/file2.py"]'
+        )
+        result = await gatherer._screen_neighbors(
+            mock_client, "model", "task", before, after,
+        )
+        assert "core/engine.py" in result  # original kept
+        assert "core/file0.py" in result
+        assert "core/file1.py" in result
+        assert "core/file2.py" in result
+        assert "core/file10.py" not in result  # screened out
+
+    @pytest.mark.asyncio
+    async def test_llm_failure_keeps_all(self, mock_client):
+        """On LLM failure, all siblings are kept (graceful fallback)."""
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir="/tmp")
+        before = ["core/engine.py"]
+        siblings = [f"core/file{i}.py" for i in range(15)]
+        after = ["core/engine.py"] + siblings
+
+        mock_client.generate = AsyncMock(side_effect=RuntimeError("LLM down"))
+        result = await gatherer._screen_neighbors(
+            mock_client, "model", "task", before, after,
+        )
+        assert result == after  # all kept on failure
+
+    @pytest.mark.asyncio
+    async def test_parse_failure_keeps_all(self, mock_client):
+        """On unparseable LLM response, all siblings are kept."""
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir="/tmp")
+        before = ["core/engine.py"]
+        siblings = [f"core/file{i}.py" for i in range(15)]
+        after = ["core/engine.py"] + siblings
+
+        mock_client.generate = AsyncMock(return_value="I don't understand")
+        result = await gatherer._screen_neighbors(
+            mock_client, "model", "task", before, after,
+        )
+        assert result == after
+
+    @pytest.mark.asyncio
+    async def test_mixed_dirs(self, mock_client):
+        """Small dirs kept as-is, only large dirs screened."""
+        gatherer = AgentContextGatherer(config=_make_config(), source_dir="/tmp")
+        before = ["core/engine.py", "llm/client.py"]
+        # core/ has 12 new siblings (screened), llm/ has 3 (kept)
+        core_siblings = [f"core/s{i}.py" for i in range(12)]
+        llm_siblings = ["llm/types.py", "llm/config.py", "llm/factory.py"]
+        after = ["core/engine.py"] + core_siblings + ["llm/client.py"] + llm_siblings
+
+        mock_client.generate = AsyncMock(
+            return_value='["core/s0.py", "core/s1.py"]'
+        )
+        result = await gatherer._screen_neighbors(
+            mock_client, "model", "task", before, after,
+        )
+        # Core screened: only s0, s1 kept
+        assert "core/s0.py" in result
+        assert "core/s1.py" in result
+        assert "core/s5.py" not in result
+        # LLM siblings all kept (under threshold)
+        assert "llm/types.py" in result
+        assert "llm/config.py" in result
+        assert "llm/factory.py" in result
+
+
+# ---------------------------------------------------------------------------
 # Pass 9: _read_selected_files
 # ---------------------------------------------------------------------------
 class TestReadSelectedFiles:

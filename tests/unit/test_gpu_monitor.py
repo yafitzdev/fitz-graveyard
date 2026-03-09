@@ -135,14 +135,14 @@ class TestConfig:
         from fitz_graveyard.config.schema import GPUConfig
 
         gpu = GPUConfig()
-        assert gpu.temp_threshold == 80
+        assert gpu.temp_threshold == 73
         assert gpu.cooldown_margin == 10
 
     def test_gpu_config_on_root(self):
         from fitz_graveyard.config.schema import FitzPlannerConfig
 
         config = FitzPlannerConfig()
-        assert config.gpu.temp_threshold == 80
+        assert config.gpu.temp_threshold == 73
 
     def test_gpu_config_extra_ignored(self):
         from fitz_graveyard.config.schema import FitzPlannerConfig
