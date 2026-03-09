@@ -351,7 +351,7 @@ class AgentContextGatherer:
 
             selected = self._prioritize_for_summary(screened)
 
-            # Pass 9: Read selected files (pure Python)
+            # Pass 9: Read selected files + compress for planning context
             await self._report(progress_callback, 0.080, "agent:reading")
             file_contents, included = self._read_selected_files(selected)
 
@@ -388,6 +388,23 @@ class AgentContextGatherer:
             )
             structural_overview = "\n\n".join(overview_parts)
 
+            # Compress file contents for planning context.
+            # AST-based: strips docstrings, comments, collapses long bodies.
+            # Structural index was built from raw disk files (unaffected).
+            from fitz_graveyard.planning.agent.compressor import compress_file
+
+            raw_chars = sum(len(c) for c in file_contents.values())
+            file_contents = {
+                path: compress_file(content, path)
+                for path, content in file_contents.items()
+            }
+            comp_chars = sum(len(c) for c in file_contents.values())
+            logger.info(
+                f"AgentContextGatherer: compressed {len(file_contents)} files "
+                f"({raw_chars} -> {comp_chars} chars, "
+                f"{100 * (1 - comp_chars / raw_chars):.0f}% reduction)"
+            )
+
             # Build scan hit source blocks (for reasoning context)
             scan_blocks: list[str] = []
             for path in scan_hits:
@@ -414,10 +431,9 @@ class AgentContextGatherer:
                     reverse_count[dep] = reverse_count.get(dep, 0) + 1
 
             t_total = time.monotonic() - t_pipeline
-            total_chars = sum(len(c) for c in file_contents.values())
             logger.info(
                 f"AgentContextGatherer: {len(included)} files "
-                f"({total_chars} chars source, "
+                f"({comp_chars} chars compressed, "
                 f"{len(structural_overview)} chars overview) — "
                 f"pipeline total {t_total:.1f}s"
             )
