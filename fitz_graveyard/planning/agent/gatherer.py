@@ -197,7 +197,9 @@ class AgentContextGatherer:
 
             # VRAM router: if >= 6GB free, keep LLM loaded during
             # embedding/reranking (~360MB). Otherwise unload first.
+            # If unload fails, skip embedding entirely — system is memory-constrained.
             llm_unloaded = False
+            skip_embedding = False
             unload = getattr(client, "unload_model", None)
             if unload is not None:
                 from fitz_graveyard.llm.gpu_monitor import GPUTemperatureGuard
@@ -220,35 +222,46 @@ class AgentContextGatherer:
                         progress_callback, 0.069, "agent:unloading_llm",
                     )
                     llm_unloaded = await unload()
+                    if not llm_unloaded:
+                        logger.warning(
+                            "AgentContextGatherer: unload failed — skipping "
+                            "embedding/reranking to avoid OOM (falling back to BM25)"
+                        )
+                        skip_embedding = True
 
             # Pass 5: Embedding recall (if sentence-transformers available)
             embedding_candidates: list[str] = []
-            try:
-                await self._report(progress_callback, 0.070, "agent:embedding")
-                t0 = time.monotonic()
-                embedding_candidates = self._embedding_recall(
-                    file_paths, job_description, hyde_code,
-                    top_k=100,
-                )
+            if skip_embedding:
                 logger.info(
-                    f"AgentContextGatherer: embedding recall found "
-                    f"{len(embedding_candidates)} candidates "
-                    f"({time.monotonic() - t0:.1f}s)"
+                    "AgentContextGatherer: embedding skipped (unload failed, memory constrained)"
                 )
-            except ImportError:
-                logger.info(
-                    "AgentContextGatherer: sentence-transformers not installed, "
-                    "skipping embedding recall"
-                )
-            except MemoryError as e:
-                logger.warning(
-                    f"AgentContextGatherer: skipping embedding — {e}"
-                )
-            except Exception:
-                logger.warning(
-                    "AgentContextGatherer: embedding recall failed",
-                    exc_info=True,
-                )
+            else:
+                try:
+                    await self._report(progress_callback, 0.070, "agent:embedding")
+                    t0 = time.monotonic()
+                    embedding_candidates = self._embedding_recall(
+                        file_paths, job_description, hyde_code,
+                        top_k=100,
+                    )
+                    logger.info(
+                        f"AgentContextGatherer: embedding recall found "
+                        f"{len(embedding_candidates)} candidates "
+                        f"({time.monotonic() - t0:.1f}s)"
+                    )
+                except ImportError:
+                    logger.info(
+                        "AgentContextGatherer: sentence-transformers not installed, "
+                        "skipping embedding recall"
+                    )
+                except MemoryError as e:
+                    logger.warning(
+                        f"AgentContextGatherer: skipping embedding — {e}"
+                    )
+                except Exception:
+                    logger.warning(
+                        "AgentContextGatherer: embedding recall failed",
+                        exc_info=True,
+                    )
 
             # Merge candidates from all signals
             merged = self._merge_candidates(
@@ -262,34 +275,39 @@ class AgentContextGatherer:
 
             # Pass 6: Cross-encoder rerank (if sentence-transformers available)
             reranked = merged
-            try:
-                if len(merged) > _RERANK_TOP_K:
-                    await self._report(
-                        progress_callback, 0.073, "agent:reranking",
-                    )
-                    t0 = time.monotonic()
-                    reranked = self._rerank_candidates(
-                        merged, job_description, top_k=_RERANK_TOP_K,
-                    )
-                    logger.info(
-                        f"AgentContextGatherer: reranked to "
-                        f"{len(reranked)} files "
-                        f"({time.monotonic() - t0:.1f}s)"
-                    )
-            except ImportError:
+            if skip_embedding:
                 logger.info(
-                    "AgentContextGatherer: sentence-transformers not installed, "
-                    "skipping reranking"
+                    "AgentContextGatherer: reranking skipped (memory constrained)"
                 )
-            except MemoryError as e:
-                logger.warning(
-                    f"AgentContextGatherer: skipping reranking — {e}"
-                )
-            except Exception:
-                logger.warning(
-                    "AgentContextGatherer: reranking failed",
-                    exc_info=True,
-                )
+            else:
+                try:
+                    if len(merged) > _RERANK_TOP_K:
+                        await self._report(
+                            progress_callback, 0.073, "agent:reranking",
+                        )
+                        t0 = time.monotonic()
+                        reranked = self._rerank_candidates(
+                            merged, job_description, top_k=_RERANK_TOP_K,
+                        )
+                        logger.info(
+                            f"AgentContextGatherer: reranked to "
+                            f"{len(reranked)} files "
+                            f"({time.monotonic() - t0:.1f}s)"
+                        )
+                except ImportError:
+                    logger.info(
+                        "AgentContextGatherer: sentence-transformers not installed, "
+                        "skipping reranking"
+                    )
+                except MemoryError as e:
+                    logger.warning(
+                        f"AgentContextGatherer: skipping reranking — {e}"
+                    )
+                except Exception:
+                    logger.warning(
+                        "AgentContextGatherer: reranking failed",
+                        exc_info=True,
+                    )
 
             # Reload LLM if it was unloaded
             if llm_unloaded:
