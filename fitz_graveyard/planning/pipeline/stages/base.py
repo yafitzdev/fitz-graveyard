@@ -810,8 +810,6 @@ class PipelineStage(ABC):
             ctx = ctx[:self._MAX_GATHERED_CONTEXT_CHARS] + "\n\n[... context trimmed for brevity]"
         return ctx
 
-    _MAX_RAW_SUMMARIES_CHARS = 48000
-
     def _get_raw_summaries(self, prior_outputs: dict[str, Any]) -> str:
         """
         Get raw source code from AgentContextGatherer output.
@@ -820,18 +818,12 @@ class PipelineStage(ABC):
         Use for reasoning passes where seeing real code matters.
         Falls back to _gathered_context if not available.
 
-        Caps at _MAX_RAW_SUMMARIES_CHARS (higher limit than synthesized context
-        since reasoning passes benefit from more detail).
+        No hard cap — the gatherer controls output size via budget-aware
+        file inclusion. Downstream stages manage their own prompt budgets.
         """
         ctx = prior_outputs.get("_raw_summaries", "")
         if not ctx:
-            # Fallback to synthesized if raw not available (old checkpoints)
             return self._get_gathered_context(prior_outputs)
-        if len(ctx) > self._MAX_RAW_SUMMARIES_CHARS:
-            logger.info(
-                f"Trimming raw summaries: {len(ctx)} -> {self._MAX_RAW_SUMMARIES_CHARS} chars"
-            )
-            ctx = ctx[:self._MAX_RAW_SUMMARIES_CHARS] + "\n\n[... summaries trimmed for brevity]"
         return ctx
 
     @staticmethod

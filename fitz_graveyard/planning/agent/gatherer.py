@@ -88,6 +88,13 @@ _NEIGHBOR_SCREEN_THRESHOLD = 10
 # 6GB threshold gives comfortable margin for CUDA context overhead.
 _VRAM_HEADROOM_MB = 6_000
 
+# Budget-aware file inclusion for raw_summaries.
+# Files are added to the prompt in priority order until budget is full.
+# Remaining files stay in file_contents for read_file tool access.
+# Budget = context_size_tokens * _CHARS_PER_TOKEN * _RAW_BUDGET_FRACTION
+_CHARS_PER_TOKEN = 4
+_RAW_BUDGET_FRACTION = 0.4
+
 
 
 class AgentContextGatherer:
@@ -405,23 +412,58 @@ class AgentContextGatherer:
                 f"{100 * (1 - comp_chars / raw_chars):.0f}% reduction)"
             )
 
-            # Build scan hit source blocks (for reasoning context)
-            scan_blocks: list[str] = []
-            for path in scan_hits:
-                if path in file_contents:
-                    scan_blocks.append(
-                        f"### {path}\n```\n{file_contents[path]}\n```"
-                    )
+            # Budget-aware file inclusion for raw_summaries.
+            # Files are added in priority order (scan hits first, then reranked)
+            # until the budget is full. Remaining files stay in file_contents
+            # for on-demand access via the read_file tool during reasoning.
+            context_tokens = getattr(client, "context_size", 65536)
+            source_budget = int(
+                context_tokens * _CHARS_PER_TOKEN * _RAW_BUDGET_FRACTION
+            )
 
-            # Assemble context strings
-            # synthesized = structural overview (compact, for extraction prompts)
-            # raw_summaries = overview + scan hit source (for reasoning prompts)
-            # file_contents = all files (for read_file tool during planning)
+            # Structural overview is always included (compact, ground truth)
             raw_summaries = structural_overview
-            if scan_blocks:
+            budget_remaining = source_budget - len(structural_overview)
+
+            # Priority order: scan hits first (LLM-picked from index),
+            # then rest of included files in retrieval order
+            scan_set = set(scan_hits)
+            priority_files: list[str] = list(scan_hits)
+            for path in included:
+                if path not in scan_set:
+                    priority_files.append(path)
+
+            included_in_prompt: list[str] = []
+            deferred_to_tool: list[str] = []
+
+            for path in priority_files:
+                if path not in file_contents:
+                    continue
+                block = f"### {path}\n```\n{file_contents[path]}\n```"
+                block_size = len(block) + 4  # separators
+                if budget_remaining >= block_size:
+                    included_in_prompt.append(block)
+                    budget_remaining -= block_size
+                else:
+                    deferred_to_tool.append(path)
+
+            if included_in_prompt:
                 raw_summaries += (
-                    "\n\n--- FULL SOURCE (key files from structural scan) ---\n\n"
-                    + "\n\n".join(scan_blocks)
+                    "\n\n--- FULL SOURCE (priority-ordered, budget-aware) ---\n\n"
+                    + "\n\n".join(included_in_prompt)
+                )
+
+            budget_used = source_budget - budget_remaining
+            if deferred_to_tool:
+                logger.info(
+                    f"AgentContextGatherer: {len(included_in_prompt)} files "
+                    f"in prompt, {len(deferred_to_tool)} deferred to read_file "
+                    f"(budget {source_budget} chars, used {budget_used})"
+                )
+            else:
+                logger.info(
+                    f"AgentContextGatherer: all {len(included_in_prompt)} files "
+                    f"fit in prompt (budget {source_budget} chars, used {budget_used})"
                 )
 
             # Compute reverse import counts for diagnostics

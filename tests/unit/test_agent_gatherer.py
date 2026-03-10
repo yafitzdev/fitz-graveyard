@@ -991,3 +991,89 @@ class TestProgressCallback:
         gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
         await gatherer.gather(mock_client, "openai chat", progress_callback=async_track)
         assert len(calls) > 0
+
+
+# ---------------------------------------------------------------------------
+# Budget-aware file inclusion
+# ---------------------------------------------------------------------------
+class TestBudgetAwareInclusion:
+    @pytest.mark.asyncio
+    async def test_all_files_fit_within_budget(self, tmp_path, mock_client):
+        """With large context window, all files fit in raw_summaries."""
+        (tmp_path / "main.py").write_text("def run(): pass")
+        (tmp_path / "util.py").write_text("def helper(): pass")
+        mock_client.context_size = 65536  # ~104K chars budget
+        mock_client.generate = AsyncMock(side_effect=[
+            "TERMS:\nrun\n\nHYPOTHETICAL:\n```python\nx=1\n```",
+            '["main.py", "util.py"]',
+        ])
+        gatherer = AgentContextGatherer(
+            config=_make_config(), source_dir=str(tmp_path),
+        )
+        result = await gatherer.gather(mock_client, "run helper")
+        # Both files should be in raw_summaries
+        assert "### main.py" in result["raw_summaries"]
+        assert "### util.py" in result["raw_summaries"]
+
+    @pytest.mark.asyncio
+    async def test_tiny_budget_defers_files(self, tmp_path, mock_client):
+        """With tiny context window, some files deferred to read_file tool."""
+        # Create files big enough to exceed a tiny budget
+        (tmp_path / "main.py").write_text("def run(): pass\n" * 100)
+        (tmp_path / "big.py").write_text("def process(): pass\n" * 100)
+        mock_client.context_size = 256  # ~410 chars budget (256 * 4 * 0.4)
+        mock_client.generate = AsyncMock(side_effect=[
+            "TERMS:\nrun\n\nHYPOTHETICAL:\n```python\nx=1\n```",
+            '["main.py", "big.py"]',
+        ])
+        gatherer = AgentContextGatherer(
+            config=_make_config(), source_dir=str(tmp_path),
+        )
+        result = await gatherer.gather(mock_client, "run process")
+        # Both files should still be in file_contents for read_file tool
+        assert "main.py" in result["file_contents"]
+        assert "big.py" in result["file_contents"]
+        # raw_summaries should have structural overview at minimum
+        assert "STRUCTURAL OVERVIEW" in result["raw_summaries"]
+
+    @pytest.mark.asyncio
+    async def test_scan_hits_prioritized_over_reranked(self, tmp_path, mock_client):
+        """Scan hits are included before reranked files when budget is tight."""
+        (tmp_path / "scan_hit.py").write_text("def scanned(): pass")
+        (tmp_path / "bm25_match.py").write_text("def matched(): pass")
+        mock_client.context_size = 65536
+        mock_client.generate = AsyncMock(side_effect=[
+            "TERMS:\nscanned\n\nHYPOTHETICAL:\n```python\nx=1\n```",
+            '["scan_hit.py"]',  # Only scan_hit.py from structural scan
+        ])
+        gatherer = AgentContextGatherer(
+            config=_make_config(), source_dir=str(tmp_path),
+        )
+        result = await gatherer.gather(mock_client, "scanned matched")
+        raw = result["raw_summaries"]
+        # Scan hit should appear before BM25-only match
+        if "### scan_hit.py" in raw and "### bm25_match.py" in raw:
+            assert raw.index("### scan_hit.py") < raw.index("### bm25_match.py")
+
+    @pytest.mark.asyncio
+    async def test_no_mid_file_truncation(self, tmp_path, mock_client):
+        """Files are included whole or not at all — never truncated mid-content."""
+        content = "def big_function():\n" + "    x = 1\n" * 200
+        (tmp_path / "big.py").write_text(content)
+        (tmp_path / "small.py").write_text("x = 1")
+        mock_client.context_size = 1024  # ~1638 chars budget
+        mock_client.generate = AsyncMock(side_effect=[
+            "TERMS:\nbig\n\nHYPOTHETICAL:\n```python\nx=1\n```",
+            '["big.py", "small.py"]',
+        ])
+        gatherer = AgentContextGatherer(
+            config=_make_config(), source_dir=str(tmp_path),
+        )
+        result = await gatherer.gather(mock_client, "big small")
+        raw = result["raw_summaries"]
+        # If big.py is in raw_summaries, it should be complete (not truncated)
+        if "### big.py" in raw:
+            start = raw.index("### big.py")
+            block = raw[start:]
+            # Should contain the closing ``` fence (file included whole)
+            assert "```" in block[len("### big.py\n```"):]

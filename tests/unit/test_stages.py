@@ -1121,18 +1121,12 @@ class TestRawSummaries:
         result = stage._get_raw_summaries({"_raw_summaries": "", "_gathered_context": "fallback"})
         assert result == "fallback"
 
-    def test_long_raw_trimmed(self):
+    def test_long_raw_passed_through(self):
+        """Raw summaries are not truncated — gatherer controls size via budget."""
         stage = ContextStage()
-        long_raw = "x" * 52000
+        long_raw = "x" * 200_000
         result = stage._get_raw_summaries({"_raw_summaries": long_raw})
-        assert len(result) < 52000
-        assert "[... summaries trimmed for brevity]" in result
-
-    def test_raw_at_limit_unchanged(self):
-        stage = ContextStage()
-        raw = "x" * 48000
-        result = stage._get_raw_summaries({"_raw_summaries": raw})
-        assert result == raw
+        assert result == long_raw
 
 
 class TestSelfCritique:
