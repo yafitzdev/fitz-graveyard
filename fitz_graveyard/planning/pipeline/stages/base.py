@@ -836,13 +836,21 @@ class PipelineStage(ABC):
         client: Any,
         messages: list[dict],
         prior_outputs: dict[str, Any],
-        max_rounds: int = 3,
+        max_rounds: int = 5,
     ) -> str:
-        """Run reasoning with a read_file tool so the LLM can inspect source code.
+        """Run reasoning with read_file/read_files tools for agentic exploration.
 
-        The LLM receives the structural overview in the prompt and can request
-        full source of specific files via tool calling. Falls back to plain
-        generate() if tool calling is unavailable or file_contents is empty.
+        The prompt contains a small seed set of files (~30). The LLM sees the
+        full structural overview (all files' signatures) and MUST use tools to
+        explore beyond the seed set. Falls back to plain generate() if tool
+        calling is unavailable or file_contents is empty.
+
+        Tools:
+            read_file(path)         — read one file
+            read_files(paths)       — read multiple files in one call (preferred)
+
+        Fallback: if a requested file isn't in file_contents, reads from disk
+        via _source_dir (compressed via AST compressor).
 
         Args:
             client:        LLM client with generate_with_tools()
@@ -854,52 +862,150 @@ class PipelineStage(ABC):
             Reasoning text (str).
         """
         file_contents = prior_outputs.get("_file_contents", {})
+        source_dir = self._get_source_dir(prior_outputs)
         generate_with_tools = getattr(client, "generate_with_tools", None)
 
         if not file_contents or generate_with_tools is None:
+            if not file_contents:
+                logger.info(f"Stage '{self.name}': no file_contents, falling back to plain generate")
+            else:
+                logger.info(f"Stage '{self.name}': no generate_with_tools, falling back to plain generate")
             return await client.generate(messages=messages)
 
-        def read_file(path: str) -> str:
-            """Read the full source code of a file. Use this to inspect implementation details."""
+        logger.info(
+            f"Stage '{self.name}': tool reasoning start — "
+            f"{len(file_contents)} files in pool, "
+            f"source_dir={'yes' if source_dir else 'no'}, "
+            f"max_rounds={max_rounds}"
+        )
+
+        # Track all files read via tools for diagnostics
+        tool_reads: list[str] = []
+        disk_reads: list[str] = []
+
+        def _resolve_file(path: str) -> str:
+            """Read file from pool, falling back to disk if source_dir available."""
             content = file_contents.get(path)
             if content is not None:
+                tool_reads.append(path)
                 return content
-            return f"File not found: {path}"
 
-        tools = [read_file]
+            # Disk fallback: read and compress on demand
+            if source_dir:
+                try:
+                    from pathlib import Path
+                    from fitz_graveyard.validation.sanitize import sanitize_agent_path
+                    from fitz_graveyard.planning.agent.compressor import compress_file
 
-        # Add tool hint to the last user message
-        available = ", ".join(sorted(file_contents.keys()))
+                    resolved = sanitize_agent_path(path, source_dir)
+                    if resolved.is_file():
+                        raw = resolved.read_bytes()[:50_000]
+                        text = raw.decode("utf-8", errors="replace")
+                        compressed = compress_file(text, path)
+                        # Cache for future reads
+                        file_contents[path] = compressed
+                        disk_reads.append(path)
+                        logger.info(
+                            f"Stage '{self.name}': disk read '{path}' "
+                            f"({len(text)} raw → {len(compressed)} compressed)"
+                        )
+                        return compressed
+                except Exception as e:
+                    logger.warning(f"Stage '{self.name}': disk read failed for '{path}': {e}")
+
+            return f"File not found: {path}. Check the structural overview for correct paths."
+
+        def read_file(path: str) -> str:
+            """Read the full source code of a file. Use this to inspect implementation details beyond the seed set."""
+            return _resolve_file(path)
+
+        def read_files(paths: list[str]) -> str:
+            """Read multiple files at once. More efficient than calling read_file repeatedly. Returns each file with a header."""
+            results: list[str] = []
+            for p in paths:
+                content = _resolve_file(p)
+                results.append(f"### {p}\n{content}")
+            return "\n\n".join(results)
+
+        tools = [read_file, read_files]
+
+        # Build tool hint emphasizing exploration
+        available = sorted(file_contents.keys())
         tool_hint = (
-            "\n\nYou have a read_file tool to inspect the full source of any file "
-            "in the structural overview. Use it when you need implementation details. "
-            f"Available files: {available}"
+            "\n\n--- TOOL ACCESS ---\n"
+            "IMPORTANT: The source files above are an intentionally sparse SEED SET. "
+            "The structural overview shows ALL files with their signatures. "
+            "You MUST use read_files(paths=[...]) to inspect any additional files "
+            "you need for your analysis. Do NOT guess at implementation details — "
+            "read the actual source.\n\n"
+            "Tools available:\n"
+            "- read_file(path: str) — read one file\n"
+            "- read_files(paths: list[str]) — read multiple files at once (preferred)\n\n"
+            f"Files in tool pool ({len(available)} available): "
+            + ", ".join(available)
         )
+        if source_dir:
+            tool_hint += (
+                "\n\nYou can also request files NOT in the pool above — "
+                "any file visible in the structural overview can be read from disk."
+            )
+
         messages = [m.copy() for m in messages]
         messages[-1]["content"] += tool_hint
 
+        t_start = time.monotonic()
+
         for _round in range(max_rounds):
+            t_round = time.monotonic()
             msg = await generate_with_tools(messages=messages, tools=tools)
+            round_time = time.monotonic() - t_round
 
             if not msg.tool_calls:
+                total_time = time.monotonic() - t_start
+                logger.info(
+                    f"Stage '{self.name}': tool reasoning complete — "
+                    f"round {_round + 1}/{max_rounds} (no tool calls), "
+                    f"total {len(tool_reads)} pool reads + {len(disk_reads)} disk reads, "
+                    f"{total_time:.1f}s total"
+                )
+                if tool_reads:
+                    logger.info(f"Stage '{self.name}': pool files read: {tool_reads}")
+                if disk_reads:
+                    logger.info(f"Stage '{self.name}': disk files read: {disk_reads}")
                 return msg.content or ""
 
             # Execute tool calls and continue conversation
             messages.append(msg.assistant_dict)
+            round_files: list[str] = []
             for tc in msg.tool_calls:
                 if tc.name == "read_file":
-                    result = read_file(**tc.arguments)
+                    path = tc.arguments.get("path", "")
+                    result = read_file(path)
+                    round_files.append(path)
+                elif tc.name == "read_files":
+                    paths = tc.arguments.get("paths", [])
+                    result = read_files(paths)
+                    round_files.extend(paths)
                 else:
                     result = f"Unknown tool: {tc.name}"
                 messages.append(
                     client.tool_result_message(tc.id, result)
                 )
+
             logger.info(
-                f"Stage '{self.name}': tool round {_round + 1}, "
-                f"{len(msg.tool_calls)} file(s) requested"
+                f"Stage '{self.name}': tool round {_round + 1}/{max_rounds} — "
+                f"{len(msg.tool_calls)} call(s), {len(round_files)} file(s): "
+                f"{round_files} ({round_time:.1f}s)"
             )
 
-        # Max rounds reached — get final text response without tools
+        # Max rounds reached — force final text response without tools
+        total_time = time.monotonic() - t_start
+        logger.info(
+            f"Stage '{self.name}': max rounds ({max_rounds}) reached, "
+            f"forcing final response. "
+            f"Total: {len(tool_reads)} pool + {len(disk_reads)} disk reads, "
+            f"{total_time:.1f}s"
+        )
         return await client.generate(messages=messages)
 
     def _get_implementation_check(self, prior_outputs: dict[str, Any]) -> str:

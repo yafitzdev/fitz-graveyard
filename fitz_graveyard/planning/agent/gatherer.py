@@ -88,12 +88,11 @@ _NEIGHBOR_SCREEN_THRESHOLD = 10
 # 6GB threshold gives comfortable margin for CUDA context overhead.
 _VRAM_HEADROOM_MB = 6_000
 
-# Budget-aware file inclusion for raw_summaries.
-# Files are added to the prompt in priority order until budget is full.
-# Remaining files stay in file_contents for read_file tool access.
-# Budget = context_size_tokens * _CHARS_PER_TOKEN * _RAW_BUDGET_FRACTION
-_CHARS_PER_TOKEN = 4
-_RAW_BUDGET_FRACTION = 0.4
+# Seed-and-fetch: only a small seed set goes into the prompt.
+# The rest are available via read_file/read_files tools during reasoning.
+# This forces the LLM to actively explore the codebase rather than
+# passively consuming a context dump.
+_DEFAULT_MAX_SEED_FILES = 30
 
 
 
@@ -412,18 +411,14 @@ class AgentContextGatherer:
                 f"{100 * (1 - comp_chars / raw_chars):.0f}% reduction)"
             )
 
-            # Budget-aware file inclusion for raw_summaries.
-            # Files are added in priority order (scan hits first, then reranked)
-            # until the budget is full. Remaining files stay in file_contents
-            # for on-demand access via the read_file tool during reasoning.
-            context_tokens = getattr(client, "context_size", 65536)
-            source_budget = int(
-                context_tokens * _CHARS_PER_TOKEN * _RAW_BUDGET_FRACTION
-            )
+            # Seed-and-fetch: include only a small seed set in the prompt.
+            # The LLM gets the full structural overview (signatures + index)
+            # plus seed files as full source. Remaining files are available
+            # via read_file/read_files tools — the LLM must actively explore.
+            max_seeds = getattr(self._config, "max_seed_files", _DEFAULT_MAX_SEED_FILES)
 
             # Structural overview is always included (compact, ground truth)
             raw_summaries = structural_overview
-            budget_remaining = source_budget - len(structural_overview)
 
             # Priority order: scan hits first (LLM-picked from index),
             # then rest of included files in retrieval order
@@ -433,38 +428,34 @@ class AgentContextGatherer:
                 if path not in scan_set:
                     priority_files.append(path)
 
+            seed_files: list[str] = []
+            tool_pool_files: list[str] = []
             included_in_prompt: list[str] = []
-            deferred_to_tool: list[str] = []
 
             for path in priority_files:
                 if path not in file_contents:
                     continue
-                block = f"### {path}\n```\n{file_contents[path]}\n```"
-                block_size = len(block) + 4  # separators
-                if budget_remaining >= block_size:
+                if len(seed_files) < max_seeds:
+                    seed_files.append(path)
+                    block = f"### {path}\n```\n{file_contents[path]}\n```"
                     included_in_prompt.append(block)
-                    budget_remaining -= block_size
                 else:
-                    deferred_to_tool.append(path)
+                    tool_pool_files.append(path)
 
             if included_in_prompt:
                 raw_summaries += (
-                    "\n\n--- FULL SOURCE (priority-ordered, budget-aware) ---\n\n"
+                    f"\n\n--- SEED FILES ({len(seed_files)}/{len(included)} — "
+                    f"use read_file/read_files for the rest) ---\n\n"
                     + "\n\n".join(included_in_prompt)
                 )
 
-            budget_used = source_budget - budget_remaining
-            if deferred_to_tool:
-                logger.info(
-                    f"AgentContextGatherer: {len(included_in_prompt)} files "
-                    f"in prompt, {len(deferred_to_tool)} deferred to read_file "
-                    f"(budget {source_budget} chars, used {budget_used})"
-                )
-            else:
-                logger.info(
-                    f"AgentContextGatherer: all {len(included_in_prompt)} files "
-                    f"fit in prompt (budget {source_budget} chars, used {budget_used})"
-                )
+            seed_chars = sum(len(file_contents.get(p, "")) for p in seed_files)
+            pool_chars = sum(len(file_contents.get(p, "")) for p in tool_pool_files)
+            logger.info(
+                f"AgentContextGatherer: seed={len(seed_files)} files "
+                f"({seed_chars} chars), tool_pool={len(tool_pool_files)} files "
+                f"({pool_chars} chars), max_seeds={max_seeds}"
+            )
 
             # Compute reverse import counts for diagnostics
             reverse_count: dict[str, int] = {}
@@ -473,19 +464,15 @@ class AgentContextGatherer:
                     reverse_count[dep] = reverse_count.get(dep, 0) + 1
 
             # Build per-file provenance for traceability.
-            # For each included file, record which retrieval signals found it.
+            # For each included file, record which retrieval signals found it
+            # and whether it's a seed file (in prompt) or tool-pool (deferred).
             scan_set = set(scan_hits)
             bm25_set = set(bm25_candidates)
             embed_set = set(embedding_candidates)
             rerank_set = set(reranked)
             import_set = set(scan_expanded) - scan_set
             neighbor_set = set(neighbor_expanded) - set(expanded)
-            prompt_set = set()
-            for block in included_in_prompt:
-                # blocks are "### path\n```\n...\n```"
-                first_line = block.split("\n", 1)[0]
-                if first_line.startswith("### "):
-                    prompt_set.add(first_line[4:])
+            seed_set = set(seed_files)
 
             file_provenance: dict[str, dict] = {}
             for path in included:
@@ -504,7 +491,7 @@ class AgentContextGatherer:
                     signals.append("neighbor")
                 file_provenance[path] = {
                     "signals": signals,
-                    "in_prompt": path in prompt_set,
+                    "in_prompt": path in seed_set,
                 }
 
             t_total = time.monotonic() - t_pipeline

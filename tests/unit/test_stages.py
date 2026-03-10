@@ -2,7 +2,7 @@
 """Unit tests for pipeline stages (3 merged stages + per-field extraction)."""
 
 import json
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -1530,4 +1530,161 @@ class TestEnsureCorrectArtifacts:
         }
         result = await ensure_correct_artifacts(merged, mock_client, {})
         mock_client.generate.assert_not_called()
+
+
+class TestReasonWithTools:
+    """Tests for _reason_with_tools — seed-and-fetch agentic exploration."""
+
+    def _make_agent_message(self, content=None, tool_calls=None):
+        from fitz_graveyard.llm.types import AgentMessage
+        return AgentMessage(
+            content=content,
+            tool_calls=tool_calls,
+            assistant_dict={"role": "assistant", "content": content,
+                           **({"tool_calls": []} if tool_calls else {})},
+        )
+
+    def _make_tool_call(self, name, arguments, call_id="call_1"):
+        from fitz_graveyard.llm.types import AgentToolCall
+        return AgentToolCall(id=call_id, name=name, arguments=arguments)
+
+    @pytest.mark.asyncio
+    async def test_falls_back_without_file_contents(self):
+        """No file_contents → plain generate() fallback."""
+        stage = ContextStage()
+        client = AsyncMock()
+        client.generate.return_value = "plain reasoning"
+        messages = [{"role": "user", "content": "test"}]
+        result = await stage._reason_with_tools(client, messages, {})
+        assert result == "plain reasoning"
+        client.generate.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_falls_back_without_generate_with_tools(self):
+        """Client without generate_with_tools → plain generate() fallback."""
+        stage = ContextStage()
+        client = MagicMock()
+        client.generate = AsyncMock(return_value="plain reasoning")
+        # No generate_with_tools attribute
+        del client.generate_with_tools
+        messages = [{"role": "user", "content": "test"}]
+        prior = {"_file_contents": {"a.py": "content"}}
+        result = await stage._reason_with_tools(client, messages, prior)
+        assert result == "plain reasoning"
+
+    @pytest.mark.asyncio
+    async def test_no_tool_calls_returns_content(self):
+        """LLM responds without tool calls → returns content directly."""
+        stage = ContextStage()
+        client = AsyncMock()
+        client.generate_with_tools = AsyncMock(
+            return_value=self._make_agent_message(content="I have enough info")
+        )
+        client.tool_result_message = MagicMock()
+        messages = [{"role": "user", "content": "test"}]
+        prior = {"_file_contents": {"a.py": "x=1"}}
+        result = await stage._reason_with_tools(client, messages, prior)
+        assert result == "I have enough info"
+
+    @pytest.mark.asyncio
+    async def test_read_file_tool_returns_content(self):
+        """read_file tool call returns file content from pool."""
+        stage = ContextStage()
+        client = AsyncMock()
+        # Round 1: LLM requests a file
+        tool_call = self._make_tool_call("read_file", {"path": "a.py"})
+        # Round 2: LLM responds with analysis
+        client.generate_with_tools = AsyncMock(side_effect=[
+            self._make_agent_message(tool_calls=[tool_call]),
+            self._make_agent_message(content="After reading a.py: looks good"),
+        ])
+        client.tool_result_message = MagicMock(return_value={"role": "tool", "content": "x=1"})
+        messages = [{"role": "user", "content": "test"}]
+        prior = {"_file_contents": {"a.py": "x=1"}}
+        result = await stage._reason_with_tools(client, messages, prior)
+        assert "looks good" in result
+        # Tool result should have been passed back
+        client.tool_result_message.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_read_files_batch_tool(self):
+        """read_files batch tool returns multiple files."""
+        stage = ContextStage()
+        client = AsyncMock()
+        tool_call = self._make_tool_call("read_files", {"paths": ["a.py", "b.py"]})
+        client.generate_with_tools = AsyncMock(side_effect=[
+            self._make_agent_message(tool_calls=[tool_call]),
+            self._make_agent_message(content="Both files analyzed"),
+        ])
+        client.tool_result_message = MagicMock(
+            return_value={"role": "tool", "content": "### a.py\nx=1\n\n### b.py\ny=2"}
+        )
+        messages = [{"role": "user", "content": "test"}]
+        prior = {"_file_contents": {"a.py": "x=1", "b.py": "y=2"}}
+        result = await stage._reason_with_tools(client, messages, prior)
+        assert result == "Both files analyzed"
+
+    @pytest.mark.asyncio
+    async def test_disk_fallback_for_unknown_file(self, tmp_path):
+        """Files not in pool are read from disk via source_dir."""
+        (tmp_path / "extra.py").write_text("def extra(): pass")
+        stage = ContextStage()
+        client = AsyncMock()
+        tool_call = self._make_tool_call("read_file", {"path": "extra.py"})
+        client.generate_with_tools = AsyncMock(side_effect=[
+            self._make_agent_message(tool_calls=[tool_call]),
+            self._make_agent_message(content="Found extra on disk"),
+        ])
+        client.tool_result_message = MagicMock(
+            return_value={"role": "tool", "content": "def extra(): pass"}
+        )
+        messages = [{"role": "user", "content": "test"}]
+        prior = {
+            "_file_contents": {"a.py": "x=1"},
+            "_source_dir": str(tmp_path),
+        }
+        result = await stage._reason_with_tools(client, messages, prior)
+        assert result == "Found extra on disk"
+        # File should now be cached in file_contents
+        assert "extra.py" in prior["_file_contents"]
+
+    @pytest.mark.asyncio
+    async def test_max_rounds_forces_completion(self):
+        """After max_rounds tool calls, forces final generate() without tools."""
+        stage = ContextStage()
+        client = AsyncMock()
+        tool_call = self._make_tool_call("read_file", {"path": "a.py"})
+        # Every round requests a file (never stops)
+        client.generate_with_tools = AsyncMock(
+            return_value=self._make_agent_message(tool_calls=[tool_call])
+        )
+        client.generate = AsyncMock(return_value="forced completion")
+        client.tool_result_message = MagicMock(
+            return_value={"role": "tool", "content": "x=1"}
+        )
+        messages = [{"role": "user", "content": "test"}]
+        prior = {"_file_contents": {"a.py": "x=1"}}
+        result = await stage._reason_with_tools(client, messages, prior, max_rounds=2)
+        assert result == "forced completion"
+        # Should have called generate_with_tools exactly max_rounds times
+        assert client.generate_with_tools.call_count == 2
+        # Then one final generate() without tools
+        client.generate.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_tool_hint_mentions_exploration(self):
+        """Tool hint instructs LLM to actively explore beyond seed set."""
+        stage = ContextStage()
+        client = AsyncMock()
+        client.generate_with_tools = AsyncMock(
+            return_value=self._make_agent_message(content="done")
+        )
+        messages = [{"role": "user", "content": "original prompt"}]
+        prior = {"_file_contents": {"a.py": "x=1"}}
+        await stage._reason_with_tools(client, messages, prior)
+        # Check the messages passed to generate_with_tools
+        call_args = client.generate_with_tools.call_args
+        last_msg = call_args.kwargs["messages"][-1]["content"]
+        assert "SEED SET" in last_msg
+        assert "read_files" in last_msg
 

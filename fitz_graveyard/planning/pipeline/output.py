@@ -323,21 +323,21 @@ class PlanRenderer:
                     sections.append("### File Provenance")
                     sections.append("")
                     sections.append(
-                        "| File | Signals | In Prompt |"
+                        "| File | Signals | Role |"
                     )
                     sections.append(
-                        "|------|---------|-----------|"
+                        "|------|---------|------|"
                     )
                     for path in included:
                         info = provenance.get(path, {})
                         signals = ", ".join(
                             info.get("signals", [])
                         ) or "priority"
-                        in_prompt = (
-                            "yes" if info.get("in_prompt") else ""
+                        role = (
+                            "seed" if info.get("in_prompt") else "tool_pool"
                         )
                         sections.append(
-                            f"| {path} | {signals} | {in_prompt} |"
+                            f"| {path} | {signals} | {role} |"
                         )
                     sections.append("")
 
