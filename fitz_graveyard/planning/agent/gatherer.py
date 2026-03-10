@@ -472,6 +472,41 @@ class AgentContextGatherer:
                 for dep in deps:
                     reverse_count[dep] = reverse_count.get(dep, 0) + 1
 
+            # Build per-file provenance for traceability.
+            # For each included file, record which retrieval signals found it.
+            scan_set = set(scan_hits)
+            bm25_set = set(bm25_candidates)
+            embed_set = set(embedding_candidates)
+            rerank_set = set(reranked)
+            import_set = set(scan_expanded) - scan_set
+            neighbor_set = set(neighbor_expanded) - set(expanded)
+            prompt_set = set()
+            for block in included_in_prompt:
+                # blocks are "### path\n```\n...\n```"
+                first_line = block.split("\n", 1)[0]
+                if first_line.startswith("### "):
+                    prompt_set.add(first_line[4:])
+
+            file_provenance: dict[str, dict] = {}
+            for path in included:
+                signals: list[str] = []
+                if path in scan_set:
+                    signals.append("scan")
+                if path in bm25_set:
+                    signals.append("bm25")
+                if path in embed_set:
+                    signals.append("embed")
+                if path in rerank_set:
+                    signals.append("rerank")
+                if path in import_set:
+                    signals.append("import")
+                if path in neighbor_set:
+                    signals.append("neighbor")
+                file_provenance[path] = {
+                    "signals": signals,
+                    "in_prompt": path in prompt_set,
+                }
+
             t_total = time.monotonic() - t_pipeline
             logger.info(
                 f"AgentContextGatherer: {len(included)} files "
@@ -494,6 +529,7 @@ class AgentContextGatherer:
                     "included": included,
                     "forward_map": serializable_fwd,
                     "reverse_count": reverse_count,
+                    "file_provenance": file_provenance,
                 },
             }
 

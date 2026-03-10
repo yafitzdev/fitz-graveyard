@@ -317,6 +317,30 @@ class PlanRenderer:
                 )
                 sections.append("")
 
+                # Full file provenance table
+                provenance = agent_files.get("file_provenance")
+                if provenance:
+                    sections.append("### File Provenance")
+                    sections.append("")
+                    sections.append(
+                        "| File | Signals | In Prompt |"
+                    )
+                    sections.append(
+                        "|------|---------|-----------|"
+                    )
+                    for path in included:
+                        info = provenance.get(path, {})
+                        signals = ", ".join(
+                            info.get("signals", [])
+                        ) or "priority"
+                        in_prompt = (
+                            "yes" if info.get("in_prompt") else ""
+                        )
+                        sections.append(
+                            f"| {path} | {signals} | {in_prompt} |"
+                        )
+                    sections.append("")
+
         return "\n".join(sections)
 
     def _render_frontmatter(self, plan: PlanOutput) -> str:
