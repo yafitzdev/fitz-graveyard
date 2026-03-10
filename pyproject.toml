@@ -43,6 +43,7 @@ api-review = [
     "CurrencyConverter>=0.17",
 ]
 lm-studio = ["openai>=1.0.0"]
+retrieval = ["sentence-transformers>=3.0", "einops>=0.7"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23.0",
@@ -58,6 +59,12 @@ Documentation = "https://github.com/yafitzdev/fitz-graveyard#readme"
 
 [project.scripts]
 fitz-graveyard = "fitz_graveyard.cli:app"
+
+[tool.pytest.ini_options]
+# -p fitz_graveyard: forces early import of fitz_graveyard/__init__.py which
+# patches platform._wmi_query before setuptools entry points (faker) load.
+# Without this, faker triggers a WMI deadlock on Windows (MS Store Python 3.12).
+addopts = "-p fitz_graveyard"
 
 [tool.setuptools.packages.find]
 where = ["."]

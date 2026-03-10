@@ -5,6 +5,8 @@ import asyncio
 import inspect
 import json
 import logging
+import shutil
+import subprocess
 import time
 from typing import TYPE_CHECKING
 
@@ -14,6 +16,7 @@ from .retry import lm_studio_retry
 from .types import AgentMessage, AgentToolCall
 
 if TYPE_CHECKING:
+    from .gpu_monitor import GPUTemperatureGuard
     from .memory import MemoryMonitor
 
 try:
@@ -88,16 +91,9 @@ class LMStudioClient:
         model: str = "local-model",
         fallback_model: str | None = None,
         timeout: int = 300,
+        context_length: int = 32768,
+        gpu_guard: "GPUTemperatureGuard | None" = None,
     ):
-        """
-        Initialize LM Studio client.
-
-        Args:
-            base_url:       LM Studio API base URL
-            model:          Primary model name
-            fallback_model: Unused (kept for interface parity with OllamaClient)
-            timeout:        Request timeout in seconds
-        """
         if AsyncOpenAI is None:
             raise ImportError(
                 "openai package required for LM Studio support. "
@@ -108,8 +104,15 @@ class LMStudioClient:
         self.model = model
         self.fallback_model = fallback_model
         self._timeout = timeout
+        self._context_length = context_length
+        self._gpu_guard = gpu_guard
         self._client = AsyncOpenAI(base_url=base_url, api_key="lm-studio", timeout=timeout)
         self._call_metrics: list[dict] = []
+
+    @property
+    def context_size(self) -> int:
+        """Configured context window size in tokens."""
+        return self._context_length
 
     @property
     def fast_model(self) -> str:
@@ -126,23 +129,125 @@ class LMStudioClient:
         """Model name for smart/reasoning tasks (same as primary for LM Studio)."""
         return self.model
 
-    async def ensure_model(self, model_name: str) -> None:
-        """No-op for LM Studio (single model, no tier switching)."""
+    async def ensure_model(
+        self, model_name: str, context_size: int | None = None,
+    ) -> None:
+        """Ensure the requested model is loaded in LM Studio."""
+        if await self.is_model_loaded():
+            return
+        await self._load_model_via_cli()
 
     async def health_check(self) -> bool:
-        """
-        Check LM Studio server health by listing available models.
+        """Check LM Studio is reachable and the configured model is loaded.
 
-        Returns:
-            True if server is reachable, False otherwise.
+        If LM Studio is running but no model is loaded, auto-loads the
+        configured model via the ``lms`` CLI.
         """
         try:
             async with httpx.AsyncClient(timeout=5.0) as http:
                 response = await http.get(f"{self.base_url}/models")
-            return response.status_code == 200
+            if response.status_code != 200:
+                return False
         except Exception as e:
             logger.error(f"LM Studio health check failed: {e}")
             return False
+
+        if await self.is_model_loaded():
+            return True
+
+        logger.info(f"No model loaded in LM Studio, auto-loading {self.model}")
+        return await self._load_model_via_cli()
+
+    async def is_model_loaded(self) -> bool:
+        """Check if any model is currently loaded (not just available)."""
+        lms = shutil.which("lms")
+        if not lms:
+            return True  # Can't check, assume loaded
+
+        try:
+            result = await asyncio.to_thread(
+                subprocess.run,
+                [lms, "ps"],
+                capture_output=True, text=True, timeout=10,
+                encoding="utf-8", errors="replace",
+            )
+            # lms ps writes to stderr, not stdout
+            output = result.stdout + result.stderr
+            if "No models" in output:
+                return False
+            return True
+        except Exception:
+            return True  # Can't check, assume loaded
+
+    async def _load_model_via_cli(self) -> bool:
+        """Load the configured model via ``lms load``."""
+        lms = shutil.which("lms")
+        if not lms:
+            logger.warning(
+                "lms CLI not found — cannot auto-load model. "
+                "Load it manually in LM Studio."
+            )
+            return False
+
+        logger.info(
+            f"Running: lms load {self.model} -y -c {self._context_length} --parallel 1"
+        )
+        try:
+            result = await asyncio.to_thread(
+                subprocess.run,
+                [
+                    lms, "load", self.model, "-y",
+                    "-c", str(self._context_length),
+                    "--parallel", "1",
+                ],
+                capture_output=True, text=True, timeout=300,
+                encoding="utf-8", errors="replace",
+            )
+            if result.returncode == 0:
+                logger.info(f"Model {self.model} loaded successfully")
+                return True
+            logger.error(
+                f"lms load failed (code {result.returncode}): "
+                f"{result.stderr[:300]}"
+            )
+            return False
+        except subprocess.TimeoutExpired:
+            logger.error("lms load timed out after 300s")
+            return False
+        except Exception as e:
+            logger.error(f"lms load failed: {e}")
+            return False
+
+    async def unload_model(self) -> bool:
+        """Unload the current model via ``lms unload`` to free VRAM."""
+        lms = shutil.which("lms")
+        if not lms:
+            logger.warning("lms CLI not found in PATH — cannot unload model")
+            return False
+
+        logger.info(f"Running: {lms} unload --all")
+        try:
+            result = await asyncio.to_thread(
+                subprocess.run,
+                [lms, "unload", "--all"],
+                capture_output=True, text=True, timeout=30,
+                encoding="utf-8", errors="replace",
+            )
+            output = (result.stdout + result.stderr).strip()
+            if result.returncode == 0:
+                logger.info(f"Model unloaded successfully: {output}")
+                return True
+            logger.warning(
+                f"lms unload failed (code {result.returncode}): {output}"
+            )
+            return False
+        except Exception as e:
+            logger.warning(f"lms unload failed: {e}")
+            return False
+
+    async def reload_model(self) -> bool:
+        """Reload the model after unloading."""
+        return await self._load_model_via_cli()
 
     @lm_studio_retry
     async def generate(
@@ -150,6 +255,7 @@ class LMStudioClient:
         messages: list[dict],
         model: str | None = None,
         temperature: float | None = None,
+        max_tokens: int = 16384,
     ) -> str:
         """
         Generate a streaming response from LM Studio.
@@ -158,10 +264,14 @@ class LMStudioClient:
             messages: Chat messages in format [{"role": "user", "content": "..."}]
             model:    Model override (defaults to self.model)
             temperature: Sampling temperature (0.0 = deterministic). None = server default.
+            max_tokens:  Hard cap on output tokens. Prevents infinite generation.
 
         Returns:
             Full accumulated response text.
         """
+        if self._gpu_guard:
+            await self._gpu_guard.preflight()
+
         model = model or self.model
         logger.info(f"LMStudio.generate: model={model}, messages={len(messages)}")
 
@@ -171,6 +281,7 @@ class LMStudioClient:
             "model": model,
             "messages": messages,
             "stream": True,
+            "max_tokens": max_tokens,
             "extra_body": {
                 "chat_template_kwargs": {"enable_thinking": False},
             },
@@ -182,6 +293,8 @@ class LMStudioClient:
             delta = chunk.choices[0].delta if chunk.choices else None
             if delta and delta.content:
                 accumulated.append(delta.content)
+            if self._gpu_guard:
+                await self._gpu_guard.maybe_throttle()
 
         result = "".join(accumulated)
         elapsed = time.monotonic() - t0
@@ -230,6 +343,9 @@ class LMStudioClient:
         Returns:
             AgentMessage with .tool_calls or .content
         """
+        if self._gpu_guard:
+            await self._gpu_guard.preflight()
+
         model = model or self.model
         openai_tools = [_callable_to_openai_tool(fn) for fn in tools]
         logger.info(

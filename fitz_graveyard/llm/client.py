@@ -53,6 +53,11 @@ class OllamaClient:
         self._call_metrics: list[dict] = []
 
     @property
+    def context_size(self) -> int:
+        """Context window size in tokens (Ollama default: 128K)."""
+        return 131072
+
+    @property
     def fast_model(self) -> str:
         """Model name for fast/screening tasks (same as primary for Ollama)."""
         return self.model
@@ -108,6 +113,7 @@ class OllamaClient:
         messages: list[dict],
         model: str | None = None,
         temperature: float | None = None,
+        max_tokens: int = 16384,
     ) -> str:
         """
         Generate a response from Ollama with streaming.
@@ -116,6 +122,7 @@ class OllamaClient:
             messages: Chat messages in format [{"role": "user", "content": "..."}]
             model: Model to use (defaults to self.model)
             temperature: Sampling temperature (0.0 = deterministic). None = server default.
+            max_tokens: Hard cap on output tokens (Ollama: num_predict).
 
         Returns:
             Full accumulated response text.
@@ -129,12 +136,12 @@ class OllamaClient:
         # Stream response and accumulate
         t0 = time.monotonic()
         accumulated = []
-        options = {}
+        options: dict = {"num_predict": max_tokens}
         if temperature is not None:
             options["temperature"] = temperature
         async for chunk in await self.client.chat(
             model=model, messages=messages, stream=True,
-            options=options if options else None,
+            options=options,
         ):
             if content := chunk.get("message", {}).get("content"):
                 accumulated.append(content)

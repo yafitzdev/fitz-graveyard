@@ -1,0 +1,19 @@
+You are helping retrieve relevant source code files for a software engineering task.
+
+TASK: {job_description}
+
+Do two things:
+
+1. QUERY EXPANSION: List 10-15 alternative search terms, synonyms, and related technical keywords that would appear in source code relevant to this task. Include function names, variable names, class names, and API patterns. One per line.
+
+2. HYPOTHETICAL CODE: Write a short hypothetical Python file (50-100 lines) that would be relevant to implementing this task. Use realistic class names, function names, imports, and variable names that would appear in a real codebase. This is for lexical matching — use specific, concrete vocabulary.
+
+Format your response exactly as:
+
+TERMS:
+<one term per line>
+
+HYPOTHETICAL:
+```python
+<hypothetical code>
+```

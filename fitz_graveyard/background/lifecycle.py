@@ -5,16 +5,21 @@ Server lifecycle management.
 Coordinates startup (DB initialization + crash recovery + worker) and shutdown.
 """
 
+from __future__ import annotations
+
 import logging
+from typing import TYPE_CHECKING
 
 from fitz_graveyard.background.signals import setup_signal_handlers
 from fitz_graveyard.background.worker import BackgroundWorker
 from fitz_graveyard.config.schema import FitzPlannerConfig
-from fitz_graveyard.llm.client import OllamaClient
 from fitz_graveyard.llm.factory import create_llm_client
 from fitz_graveyard.llm.llama_cpp import LlamaCppClient
 from fitz_graveyard.llm.lm_studio import LMStudioClient
 from fitz_graveyard.models.sqlite_store import SQLiteJobStore
+
+if TYPE_CHECKING:
+    from fitz_graveyard.llm.client import OllamaClient
 
 logger = logging.getLogger(__name__)
 

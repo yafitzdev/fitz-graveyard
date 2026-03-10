@@ -1,24 +1,24 @@
 # fitz_graveyard/planning/agent/gatherer.py
 """
-AgentContextGatherer — BM25 + per-file LLM confirm screening pipeline.
+AgentContextGatherer — Multi-signal retrieval pipeline.
 
 Pipeline:
-  Pass 1:  Map            (pure Python — pathlib walk, build file list)
-  Pass 2:  BM25 screen    (pure Python — score all files, dynamic top-K)
-  Pass 3:  LLM confirm    (per-file mid-model YES/NO on BM25 shortlist)
-  Pass 4:  Import expand  (pure Python — BFS depth 2, both directions)
-  Pass 5:  Read raw source (pure Python — stuff actual source into context)
+  Pass 1:  Map              (pure Python — pathlib walk, build file list)
+  Pass 2:  Query expand      (LLM — generate search terms + HyDE code)
+  Pass 3:  Structural scan   (LLM — review structural index for relevant files)
+  Pass 4:  BM25 screen       (pure Python — expanded query against all files)
+  Pass 5:  Embedding recall   (sentence-transformers — semantic similarity)
+  Pass 6:  Cross-encoder rerank (sentence-transformers — rerank merged candidates)
+  Pass 7:  Import expand      (pure Python — BFS depth 2, both directions)
+  Pass 8:  Neighbor expand    (pure Python — same-directory files)
+  Pass 9:  Read raw source    (pure Python — stuff into context)
 
-BM25 prefilters a dynamic top-K shortlist (scales with codebase size, default
-~200 for 25 max_summary_files). Per-file LLM screening confirms candidates.
-Import expansion then chases imports recursively (depth 2, forward + reverse)
-to catch architecturally central files that lack task keywords. Raw source is
-stuffed directly into the planning context — no summarization or synthesis.
-Files sorted by import connectivity; truncated at a char budget so they fit
-in the reasoning model's context window.
+Two LLM calls total (query expand, structural scan).
+Structural scan hits are protected — they always survive to final selection.
+Embedding and reranking use lightweight in-process models (~360MB VRAM total).
+Falls back to BM25 if sentence-transformers is unavailable.
 """
 
-import asyncio
 import json
 import logging
 import math
@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any
 from fitz_graveyard.planning.agent.indexer import (
     INDEXABLE_EXTENSIONS,
     build_import_graph,
+    build_structural_index,
     extract_interface_signatures,
     extract_library_signatures,
 )
@@ -68,25 +69,47 @@ _STOPWORDS = frozenset({
 })
 
 # File extensions excluded from BM25 scoring (too text-dense, drown out code).
-# These files are still indexed and can be discovered via import expansion.
 _BM25_SKIP_EXTS = frozenset({".md"})
 
-# Concurrency limit for per-file LLM screening calls
-_SCREEN_CONCURRENCY = 10
+# Maximum chars of file content for embedding / reranking input
+_EMBED_MAX_CHARS = 4000
+
+# Maximum candidates sent to cross-encoder reranking
+_MAX_CANDIDATES_FOR_RERANK = 200
+
+# Cross-encoder reranking output size
+_RERANK_TOP_K = 20
+
+# Neighbor expansion: screen siblings via LLM if a directory adds more than this many
+_NEIGHBOR_SCREEN_THRESHOLD = 10
+
+# VRAM headroom (MB) required to keep LLM loaded during embedding/reranking.
+# Embedding (~275MB) + reranker (~85MB) + working memory ≈ 2GB total.
+# 6GB threshold gives comfortable margin for CUDA context overhead.
+_VRAM_HEADROOM_MB = 6_000
+
+# Budget-aware file inclusion for raw_summaries.
+# Files are added to the prompt in priority order until budget is full.
+# Remaining files stay in file_contents for read_file tool access.
+# Budget = context_size_tokens * _CHARS_PER_TOKEN * _RAW_BUDGET_FRACTION
+_CHARS_PER_TOKEN = 4
+_RAW_BUDGET_FRACTION = 0.4
+
 
 
 class AgentContextGatherer:
     """
-    BM25 + LLM confirm pipeline to gather codebase context.
+    Multi-signal retrieval pipeline to gather codebase context.
 
-    BM25 scores all files for keyword relevance (pure Python, milliseconds),
-    then per-file LLM calls confirm the shortlist. Raw source of selected
-    files is stuffed into context. No summarization, no synthesis.
+    Combines BM25 keyword search, embedding-based semantic search,
+    structural index scanning, cross-encoder reranking, and LLM
+    judgment to select the most relevant files for a planning task.
     """
 
     def __init__(self, config: "AgentConfig", source_dir: str) -> None:
         self._config = config
         self._source_dir = source_dir
+        self._file_cache: dict[str, str] = {}
 
     async def gather(
         self,
@@ -95,7 +118,7 @@ class AgentContextGatherer:
         progress_callback: Callable[[float, str], None] | None = None,
     ) -> dict[str, str]:
         """
-        Run the BM25 + LLM confirm pipeline and return context dict.
+        Run the multi-signal retrieval pipeline and return context dict.
 
         Returns:
             Dict with "synthesized", "raw_summaries", and "agent_files".
@@ -107,117 +130,414 @@ class AgentContextGatherer:
             logger.info("Agent context gathering disabled by config")
             return empty
 
-        mid = self._config.agent_model or client.mid_model
+        smart = self._config.agent_model or client.smart_model
+        t_pipeline = time.monotonic()
 
         try:
             # Pass 1: Map (pure Python)
             await self._report(progress_callback, 0.06, "agent:mapping")
+            t0 = time.monotonic()
             _file_tree, file_paths = self._build_file_tree()
             if not file_paths:
                 logger.info("AgentContextGatherer: empty or invalid source dir")
                 return empty
 
+            # Pre-warm file cache (single pass over disk)
+            for p in file_paths:
+                self._read_file_content(p)
+
             logger.info(
-                f"AgentContextGatherer: mapped {len(file_paths)} files"
+                f"AgentContextGatherer: mapped {len(file_paths)} files, "
+                f"cached {len(self._file_cache)} "
+                f"({time.monotonic() - t0:.1f}s)"
             )
 
-            # Pass 2: BM25 screen (pure Python)
-            await self._report(progress_callback, 0.062, "agent:screening")
-            # Dynamic top-K: scale with codebase size
-            # Small codebases (<100 files): take ~50% of files
-            # Medium (100-500): ~30%
-            # Large (500+): cap at max_summary_files * 8 (default 200)
-            dynamic_k = max(
-                self._config.max_summary_files * 8,
-                len(file_paths) // 3,
+            # Pass 2: Query expansion + HyDE (1 LLM call)
+            await self._report(progress_callback, 0.062, "agent:expanding_query")
+            t0 = time.monotonic()
+            expanded_terms, hyde_code = await self._expand_query(
+                client, smart, job_description,
             )
-            top_k = min(dynamic_k, len(file_paths))
+            expanded_query = f"{job_description} {expanded_terms}"
+            logger.info(
+                f"AgentContextGatherer: query expanded — "
+                f"{len(expanded_terms.splitlines())} terms, "
+                f"{len(hyde_code)} chars HyDE "
+                f"({time.monotonic() - t0:.1f}s)"
+            )
+
+            # Pass 3: Structural index scan (1 LLM call)
+            await self._report(progress_callback, 0.065, "agent:scanning_index")
+            t0 = time.monotonic()
+            structural_index = build_structural_index(
+                self._source_dir, file_paths, self._config.max_file_bytes,
+            )
+            scan_hits = await self._structural_scan(
+                client, smart, structural_index, job_description,
+            )
+            # Filter scan hits to only valid paths
+            valid_paths_set = set(file_paths)
+            scan_hits = [p for p in scan_hits if p in valid_paths_set]
+            logger.info(
+                f"AgentContextGatherer: structural scan found "
+                f"{len(scan_hits)} files ({time.monotonic() - t0:.1f}s)"
+            )
+
+            # Pass 4: BM25 screen with expanded query (pure Python)
+            await self._report(progress_callback, 0.068, "agent:bm25")
+            t0 = time.monotonic()
+            bm25_top_k = min(200, len(file_paths))
             bm25_candidates, bm25_scores = self._bm25_screen(
-                file_paths, job_description, top_k,
+                file_paths, expanded_query, bm25_top_k,
             )
-
-            if not bm25_candidates:
-                logger.info("AgentContextGatherer: BM25 found no candidates")
-                return empty
-
             logger.info(
-                f"AgentContextGatherer: BM25 selected {len(bm25_candidates)} "
-                f"candidates from {len(file_paths)} files "
-                f"(top score: {bm25_scores[0]:.2f}, "
-                f"cutoff: {bm25_scores[-1]:.2f})"
+                f"AgentContextGatherer: BM25 selected "
+                f"{len(bm25_candidates)} candidates "
+                f"({time.monotonic() - t0:.1f}s)"
             )
 
-            # Pass 3: Per-file LLM confirm (mid model, parallel)
-            await self._report(progress_callback, 0.068, "agent:confirming")
-            relevant = await self._screen_all(
-                client, mid, bm25_candidates, job_description,
-                progress_callback=progress_callback,
-            )
+            # VRAM router: if >= 6GB free, keep LLM loaded during
+            # embedding/reranking (~360MB). Otherwise unload first.
+            llm_unloaded = False
+            unload = getattr(client, "unload_model", None)
+            if unload is not None:
+                from fitz_graveyard.llm.gpu_monitor import GPUTemperatureGuard
+                free_mb = GPUTemperatureGuard.get_free_vram_mb()
+                if free_mb is not None and free_mb >= _VRAM_HEADROOM_MB:
+                    logger.info(
+                        f"AgentContextGatherer: {free_mb} MB VRAM free "
+                        f"(>= {_VRAM_HEADROOM_MB} MB), keeping LLM loaded"
+                    )
+                else:
+                    reason = (
+                        f"{free_mb} MB free" if free_mb is not None
+                        else "VRAM unknown"
+                    )
+                    logger.info(
+                        f"AgentContextGatherer: {reason} "
+                        f"(< {_VRAM_HEADROOM_MB} MB), unloading LLM"
+                    )
+                    await self._report(
+                        progress_callback, 0.069, "agent:unloading_llm",
+                    )
+                    llm_unloaded = await unload()
 
-            if not relevant:
-                logger.info(
-                    "AgentContextGatherer: LLM confirm rejected all, "
-                    "falling back to BM25 top results"
+            # Pass 5: Embedding recall (if sentence-transformers available)
+            embedding_candidates: list[str] = []
+            try:
+                await self._report(progress_callback, 0.070, "agent:embedding")
+                t0 = time.monotonic()
+                embedding_candidates = self._embedding_recall(
+                    file_paths, job_description, hyde_code,
+                    top_k=100,
                 )
-                relevant = bm25_candidates[:self._config.max_summary_files]
+                logger.info(
+                    f"AgentContextGatherer: embedding recall found "
+                    f"{len(embedding_candidates)} candidates "
+                    f"({time.monotonic() - t0:.1f}s)"
+                )
+            except ImportError:
+                logger.info(
+                    "AgentContextGatherer: sentence-transformers not installed, "
+                    "skipping embedding recall"
+                )
+            except MemoryError as e:
+                logger.warning(
+                    f"AgentContextGatherer: skipping embedding — {e}"
+                )
+            except Exception:
+                logger.warning(
+                    "AgentContextGatherer: embedding recall failed",
+                    exc_info=True,
+                )
 
+            # Merge candidates from all signals
+            merged = self._merge_candidates(
+                bm25_candidates, embedding_candidates, scan_hits, file_paths,
+            )
             logger.info(
-                f"AgentContextGatherer: confirmed {len(relevant)} "
-                f"relevant files: " + ", ".join(relevant)
+                f"AgentContextGatherer: merged {len(merged)} unique candidates "
+                f"(BM25={len(bm25_candidates)}, embed={len(embedding_candidates)}, "
+                f"scan={len(scan_hits)})"
             )
 
-            # Pass 4: Import expansion (pure Python, BFS depth 2, both directions)
-            expanded = self._import_expand(relevant, file_paths)
-            import_added = len(expanded) - len(relevant)
+            # Pass 6: Cross-encoder rerank (if sentence-transformers available)
+            reranked = merged
+            try:
+                if len(merged) > _RERANK_TOP_K:
+                    await self._report(
+                        progress_callback, 0.073, "agent:reranking",
+                    )
+                    t0 = time.monotonic()
+                    reranked = self._rerank_candidates(
+                        merged, job_description, top_k=_RERANK_TOP_K,
+                    )
+                    logger.info(
+                        f"AgentContextGatherer: reranked to "
+                        f"{len(reranked)} files "
+                        f"({time.monotonic() - t0:.1f}s)"
+                    )
+            except ImportError:
+                logger.info(
+                    "AgentContextGatherer: sentence-transformers not installed, "
+                    "skipping reranking"
+                )
+            except MemoryError as e:
+                logger.warning(
+                    f"AgentContextGatherer: skipping reranking — {e}"
+                )
+            except Exception:
+                logger.warning(
+                    "AgentContextGatherer: reranking failed",
+                    exc_info=True,
+                )
+
+            # Reload LLM if it was unloaded
+            if llm_unloaded:
+                await self._report(progress_callback, 0.075, "agent:reloading_llm")
+                reload = getattr(client, "reload_model", None)
+                if reload is not None:
+                    await reload()
+
+            # Build import graph once (reused by import expansion + read raw source)
+            forward_map, _module_lookup = build_import_graph(
+                self._source_dir, file_paths, self._config.max_file_bytes,
+            )
+
+            # Pass 7: Import expansion (scan hits only — reranked files are
+            # noisy keyword matches whose imports cascade into irrelevant code)
+            scan_expanded = self._import_expand(scan_hits, file_paths, forward_map)
+            import_added = len(scan_expanded) - len(scan_hits)
             if import_added > 0:
                 logger.info(
                     f"AgentContextGatherer: import expansion added "
-                    f"{import_added} files"
+                    f"{import_added} files (from {len(scan_hits)} scan hits)"
                 )
-
-            # Prioritize code files over docs, then cap
-            selected = self._prioritize_for_summary(expanded)
-            if len(selected) > self._config.max_summary_files:
-                logger.info(
-                    f"AgentContextGatherer: capping {len(selected)} relevant "
-                    f"to {self._config.max_summary_files} for summarization"
-                )
-                selected = selected[:self._config.max_summary_files]
-
-            # Pass 5: Read raw source (pure Python, no LLM)
-            await self._report(progress_callback, 0.074, "agent:reading")
-            raw_source, included, fwd_map, rev_count = self._read_raw_source(
-                selected, file_paths,
+            # Merge: scan hits + their imports first (high-confidence), then reranked
+            expanded_set = set(scan_expanded)
+            expanded = list(scan_expanded)
+            for path in reranked:
+                if path not in expanded_set:
+                    expanded_set.add(path)
+                    expanded.append(path)
+            logger.info(
+                f"AgentContextGatherer: combined {len(expanded)} candidates "
+                f"(scan+imports={len(scan_expanded)}, reranked={len(reranked)})"
             )
 
-            if not raw_source:
+            # Pass 8: Neighbor expansion (pure Python, same-directory files)
+            # Only expand from high-confidence sources: scan hits (LLM-picked
+            # from structural index) and files import-reachable from scan hits
+            # (structurally connected). BM25/embedding-only hits are noisy
+            # keyword matches that would expand irrelevant directories.
+            await self._report(progress_callback, 0.078, "agent:neighbor_expand")
+            high_confidence = self._import_reachable(
+                scan_hits, forward_map, set(expanded),
+            )
+            neighbor_expanded = self._neighbor_expand(
+                expanded, file_paths, expand_from=high_confidence,
+            )
+            neighbor_added = len(neighbor_expanded) - len(expanded)
+            if neighbor_added > 0:
+                logger.info(
+                    f"AgentContextGatherer: neighbor expansion added "
+                    f"{neighbor_added} files (from {len(high_confidence)} "
+                    f"high-confidence triggers)"
+                )
+
+            # Pass 8b: Screen large-directory neighbors (1 LLM call per large dir)
+            screened = await self._screen_neighbors(
+                client, smart, job_description, expanded, neighbor_expanded,
+            )
+            screen_removed = len(neighbor_expanded) - len(screened)
+            if screen_removed > 0:
+                logger.info(
+                    f"AgentContextGatherer: neighbor screening removed "
+                    f"{screen_removed} irrelevant siblings"
+                )
+
+            selected = self._prioritize_for_summary(screened)
+
+            # Pass 9: Read selected files + compress for planning context
+            await self._report(progress_callback, 0.080, "agent:reading")
+            file_contents, included = self._read_selected_files(selected)
+
+            if not file_contents:
                 logger.warning("AgentContextGatherer: no readable source files")
                 return empty
 
-            logger.info(
-                f"AgentContextGatherer: stuffed {len(included)}/{len(selected)} "
-                f"files ({len(raw_source)} chars) into context"
+            # Build structural overview (compact, covers ALL selected files)
+            selected_index = build_structural_index(
+                self._source_dir, included, self._config.max_file_bytes,
             )
-            # Serialize forward_map for JSON compatibility
-            serializable_fwd = {k: sorted(v) for k, v in fwd_map.items()}
+            signatures = extract_interface_signatures(
+                self._source_dir, included, self._config.max_file_bytes,
+            )
+            lib_sigs = extract_library_signatures(
+                self._source_dir, included, file_paths,
+                self._config.max_file_bytes,
+            )
+
+            overview_parts: list[str] = []
+            if signatures:
+                overview_parts.append(
+                    "--- INTERFACE SIGNATURES (auto-extracted, ground truth) ---\n"
+                    + signatures
+                )
+            if lib_sigs:
+                overview_parts.append(
+                    "--- LIBRARY API REFERENCE (installed packages, ground truth) ---\n"
+                    + lib_sigs
+                )
+            overview_parts.append(
+                "--- STRUCTURAL OVERVIEW (all selected files) ---\n"
+                + selected_index
+            )
+            structural_overview = "\n\n".join(overview_parts)
+
+            # Compress file contents for planning context.
+            # AST-based: strips docstrings, comments, collapses long bodies.
+            # Structural index was built from raw disk files (unaffected).
+            from fitz_graveyard.planning.agent.compressor import compress_file
+
+            raw_chars = sum(len(c) for c in file_contents.values())
+            file_contents = {
+                path: compress_file(content, path)
+                for path, content in file_contents.items()
+            }
+            comp_chars = sum(len(c) for c in file_contents.values())
+            logger.info(
+                f"AgentContextGatherer: compressed {len(file_contents)} files "
+                f"({raw_chars} -> {comp_chars} chars, "
+                f"{100 * (1 - comp_chars / raw_chars):.0f}% reduction)"
+            )
+
+            # Budget-aware file inclusion for raw_summaries.
+            # Files are added in priority order (scan hits first, then reranked)
+            # until the budget is full. Remaining files stay in file_contents
+            # for on-demand access via the read_file tool during reasoning.
+            context_tokens = getattr(client, "context_size", 65536)
+            source_budget = int(
+                context_tokens * _CHARS_PER_TOKEN * _RAW_BUDGET_FRACTION
+            )
+
+            # Structural overview is always included (compact, ground truth)
+            raw_summaries = structural_overview
+            budget_remaining = source_budget - len(structural_overview)
+
+            # Priority order: scan hits first (LLM-picked from index),
+            # then rest of included files in retrieval order
+            scan_set = set(scan_hits)
+            priority_files: list[str] = list(scan_hits)
+            for path in included:
+                if path not in scan_set:
+                    priority_files.append(path)
+
+            included_in_prompt: list[str] = []
+            deferred_to_tool: list[str] = []
+
+            for path in priority_files:
+                if path not in file_contents:
+                    continue
+                block = f"### {path}\n```\n{file_contents[path]}\n```"
+                block_size = len(block) + 4  # separators
+                if budget_remaining >= block_size:
+                    included_in_prompt.append(block)
+                    budget_remaining -= block_size
+                else:
+                    deferred_to_tool.append(path)
+
+            if included_in_prompt:
+                raw_summaries += (
+                    "\n\n--- FULL SOURCE (priority-ordered, budget-aware) ---\n\n"
+                    + "\n\n".join(included_in_prompt)
+                )
+
+            budget_used = source_budget - budget_remaining
+            if deferred_to_tool:
+                logger.info(
+                    f"AgentContextGatherer: {len(included_in_prompt)} files "
+                    f"in prompt, {len(deferred_to_tool)} deferred to read_file "
+                    f"(budget {source_budget} chars, used {budget_used})"
+                )
+            else:
+                logger.info(
+                    f"AgentContextGatherer: all {len(included_in_prompt)} files "
+                    f"fit in prompt (budget {source_budget} chars, used {budget_used})"
+                )
+
+            # Compute reverse import counts for diagnostics
+            reverse_count: dict[str, int] = {}
+            for deps in forward_map.values():
+                for dep in deps:
+                    reverse_count[dep] = reverse_count.get(dep, 0) + 1
+
+            # Build per-file provenance for traceability.
+            # For each included file, record which retrieval signals found it.
+            scan_set = set(scan_hits)
+            bm25_set = set(bm25_candidates)
+            embed_set = set(embedding_candidates)
+            rerank_set = set(reranked)
+            import_set = set(scan_expanded) - scan_set
+            neighbor_set = set(neighbor_expanded) - set(expanded)
+            prompt_set = set()
+            for block in included_in_prompt:
+                # blocks are "### path\n```\n...\n```"
+                first_line = block.split("\n", 1)[0]
+                if first_line.startswith("### "):
+                    prompt_set.add(first_line[4:])
+
+            file_provenance: dict[str, dict] = {}
+            for path in included:
+                signals: list[str] = []
+                if path in scan_set:
+                    signals.append("scan")
+                if path in bm25_set:
+                    signals.append("bm25")
+                if path in embed_set:
+                    signals.append("embed")
+                if path in rerank_set:
+                    signals.append("rerank")
+                if path in import_set:
+                    signals.append("import")
+                if path in neighbor_set:
+                    signals.append("neighbor")
+                file_provenance[path] = {
+                    "signals": signals,
+                    "in_prompt": path in prompt_set,
+                }
+
+            t_total = time.monotonic() - t_pipeline
+            logger.info(
+                f"AgentContextGatherer: {len(included)} files "
+                f"({comp_chars} chars compressed, "
+                f"{len(structural_overview)} chars overview) — "
+                f"pipeline total {t_total:.1f}s"
+            )
+            serializable_fwd = {k: sorted(v) for k, v in forward_map.items()}
             return {
-                "synthesized": raw_source,
-                "raw_summaries": raw_source,
+                "synthesized": structural_overview,
+                "raw_summaries": raw_summaries,
+                "file_contents": file_contents,
                 "agent_files": {
                     "total_screened": len(file_paths),
-                    "bm25_candidates": bm25_candidates,
-                    "relevant": relevant,
-                    "import_expanded": import_added,
+                    "bm25_candidates": bm25_candidates[:20],
+                    "scan_hits": scan_hits,
+                    "embedding_candidates": embedding_candidates[:20],
+                    "reranked": reranked[:20],
                     "selected": selected,
                     "included": included,
                     "forward_map": serializable_fwd,
-                    "reverse_count": rev_count,
+                    "reverse_count": reverse_count,
+                    "file_provenance": file_provenance,
                 },
             }
 
         except Exception:
             logger.exception("AgentContextGatherer: pipeline failed")
             return empty
+        finally:
+            self._file_cache.clear()
 
     # ------------------------------------------------------------------
     # Pass 1: Map
@@ -272,27 +592,99 @@ class AgentContextGatherer:
     @staticmethod
     def _should_skip_dir(name: str) -> bool:
         """Check if a directory name should be skipped."""
-        return name in _SKIP_DIRS
+        return name in _SKIP_DIRS or name.startswith(".")
 
     # ------------------------------------------------------------------
-    # Pass 2: BM25 screen
+    # Pass 2: Query expansion + HyDE
+    # ------------------------------------------------------------------
+
+    async def _expand_query(
+        self,
+        client: Any,
+        model: str,
+        job_description: str,
+    ) -> tuple[str, str]:
+        """LLM query expansion: generate search terms + hypothetical code.
+
+        Returns (terms_text, hyde_code). Empty strings on failure.
+        """
+        prompt = load_prompt("agent_expand").format(
+            job_description=job_description,
+        )
+        try:
+            response = await client.generate(
+                messages=[{"role": "user", "content": prompt}],
+                model=model,
+                temperature=0,
+            )
+            return self._parse_expand_response(response)
+        except Exception:
+            logger.warning(
+                "AgentContextGatherer: query expansion failed", exc_info=True,
+            )
+            return "", ""
+
+    # ------------------------------------------------------------------
+    # Pass 3: Structural index scan
+    # ------------------------------------------------------------------
+
+    async def _structural_scan(
+        self,
+        client: Any,
+        model: str,
+        structural_index: str,
+        job_description: str,
+    ) -> list[str]:
+        """LLM scan of structural index to find relevant files.
+
+        Returns list of file paths. Empty list on failure.
+        """
+        prompt = load_prompt("agent_scan").format(
+            job_description=job_description,
+            structural_index=structural_index,
+        )
+        try:
+            response = await client.generate(
+                messages=[{"role": "user", "content": prompt}],
+                model=model,
+                temperature=0,
+            )
+            files = self._parse_file_list(response)
+            return files if files is not None else []
+        except Exception:
+            logger.warning(
+                "AgentContextGatherer: structural scan failed", exc_info=True,
+            )
+            return []
+
+    # ------------------------------------------------------------------
+    # Pass 4: BM25 screen
     # ------------------------------------------------------------------
 
     def _read_file_content(self, rel_path: str) -> str:
-        """Read file content, returning empty string on failure."""
+        """Read file content with caching, returning empty string on failure."""
+        cached = self._file_cache.get(rel_path)
+        if cached is not None:
+            return cached
+
         try:
             resolved = sanitize_agent_path(rel_path, self._source_dir)
         except ValueError:
+            self._file_cache[rel_path] = ""
             return ""
 
         if not resolved.is_file():
+            self._file_cache[rel_path] = ""
             return ""
 
         try:
             raw = resolved.read_bytes()[:self._config.max_file_bytes]
-            return raw.decode("utf-8", errors="replace")
+            content = raw.decode("utf-8", errors="replace")
         except OSError:
-            return ""
+            content = ""
+
+        self._file_cache[rel_path] = content
+        return content
 
     def _bm25_screen(
         self,
@@ -377,133 +769,192 @@ class AgentContextGatherer:
         return [p for p, _ in top], [s for _, s in top]
 
     # ------------------------------------------------------------------
-    # Pass 3: Per-file LLM confirm (batched in pairs)
+    # Pass 5: Embedding recall
     # ------------------------------------------------------------------
 
-    async def _screen_file(
+    def _embedding_recall(
         self,
-        client: Any,
-        model: str,
-        rel_path: str,
+        file_paths: list[str],
         job_description: str,
-    ) -> tuple[str, bool]:
-        """Screen a single file with one LLM call.
+        hyde_code: str,
+        top_k: int = 100,
+    ) -> list[str]:
+        """Semantic file retrieval using sentence-transformers embeddings.
 
-        Returns (path, is_relevant). On failure, returns not relevant.
+        Encodes query + HyDE code and all file contents, returns top-K
+        by cosine similarity. Raises ImportError if sentence-transformers
+        is not installed.
         """
-        content = self._read_file_content(rel_path)
-        if not content.strip():
-            return (rel_path, False)
+        import numpy as np
 
-        prompt = load_prompt("agent_screen").format(
-            job_description=job_description,
-            file_blocks=f"FILE: {rel_path}\n\nCONTENT:\n{content}",
-        )
+        from fitz_graveyard.planning.agent.models import EmbeddingModel
 
+        embedder = EmbeddingModel()
         try:
-            response = await client.generate(
-                messages=[{"role": "user", "content": prompt}],
-                model=model,
-                temperature=0,
-            )
-            upper = response.strip().upper()
-            return (rel_path, "YES" in upper)
-        except Exception:
-            return (rel_path, False)
+            embedder.load(self._config.embedding_model)
 
-    async def _screen_all(
+            is_nomic = "nomic" in self._config.embedding_model.lower()
+            q_prefix = "search_query: " if is_nomic else ""
+            d_prefix = "search_document: " if is_nomic else ""
+
+            # Encode queries (original + HyDE)
+            queries = [f"{q_prefix}{job_description}"]
+            if hyde_code:
+                queries.append(f"{q_prefix}{hyde_code[:_EMBED_MAX_CHARS]}")
+            query_embs = embedder.encode(queries)
+
+            # Encode all file contents
+            doc_texts = []
+            valid_paths = []
+            for path in file_paths:
+                content = self._read_file_content(path)
+                if not content.strip():
+                    continue
+                doc_text = f"{d_prefix}{path}\n{content[:_EMBED_MAX_CHARS]}"
+                doc_texts.append(doc_text)
+                valid_paths.append(path)
+
+            if not doc_texts:
+                return []
+
+            doc_embs = embedder.encode(doc_texts)
+
+            # Cosine similarity (embeddings are normalized → dot product)
+            # Take max similarity across query representations
+            similarities = np.max(query_embs @ doc_embs.T, axis=0)
+
+            # Top-K by similarity
+            top_indices = np.argsort(similarities)[::-1][:top_k]
+            return [valid_paths[i] for i in top_indices if similarities[i] > 0]
+
+        finally:
+            embedder.unload()
+
+    # ------------------------------------------------------------------
+    # Merge + Pass 6: Cross-encoder rerank
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _merge_candidates(
+        bm25: list[str],
+        embedding: list[str],
+        scan: list[str],
+        all_paths: list[str],
+    ) -> list[str]:
+        """Merge and deduplicate candidates from all retrieval signals.
+
+        Order: scan hits first (LLM-selected from structural index),
+        then BM25 (keyword match), then embedding (semantic match).
+        Deduplication preserves first appearance.
+        """
+        seen: set[str] = set()
+        merged: list[str] = []
+        all_paths_set = set(all_paths)
+
+        for path in scan + bm25 + embedding:
+            if path not in seen and path in all_paths_set:
+                seen.add(path)
+                merged.append(path)
+
+        return merged[:_MAX_CANDIDATES_FOR_RERANK]
+
+    def _rerank_candidates(
         self,
-        client: Any,
-        model: str,
         candidates: list[str],
         job_description: str,
-        progress_callback: Callable[[float, str], None] | None = None,
+        top_k: int = 50,
     ) -> list[str]:
-        """Screen all candidates with per-file LLM calls (parallel)."""
-        sem = asyncio.Semaphore(_SCREEN_CONCURRENCY)
-        completed = 0
-        total = len(candidates)
+        """Cross-encoder reranking of merged candidates.
 
-        async def _bounded(rel_path: str) -> tuple[str, bool]:
-            nonlocal completed
-            async with sem:
-                t0 = time.monotonic()
-                results = await self._screen_file(
-                    client, model, rel_path, job_description,
-                )
-                elapsed = time.monotonic() - t0
-                completed += 1
-                if progress_callback:
-                    name = Path(rel_path).name
-                    phase = (
-                        f"agent:confirming:{completed}/{total} "
-                        f"{name} ({elapsed:.1f}s)"
-                    )
-                    prog = 0.068 + (completed / total) * 0.005
-                    await self._report(progress_callback, prog, phase)
-                return results
+        Raises ImportError if sentence-transformers is not installed.
+        """
+        from fitz_graveyard.planning.agent.models import RerankerModel
 
-        tasks = [_bounded(p) for p in candidates]
-        results = await asyncio.gather(*tasks)
-        return [path for path, relevant in results if relevant]
+        reranker = RerankerModel()
+        try:
+            reranker.load(self._config.reranker_model)
+
+            doc_texts = []
+            valid_paths = []
+            for path in candidates:
+                content = self._read_file_content(path)
+                if not content.strip():
+                    continue
+                doc_text = f"{path}\n{content[:_EMBED_MAX_CHARS]}"
+                doc_texts.append(doc_text)
+                valid_paths.append(path)
+
+            if not doc_texts:
+                return candidates
+
+            ranked = reranker.rank(job_description, doc_texts, top_k=top_k)
+            return [valid_paths[idx] for idx, _score in ranked]
+
+        finally:
+            reranker.unload()
 
     # ------------------------------------------------------------------
-    # Pass 4: Import expansion
+    # Pass 7: Import expansion
     # ------------------------------------------------------------------
 
     def _import_expand(
-        self, relevant: list[str], file_paths: list[str],
+        self,
+        relevant: list[str],
+        file_paths: list[str],
+        forward_map: dict[str, set[str]],
     ) -> list[str]:
-        """Recursive import expansion (BFS, depth 2, both directions).
+        """Forward-only import expansion, depth 1.
 
-        Traces forward imports ("file A imports B") and reverse imports
-        ("B is imported by A") from each relevant file. This catches
-        architecturally central files (e.g. base.py, protocols) that
-        are imported by relevant files but contain no task keywords,
-        AND files that depend on relevant files.
+        Traces forward imports ("file A imports B") from each relevant file.
+        This catches dependencies (e.g. base.py, protocols) that relevant
+        files import but that contain no task keywords.
+
+        Reverse imports ("B is imported by A") are excluded — hub files
+        like engine.py are imported by half the codebase, causing explosion.
 
         Args:
-            relevant: Paths the LLM marked as relevant.
+            relevant: Paths the pipeline marked as relevant.
             file_paths: All file paths in the codebase.
+            forward_map: Pre-computed {file: {imported_files}} from build_import_graph.
 
         Returns:
-            Merged list: relevant + newly discovered imports.
+            Merged list: relevant + newly discovered forward imports.
         """
-        forward_map, _module_lookup = build_import_graph(
-            self._source_dir, file_paths, self._config.max_file_bytes,
-        )
-
-        # Build reverse map: {file → set of files that import it}
-        reverse_map: dict[str, set[str]] = {}
-        for src, deps in forward_map.items():
-            for dep in deps:
-                reverse_map.setdefault(dep, set()).add(src)
-
-        # BFS both directions, depth 2
         relevant_set = set(relevant)
-        frontier = set(relevant)
-        for depth in range(2):
-            next_frontier: set[str] = set()
-            for rel_path in frontier:
-                # Forward: files this file imports
-                for dep in forward_map.get(rel_path, set()):
-                    if dep not in relevant_set:
-                        relevant_set.add(dep)
-                        next_frontier.add(dep)
-                # Reverse: files that import this file
-                for importer in reverse_map.get(rel_path, set()):
-                    if importer not in relevant_set:
-                        relevant_set.add(importer)
-                        next_frontier.add(importer)
-            frontier = next_frontier
-            if not frontier:
-                break
+        added: list[str] = []
+        for rel_path in relevant:
+            for dep in forward_map.get(rel_path, set()):
+                if dep not in relevant_set:
+                    relevant_set.add(dep)
+                    added.append(dep)
+
+        if added:
             logger.info(
-                f"AgentContextGatherer: import expand depth {depth + 1} "
-                f"added {len(frontier)} files"
+                f"AgentContextGatherer: import expand added {len(added)} files"
             )
 
-        return list(relevant) + sorted(relevant_set - set(relevant))
+        return list(relevant) + sorted(added)
+
+    @staticmethod
+    def _import_reachable(
+        seeds: list[str],
+        forward_map: dict[str, set[str]],
+        candidates: set[str],
+    ) -> list[str]:
+        """Return files from candidates that are forward-imported by seeds.
+
+        Forward-only, depth 1: "seed imports X" → X is reachable.
+        Reverse imports ("Y imports seed") are excluded — they explode
+        because hub files like engine.py are imported by half the codebase.
+        Always includes the seeds themselves.
+        """
+        reachable = set(seeds)
+        for path in seeds:
+            for dep in forward_map.get(path, set()):
+                if dep in candidates:
+                    reachable.add(dep)
+
+        return sorted(reachable)
 
     @staticmethod
     def _prioritize_for_summary(paths: list[str]) -> list[str]:
@@ -533,98 +984,198 @@ class AgentContextGatherer:
         return sorted(paths, key=_tier)
 
     # ------------------------------------------------------------------
-    # Pass 5: Read raw source
+    # Pass 8: Neighbor expansion
     # ------------------------------------------------------------------
 
-    def _read_raw_source(
-        self,
+    @staticmethod
+    def _neighbor_expand(
         selected: list[str],
         all_paths: list[str],
-    ) -> tuple[str, list[str], dict[str, set[str]], dict[str, int]]:
-        """Read actual source code of selected files into a context string.
+        expand_from: list[str] | None = None,
+    ) -> list[str]:
+        """Add sibling files immediately after a high-confidence trigger file.
 
-        Files are sorted by import connectivity (most-connected first)
-        so that architecturally central files survive budget truncation.
+        Only directories containing an ``expand_from`` file get expanded.
+        This prevents noisy BM25/embedding hits from pulling in entire
+        irrelevant directories. Siblings are inserted right after the
+        first trigger file in each directory.
+
+        Args:
+            selected:    All selected files (full list to output).
+            all_paths:   Every file in the codebase.
+            expand_from: Subset of selected that triggers expansion
+                         (default: all of selected for backwards compat).
+        """
+        triggers = expand_from if expand_from is not None else selected
+        selected_set = set(selected)
+
+        # Directories eligible for expansion (only from triggers)
+        expand_dirs: set[str] = set()
+        for path in triggers:
+            parent = str(PurePosixPath(path).parent)
+            if parent != ".":
+                expand_dirs.add(parent)
+
+        # Group all_paths by directory for fast lookup
+        dir_files: dict[str, list[str]] = {}
+        for path in all_paths:
+            if path in selected_set:
+                continue
+            parent = str(PurePosixPath(path).parent)
+            if parent in expand_dirs:
+                dir_files.setdefault(parent, []).append(path)
+
+        # Insert siblings right after the first trigger file in each dir
+        result: list[str] = []
+        expanded_dirs: set[str] = set()
+        for path in selected:
+            result.append(path)
+            parent = str(PurePosixPath(path).parent)
+            if parent in expand_dirs and parent not in expanded_dirs:
+                expanded_dirs.add(parent)
+                for sibling in dir_files.get(parent, []):
+                    result.append(sibling)
+
+        return result
+
+    async def _screen_neighbors(
+        self,
+        client: Any,
+        model: str,
+        job_description: str,
+        before_neighbors: list[str],
+        after_neighbors: list[str],
+    ) -> list[str]:
+        """LLM-screen neighbor siblings in large directories.
+
+        When a directory contributes more than ``_NEIGHBOR_SCREEN_THRESHOLD``
+        new siblings, asks the LLM which ones are actually relevant.
+        Directories below the threshold are kept as-is.
+
+        Args:
+            client:           LLM client.
+            model:            Model name for the screening call.
+            job_description:  Task description for relevance judgment.
+            before_neighbors: File list before neighbor expansion.
+            after_neighbors:  File list after neighbor expansion.
 
         Returns:
-            (raw_source_string, included_paths, forward_map, reverse_count)
+            Filtered file list with irrelevant large-directory siblings removed.
         """
-        # Compute import connectivity for prioritization
-        forward_map, _ = build_import_graph(
-            self._source_dir, all_paths, self._config.max_file_bytes,
-        )
-        reverse_count: dict[str, int] = {}
-        for deps in forward_map.values():
-            for dep in deps:
-                reverse_count[dep] = reverse_count.get(dep, 0) + 1
+        before_set = set(before_neighbors)
+        # Group new siblings by directory
+        dir_new: dict[str, list[str]] = {}
+        for path in after_neighbors:
+            if path not in before_set:
+                parent = str(PurePosixPath(path).parent)
+                dir_new.setdefault(parent, []).append(path)
 
-        def _connectivity(path: str) -> int:
-            return len(forward_map.get(path, set())) + reverse_count.get(path, 0)
+        # Find directories that need screening
+        large_dirs = {
+            d: files for d, files in dir_new.items()
+            if len(files) > _NEIGHBOR_SCREEN_THRESHOLD
+        }
+        if not large_dirs:
+            return after_neighbors
 
-        # Sort: most-connected first (survives truncation)
-        sorted_files = sorted(selected, key=_connectivity, reverse=True)
+        # Screen each large directory with one LLM call
+        prompt_template = load_prompt("agent_neighbor_screen")
+        remove: set[str] = set()
 
-        budget = self._config.max_context_chars
-        blocks: list[str] = []
-        included: list[str] = []
-        used = 0
+        for parent_dir, siblings in large_dirs.items():
+            # Find the trigger file (first file in before_neighbors from this dir)
+            trigger = ""
+            for path in before_neighbors:
+                if str(PurePosixPath(path).parent) == parent_dir:
+                    trigger = path
+                    break
+            if not trigger:
+                continue
 
-        for rel_path in sorted_files:
+            # Build sibling list with brief descriptions
+            sibling_lines = []
+            for sib in siblings:
+                desc = self._brief_description(sib)
+                sibling_lines.append(f"- {sib}{desc}")
+
+            prompt = prompt_template.format(
+                job_description=job_description,
+                trigger_file=trigger,
+                sibling_list="\n".join(sibling_lines),
+            )
+
             try:
-                resolved = sanitize_agent_path(rel_path, self._source_dir)
-            except ValueError:
-                continue
-            if not resolved.is_file():
-                continue
-            try:
-                raw = resolved.read_bytes()[:self._config.max_file_bytes]
-                content = raw.decode("utf-8", errors="replace")
-            except OSError:
-                continue
-            if not content.strip():
-                continue
-
-            block = f"### {rel_path}\n```\n{content}\n```"
-            if used + len(block) > budget:
-                logger.info(
-                    f"AgentContextGatherer: budget exhausted at "
-                    f"{len(included)} files ({used} chars), "
-                    f"dropping {len(sorted_files) - len(included)} remaining"
+                response = await client.generate(
+                    messages=[{"role": "user", "content": prompt}],
+                    model=model,
+                    temperature=0,
                 )
-                break
+                keep = self._parse_file_list(response)
+                if keep is not None:
+                    keep_set = set(keep)
+                    removed = [s for s in siblings if s not in keep_set]
+                    remove.update(removed)
+                    logger.info(
+                        f"AgentContextGatherer: screened {parent_dir}/ — "
+                        f"kept {len(keep_set)}/{len(siblings)} siblings"
+                    )
+                else:
+                    logger.warning(
+                        f"AgentContextGatherer: neighbor screen parse failed "
+                        f"for {parent_dir}/, keeping all {len(siblings)} siblings"
+                    )
+            except Exception:
+                logger.warning(
+                    f"AgentContextGatherer: neighbor screen failed for "
+                    f"{parent_dir}/, keeping all siblings",
+                    exc_info=True,
+                )
 
-            blocks.append(block)
-            included.append(rel_path)
-            used += len(block)
+        if not remove:
+            return after_neighbors
+        return [p for p in after_neighbors if p not in remove]
 
-        # Prepend interface signatures cheat sheet
-        signatures = extract_interface_signatures(
-            self._source_dir, included, self._config.max_file_bytes,
-        )
-        if signatures:
-            header = (
-                "--- INTERFACE SIGNATURES (auto-extracted, ground truth) ---\n"
-                + signatures
-            )
-            blocks.insert(0, header)
-
-        # Prepend library API reference (after interface signatures)
-        lib_sigs = extract_library_signatures(
-            self._source_dir, included, all_paths, self._config.max_file_bytes,
-        )
-        if lib_sigs:
-            lib_header = (
-                "--- LIBRARY API REFERENCE (installed packages, ground truth) ---\n"
-                + lib_sigs
-            )
-            # Insert after interface signatures (position 1) or at 0
-            insert_pos = 1 if signatures else 0
-            blocks.insert(insert_pos, lib_header)
-
-        return "\n\n".join(blocks), included, forward_map, reverse_count
+    def _brief_description(self, rel_path: str) -> str:
+        """Extract a one-line description from a cached file for screening prompts."""
+        content = self._file_cache.get(rel_path, "")
+        if not content:
+            return ""
+        # Try to find module docstring
+        match = re.search(r'"""(.*?)"""', content[:500], re.DOTALL)
+        if not match:
+            match = re.search(r"'''(.*?)'''", content[:500], re.DOTALL)
+        if match:
+            first_line = match.group(1).strip().splitlines()[0]
+            return f" — {first_line}"
+        return ""
 
     # ------------------------------------------------------------------
-    # Helpers
+    # Pass 9: Read raw source
+    # ------------------------------------------------------------------
+
+    def _read_selected_files(
+        self,
+        selected: list[str],
+    ) -> tuple[dict[str, str], list[str]]:
+        """Read all selected files into a dict.
+
+        Returns:
+            (file_contents_dict, included_paths)
+        """
+        file_contents: dict[str, str] = {}
+        included: list[str] = []
+
+        for rel_path in selected:
+            content = self._read_file_content(rel_path)
+            if not content.strip():
+                continue
+            file_contents[rel_path] = content
+            included.append(rel_path)
+
+        return file_contents, included
+
+    # ------------------------------------------------------------------
+    # Parsers
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -650,6 +1201,28 @@ class AgentContextGatherer:
                 return [str(p) for p in files if isinstance(p, str)]
 
         return None
+
+    @staticmethod
+    def _parse_expand_response(response: str) -> tuple[str, str]:
+        """Parse query expansion response into (terms, hyde_code)."""
+        terms = ""
+        hyde = ""
+
+        terms_match = re.search(
+            r"TERMS:\s*\n(.*?)(?:HYPOTHETICAL:|$)", response, re.DOTALL,
+        )
+        if terms_match:
+            terms = terms_match.group(1).strip()
+
+        code_match = re.search(r"```python\s*\n(.*?)```", response, re.DOTALL)
+        if code_match:
+            hyde = code_match.group(1).strip()
+
+        return terms, hyde
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
 
     @staticmethod
     async def _report(

@@ -142,10 +142,19 @@ _PHASE_DESCRIPTIONS = {
     "starting": "Starting up...",
     "initializing": "Initializing...",
     "health_check": "Checking LLM connectivity...",
+    "loading_model": "Loading LLM model...",
     "agent:mapping": "Mapping codebase...",
+    "agent:expanding_query": "Expanding search query (LLM)...",
+    "agent:scanning_index": "Scanning structural index (LLM)...",
+    "agent:bm25": "BM25 keyword screening...",
+    "agent:unloading_llm": "Unloading LLM for embedding...",
+    "agent:embedding": "Embedding recall (semantic search)...",
+    "agent:reranking": "Cross-encoder reranking...",
+    "agent:reloading_llm": "Reloading LLM model...",
+    "agent:neighbor_expand": "Expanding to neighboring files...",
+    "agent:reading": "Reading source files...",
     "agent:screening": "BM25 screening...",
     "agent:confirming": "Confirming files with LLM...",
-    "agent:reading": "Reading source files...",
     "agent:selecting": "Selecting relevant files...",
     "agent:selecting_dirs": "Selecting relevant directories...",
     "agent:synthesizing": "Synthesizing context...",
@@ -189,7 +198,7 @@ def _get_phase_description(phase: str | None) -> str:
         return f"Extracting {group_label}..."
     # Stage name without sub-step
     if phase in ("context", "architecture_design", "roadmap_risk"):
-        return _PHASE_DESCRIPTIONS.get(f"{phase}:generating", f"Working on {phase}...")
+        return _PHASE_DESCRIPTIONS.get(f"{phase}:reasoning", f"Working on {phase}...")
     return phase
 
 
@@ -311,8 +320,14 @@ async def _run_inline(
     description: str,
     pre_gathered_context: str | None = None,
     resume: bool = False,
+    live=None,
+    console=None,
 ) -> None:
-    """Run a job inline with live rich progress display, then print the plan."""
+    """Run a job inline with live rich progress display, then print the plan.
+
+    If ``live`` is provided, uses the existing Live display instead of
+    creating a new one (allows the caller to show the GUI before setup).
+    """
     from rich.live import Live
     from rich.console import Console
 
@@ -334,7 +349,8 @@ async def _run_inline(
         memory_threshold=config.ollama.memory_threshold,
     )
 
-    console = Console(stderr=True)
+    if console is None:
+        console = Console(stderr=True)
     start = time.monotonic()
 
     # Resolve display model name from active provider
@@ -359,63 +375,68 @@ async def _run_inline(
     last_phase = ""
     tick = 0
 
+    owns_live = live is None
+
     try:
-        with Live(
-            _make_live_display(description, 0.0, 0.0, model_name=model_name),
-            console=console,
-            refresh_per_second=4,
-        ) as live:
-            while not job_task.done():
-                job = await store.get(job_id)
-                if job:
-                    elapsed = time.monotonic() - start
-                    progress = job.progress or 0.0
-                    phase = job.current_phase or ""
+        if owns_live:
+            live = Live(
+                _make_live_display(description, 0.0, 0.0, model_name=model_name),
+                console=console,
+                refresh_per_second=4,
+            )
+            live.start()
 
-                    # Track stage transitions for timing
-                    for i, (name, threshold) in enumerate(_DISPLAY_STAGES):
-                        if progress >= threshold and i not in stage_durations:
-                            if i in stage_started:
-                                stage_durations[i] = time.monotonic() - stage_started[i]
-                        elif progress >= prev_thresholds[i] and i not in stage_started and i not in stage_durations:
-                            stage_started[i] = time.monotonic()
-
-                    # Track phase changes for activity log
-                    if phase and phase != last_phase:
-                        desc = _get_phase_description(phase)
-                        if desc:
-                            log_lines.append(f"{time.strftime('%H:%M:%S')} {desc}")
-                        last_phase = phase
-
-                    # Update model name dynamically for llama_cpp
-                    if isinstance(client, LlamaCppClient):
-                        model_name = client.active_model
-
-                    live.update(_make_live_display(
-                        description, progress, elapsed,
-                        current_phase=phase,
-                        stage_durations=stage_durations,
-                        stage_started=stage_started,
-                        log_lines=list(log_lines),
-                        tick=tick,
-                        model_name=model_name,
-                    ))
-                tick += 1
-                await asyncio.sleep(0.3)
-
-            # Final update
+        while not job_task.done():
             job = await store.get(job_id)
             if job:
                 elapsed = time.monotonic() - start
+                progress = job.progress or 0.0
+                phase = job.current_phase or ""
+
+                # Track stage transitions for timing
+                for i, (name, threshold) in enumerate(_DISPLAY_STAGES):
+                    if progress >= threshold and i not in stage_durations:
+                        if i in stage_started:
+                            stage_durations[i] = time.monotonic() - stage_started[i]
+                    elif progress >= prev_thresholds[i] and i not in stage_started and i not in stage_durations:
+                        stage_started[i] = time.monotonic()
+
+                # Track phase changes for activity log
+                if phase and phase != last_phase:
+                    desc = _get_phase_description(phase)
+                    if desc:
+                        log_lines.append(f"{time.strftime('%H:%M:%S')} {desc}")
+                    last_phase = phase
+
+                # Update model name dynamically for llama_cpp
+                if isinstance(client, LlamaCppClient):
+                    model_name = client.active_model
+
                 live.update(_make_live_display(
-                    description, job.progress or 0.0, elapsed,
-                    current_phase=job.current_phase or "",
+                    description, progress, elapsed,
+                    current_phase=phase,
                     stage_durations=stage_durations,
                     stage_started=stage_started,
                     log_lines=list(log_lines),
                     tick=tick,
                     model_name=model_name,
                 ))
+            tick += 1
+            await asyncio.sleep(0.3)
+
+        # Final update
+        job = await store.get(job_id)
+        if job:
+            elapsed = time.monotonic() - start
+            live.update(_make_live_display(
+                description, job.progress or 0.0, elapsed,
+                current_phase=job.current_phase or "",
+                stage_durations=stage_durations,
+                stage_started=stage_started,
+                log_lines=list(log_lines),
+                tick=tick,
+                model_name=model_name,
+            ))
 
     except (KeyboardInterrupt, asyncio.CancelledError):
         job_task.cancel()
@@ -425,8 +446,12 @@ async def _run_inline(
             pass
         if isinstance(client, LlamaCppClient):
             await client.stop()
+        if owns_live:
+            live.stop()
         raise KeyboardInterrupt
     finally:
+        if owns_live:
+            live.stop()
         if isinstance(client, LlamaCppClient):
             await client.stop()
 
@@ -476,13 +501,13 @@ def plan(
     async def _plan():
         import logging as _logging
         from rich.console import Console as _Console
+        from rich.live import Live
 
-        store = await _get_store()
         config = load_config()
         enriched_description = description
         pre_gathered_context: str | None = None
 
-        # Clarification flow: gather context first, then ask questions with that context
+        # Clarification flow needs interactive terminal — runs before GUI
         if clarify and not detach and sys.stdin.isatty():
             try:
                 from fitz_graveyard.planning.clarification import get_clarifying_questions
@@ -517,33 +542,55 @@ def plan(
             except Exception as e:
                 _logging.getLogger(__name__).warning(f"Clarification skipped: {e}")
 
-        try:
-            result = await create_plan(
-                description=enriched_description,
-                timeline=timeline,
-                context=context,
-                integration_points=None,
-                api_review=api_review,
-                store=store,
-                config=config,
-                source_dir=source_dir,
-            )
-        except Exception:
-            await store.close()
-            raise
-
-        job_id = result["job_id"]
-
         if detach:
-            await store.close()
-            typer.echo(f"Queued job {job_id}. Run 'fitz-graveyard run' to start processing.")
+            store = await _get_store()
+            try:
+                result = await create_plan(
+                    description=enriched_description, timeline=timeline,
+                    context=context, integration_points=None,
+                    api_review=api_review, store=store, config=config,
+                    source_dir=source_dir,
+                )
+            finally:
+                await store.close()
+            typer.echo(f"Queued job {result['job_id']}. Run 'fitz-graveyard run' to start processing.")
             return
 
+        # Resolve model name for display (sync, instant)
+        if config.provider == "lm_studio":
+            model_name = config.lm_studio.model
+        elif config.provider == "llama_cpp":
+            model_name = config.llama_cpp.fast_model.path
+        else:
+            model_name = config.ollama.model
+
+        # Show GUI immediately, do setup in background
+        console = _Console(stderr=True)
+        live = Live(
+            _make_live_display(enriched_description, 0.0, 0.0, model_name=model_name),
+            console=console,
+            refresh_per_second=4,
+        )
+        live.start()
+
         try:
+            store = await _get_store()
+            result = await create_plan(
+                description=enriched_description, timeline=timeline,
+                context=context, integration_points=None,
+                api_review=api_review, store=store, config=config,
+                source_dir=source_dir,
+            )
+            job_id = result["job_id"]
+
             await _run_inline(
                 job_id, store, config, enriched_description,
                 pre_gathered_context=pre_gathered_context,
+                live=live, console=console,
             )
+        except Exception:
+            live.stop()
+            raise
         finally:
             await store.close()
 

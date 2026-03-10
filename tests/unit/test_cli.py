@@ -266,13 +266,13 @@ class TestPhaseDescriptions:
         from fitz_graveyard.cli import _get_phase_description
         assert _get_phase_description("health_check") == "Checking LLM connectivity..."
 
-    def test_generating_substep(self):
+    def test_reasoning_substep(self):
         from fitz_graveyard.cli import _get_phase_description
-        assert _get_phase_description("architecture_design:generating") == "Exploring architecture and design (single-pass)..."
+        assert _get_phase_description("architecture_design:reasoning") == "Exploring architecture and design..."
 
-    def test_formatting_substep(self):
+    def test_critiquing_substep(self):
         from fitz_graveyard.cli import _get_phase_description
-        assert _get_phase_description("architecture_design:formatting") == "Structuring architecture+design as JSON..."
+        assert _get_phase_description("architecture_design:critiquing") == "Reviewing analysis for quality..."
 
     def test_agent_mapping_phase(self):
         from fitz_graveyard.cli import _get_phase_description
@@ -291,10 +291,10 @@ class TestPhaseDescriptions:
         from fitz_graveyard.cli import _get_phase_description
         assert _get_phase_description("agent:synthesizing") == "Synthesizing context..."
 
-    def test_bare_stage_name_maps_to_generating(self):
+    def test_bare_stage_name_maps_to_reasoning(self):
         from fitz_graveyard.cli import _get_phase_description
         desc = _get_phase_description("context")
-        assert desc == "Analyzing requirements (single-pass)..."
+        assert desc == "Analyzing requirements and constraints..."
 
     def test_empty_phase_returns_empty(self):
         from fitz_graveyard.cli import _get_phase_description
@@ -305,12 +305,11 @@ class TestPhaseDescriptions:
         from fitz_graveyard.cli import _get_phase_description
         assert _get_phase_description("some_unknown_thing") == "some_unknown_thing"
 
-    def test_all_stages_have_generating_and_formatting(self):
-        """All 3 pipeline stages should have generating and formatting descriptions."""
+    def test_all_stages_have_reasoning(self):
+        """All 3 pipeline stages should have reasoning descriptions."""
         from fitz_graveyard.cli import _PHASE_DESCRIPTIONS
         for stage in ("context", "architecture_design", "roadmap_risk"):
-            assert f"{stage}:generating" in _PHASE_DESCRIPTIONS, f"Missing {stage}:generating"
-            assert f"{stage}:formatting" in _PHASE_DESCRIPTIONS, f"Missing {stage}:formatting"
+            assert f"{stage}:reasoning" in _PHASE_DESCRIPTIONS, f"Missing {stage}:reasoning"
 
 
 class TestMakeLiveDisplay:

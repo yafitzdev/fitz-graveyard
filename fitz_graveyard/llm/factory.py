@@ -1,11 +1,28 @@
 # fitz_graveyard/llm/factory.py
 """Factory for creating the configured LLM client."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from fitz_graveyard.config.schema import FitzPlannerConfig
 
-from .client import OllamaClient
+from .gpu_monitor import GPUTemperatureGuard
 from .llama_cpp import LlamaCppClient
 from .lm_studio import LMStudioClient
+
+if TYPE_CHECKING:
+    from .client import OllamaClient
+
+
+def _create_gpu_guard(config: FitzPlannerConfig) -> GPUTemperatureGuard | None:
+    """Create a GPU temperature guard from config, or None if disabled."""
+    if config.gpu.temp_threshold <= 0:
+        return None
+    return GPUTemperatureGuard(
+        threshold=config.gpu.temp_threshold,
+        cooldown_margin=config.gpu.cooldown_margin,
+    )
 
 
 def create_llm_client(
@@ -23,12 +40,16 @@ def create_llm_client(
     Raises:
         ValueError: If llama_cpp config is missing required fields.
     """
+    gpu_guard = _create_gpu_guard(config)
+
     if config.provider == "lm_studio":
         return LMStudioClient(
             base_url=config.lm_studio.base_url,
             model=config.lm_studio.model,
             fallback_model=config.lm_studio.fallback_model,
             timeout=config.lm_studio.timeout,
+            context_length=config.lm_studio.context_length,
+            gpu_guard=gpu_guard,
         )
     if config.provider == "llama_cpp":
         cfg = config.llama_cpp
@@ -53,7 +74,10 @@ def create_llm_client(
             port=cfg.port,
             timeout=cfg.timeout,
             startup_timeout=cfg.startup_timeout,
+            gpu_guard=gpu_guard,
         )
+    from .client import OllamaClient
+
     return OllamaClient(
         base_url=config.ollama.base_url,
         model=config.ollama.model,

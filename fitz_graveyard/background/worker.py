@@ -5,18 +5,22 @@ Background worker for sequential job processing.
 Polls the job queue, processes jobs one at a time, and handles graceful shutdown.
 """
 
+from __future__ import annotations
+
 import asyncio
 import logging
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING as _TC
 
 from fitz_graveyard.config.schema import FitzPlannerConfig
-from fitz_graveyard.llm.client import OllamaClient
 from fitz_graveyard.llm.llama_cpp import LlamaCppClient
 from fitz_graveyard.llm.lm_studio import LMStudioClient
 from fitz_graveyard.llm.memory import MemoryMonitor
+
+if _TC:
+    from fitz_graveyard.llm.client import OllamaClient
 from fitz_graveyard.models.jobs import JobState
 from fitz_graveyard.models.store import JobStore
 from fitz_graveyard.planning.pipeline.checkpoint import CheckpointManager
@@ -250,6 +254,18 @@ class BackgroundWorker:
                 await self._store.update(job.job_id, progress=0.05, current_phase="health_check")
             else:
                 await self._store.update(job.job_id, current_phase="health_check")
+
+            # For LM Studio: split check into connectivity + model loading
+            # so the GUI shows "Loading model..." during the slow part
+            if isinstance(self._ollama_client, LMStudioClient):
+                if not await self._ollama_client.is_model_loaded():
+                    await self._store.update(
+                        job.job_id, current_phase="loading_model",
+                    )
+                    logger.info(
+                        f"No model loaded — auto-loading {self._ollama_client.model}"
+                    )
+
             healthy = await self._ollama_client.health_check()
             if not healthy:
                 raise ConnectionError(
@@ -413,7 +429,7 @@ class BackgroundWorker:
 
         # Step 4: Build diagnostics and create PlanOutput
         call_metrics = []
-        if isinstance(self._ollama_client, (OllamaClient, LMStudioClient)):
+        if hasattr(self._ollama_client, "drain_call_metrics"):
             call_metrics = self._ollama_client.drain_call_metrics()
         diagnostics: dict[str, Any] = {
             "provider": self._config.provider,
@@ -466,7 +482,7 @@ class BackgroundWorker:
             output_dir = plans_dir
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
         file_name = f"plan_{job.job_id}_{timestamp}.md"
         file_path = output_dir / file_name
 
@@ -479,6 +495,12 @@ class BackgroundWorker:
             current_phase="finalizing",
             file_path=str(file_path),
         )
+
+        # Step 8: Eject model from LM Studio to free VRAM
+        unload = getattr(self._ollama_client, "unload_model", None)
+        if unload is not None:
+            logger.info("Pipeline complete — ejecting model to free VRAM")
+            await unload()
 
         logger.info(f"Job {job.job_id} completed: plan written to {file_path}")
 

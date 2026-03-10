@@ -1,0 +1,18 @@
+You are selecting files for an architectural review of a codebase.
+
+TASK: {job_description}
+
+Below is the structural index of EVERY file in the codebase. Each entry shows the file path and its classes, functions, and imports.
+
+{structural_index}
+
+Return a JSON array of file paths that are likely relevant to implementing the task. Include files that:
+- Would need to be modified to implement the task
+- Define protocols, base classes, or interfaces used by the task
+- Contain configuration or factory patterns that affect the task
+- Are tests that would need updating
+
+Return ONLY a JSON array of file paths, no explanation:
+```json
+["path/to/file1.py", "path/to/file2.py"]
+```

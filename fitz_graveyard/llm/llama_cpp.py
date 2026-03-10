@@ -13,9 +13,11 @@ import ctypes
 import inspect
 import json
 import logging
+import os
 import platform
 import statistics
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -28,6 +30,7 @@ from .types import AgentMessage, AgentToolCall
 if TYPE_CHECKING:
     from fitz_graveyard.config.schema import LlamaCppModelConfig
 
+    from .gpu_monitor import GPUTemperatureGuard
     from .memory import MemoryMonitor
 
 try:
@@ -164,6 +167,7 @@ class LlamaCppClient:
         port: int = 8012,
         timeout: int = 300,
         startup_timeout: int = 120,
+        gpu_guard: "GPUTemperatureGuard | None" = None,
     ):
         if AsyncOpenAI is None:
             raise ImportError(
@@ -179,6 +183,7 @@ class LlamaCppClient:
         self._port = port
         self._timeout = timeout
         self._startup_timeout = startup_timeout
+        self._gpu_guard = gpu_guard
 
         # Public attributes for interface parity with OllamaClient/LMStudioClient
         self.base_url = f"http://127.0.0.1:{port}/v1"
@@ -196,6 +201,11 @@ class LlamaCppClient:
     # ------------------------------------------------------------------
     # Model tier properties
     # ------------------------------------------------------------------
+
+    @property
+    def context_size(self) -> int:
+        """Active context window size in tokens."""
+        return self._active_context_size or self._fast_model.context_size
 
     @property
     def fast_model(self) -> str:
@@ -504,7 +514,7 @@ class LlamaCppClient:
                     resp = await http.get(url)
                     if resp.status_code == 200:
                         return
-                except httpx.ConnectError:
+                except (httpx.ConnectError, httpx.TimeoutException):
                     pass
                 await asyncio.sleep(1.0)
 
@@ -537,6 +547,29 @@ class LlamaCppClient:
 
             await self.start(tier)
 
+    async def _auto_reset_gpu(self) -> None:
+        """Stop llama-server, reset GPU driver, restart.
+
+        WDDM Blackwell consumer GPUs degrade after CUDA context churn.
+        Resetting the display driver (Ctrl+Win+Shift+B) recovers performance.
+        """
+        tier = self._active_tier or "fast"
+        ctx = self._active_context_size
+
+        logger.info("Auto-reset: stopping llama-server for GPU driver reset")
+        await self.stop()
+
+        if self._reset_gpu_driver():
+            # Driver reset takes a few seconds to complete
+            await asyncio.sleep(5)
+            logger.info("Auto-reset: GPU driver reset complete, restarting server")
+        else:
+            logger.warning("Auto-reset: GPU driver reset failed, restarting anyway")
+            await asyncio.sleep(1)
+
+        await self.start(tier, context_size=ctx)
+        self._degradation_warned = False  # allow re-detection after reset
+
     # ------------------------------------------------------------------
     # Interface methods (match OllamaClient / LMStudioClient)
     # ------------------------------------------------------------------
@@ -560,6 +593,7 @@ class LlamaCppClient:
         messages: list[dict],
         model: str | None = None,
         temperature: float | None = None,
+        max_tokens: int = 16384,
     ) -> str:
         """Generate a streaming response. Switches tier if model differs.
 
@@ -567,10 +601,15 @@ class LlamaCppClient:
             messages:    Chat messages in OpenAI format.
             model:       Model name (triggers tier switch if needed).
             temperature: Sampling temperature. None = server default.
+            max_tokens:  Hard cap on output tokens. Prevents infinite generation
+                         from llama-server context-shift loops.
 
         Returns:
             Full accumulated response text.
         """
+        if self._gpu_guard:
+            await self._gpu_guard.preflight()
+
         await self._ensure_tier(model)
         await self._ensure_alive()
 
@@ -587,6 +626,10 @@ class LlamaCppClient:
             "model": effective_model,
             "messages": messages,
             "stream": True,
+            "max_tokens": max_tokens,
+            "extra_body": {
+                "chat_template_kwargs": {"enable_thinking": False},
+            },
         }
         if temperature is not None:
             kwargs["temperature"] = temperature
@@ -598,6 +641,8 @@ class LlamaCppClient:
                 if t_first_token is None:
                     t_first_token = time.monotonic()
                 accumulated.append(delta.content)
+            if self._gpu_guard:
+                await self._gpu_guard.maybe_throttle()
 
         result = "".join(accumulated)
         t_end = time.monotonic()
@@ -623,15 +668,21 @@ class LlamaCppClient:
             f"gen ~{gen_tok_s:.1f} tok/s)"
         )
 
-        # Track prefill tok/s baseline and warn on degradation
+        # Track prefill tok/s baseline and auto-reset GPU on degradation
         ctx = self._active_context_size or 0
         if ctx > 0:
-            if not self._degradation_warned and self._baseline.is_degraded(effective_model, ctx, prefill_tok_s, prefill_s):
-                logger.warning(
-                    "GPU degradation detected. Reset drivers with Ctrl+Win+Shift+B"
-                )
+            degraded = not self._degradation_warned and self._baseline.is_degraded(
+                effective_model, ctx, prefill_tok_s, prefill_s,
+            )
+            if degraded:
                 self._degradation_warned = True
-            self._baseline.record(effective_model, ctx, prefill_tok_s, prefill_s)
+                logger.warning(
+                    "GPU degradation detected — auto-resetting GPU driver"
+                )
+                await self._auto_reset_gpu()
+                # Don't record the degraded sample — it would poison the baseline
+            else:
+                self._baseline.record(effective_model, ctx, prefill_tok_s, prefill_s)
 
         return result
 
@@ -678,6 +729,9 @@ class LlamaCppClient:
         Returns:
             AgentMessage with .tool_calls or .content.
         """
+        if self._gpu_guard:
+            await self._gpu_guard.preflight()
+
         await self._ensure_tier(model)
         await self._ensure_alive()
 
@@ -693,7 +747,11 @@ class LlamaCppClient:
             messages=messages,
             tools=openai_tools,
             tool_choice="auto",
+            max_tokens=16384,
             stream=False,
+            extra_body={
+                "chat_template_kwargs": {"enable_thinking": False},
+            },
         )
 
         choice = response.choices[0]

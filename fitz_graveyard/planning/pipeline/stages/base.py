@@ -371,7 +371,9 @@ class PipelineStage(ABC):
             },
         ]
         t2 = time.monotonic()
-        json_output = await client.generate(messages=extract_messages)
+        json_output = await client.generate(
+            messages=extract_messages, max_tokens=4096,
+        )
         t3 = time.monotonic()
         logger.info(f"Stage '{self.name}': two-pass formatting took {t3 - t2:.1f}s")
         return reasoning, json_output
@@ -483,7 +485,9 @@ class PipelineStage(ABC):
         ]
         try:
             t0 = time.monotonic()
-            raw = await client.generate(messages=extract_messages)
+            raw = await client.generate(
+                messages=extract_messages, max_tokens=4096,
+            )
             t1 = time.monotonic()
             logger.info(
                 f"Stage '{self.name}': extracted '{group_label}' ({t1 - t0:.1f}s, {len(raw)} chars)"
@@ -728,7 +732,8 @@ class PipelineStage(ABC):
         )
         t1 = time.monotonic()
 
-        # Format findings
+        # Format findings. Each investigation answer is bounded by max_tokens=4096,
+        # so total size is naturally limited by question count (max 7).
         findings: list[str] = []
         for r in results:
             if isinstance(r, Exception):
@@ -741,9 +746,10 @@ class PipelineStage(ABC):
         if not findings:
             return ""
 
+        total_chars = sum(len(f) for f in findings)
         logger.info(
             f"Stage '{self.name}': {len(findings)}/{len(questions)} investigations "
-            f"completed in {t1 - t0:.1f}s"
+            f"completed in {t1 - t0:.1f}s ({total_chars} chars)"
         )
         return (
             "--- INVESTIGATION FINDINGS (verified against source code) ---\n\n"
@@ -772,7 +778,9 @@ class PipelineStage(ABC):
             },
         ]
         try:
-            return await client.generate(messages=messages, temperature=0)
+            return await client.generate(
+                messages=messages, temperature=0, max_tokens=4096,
+            )
         except Exception as e:
             logger.warning(f"Stage '{self.name}': _ask_one failed: {e}")
             return ""
@@ -802,8 +810,6 @@ class PipelineStage(ABC):
             ctx = ctx[:self._MAX_GATHERED_CONTEXT_CHARS] + "\n\n[... context trimmed for brevity]"
         return ctx
 
-    _MAX_RAW_SUMMARIES_CHARS = 48000
-
     def _get_raw_summaries(self, prior_outputs: dict[str, Any]) -> str:
         """
         Get raw source code from AgentContextGatherer output.
@@ -812,24 +818,89 @@ class PipelineStage(ABC):
         Use for reasoning passes where seeing real code matters.
         Falls back to _gathered_context if not available.
 
-        Caps at _MAX_RAW_SUMMARIES_CHARS (higher limit than synthesized context
-        since reasoning passes benefit from more detail).
+        No hard cap — the gatherer controls output size via budget-aware
+        file inclusion. Downstream stages manage their own prompt budgets.
         """
         ctx = prior_outputs.get("_raw_summaries", "")
         if not ctx:
-            # Fallback to synthesized if raw not available (old checkpoints)
             return self._get_gathered_context(prior_outputs)
-        if len(ctx) > self._MAX_RAW_SUMMARIES_CHARS:
-            logger.info(
-                f"Trimming raw summaries: {len(ctx)} -> {self._MAX_RAW_SUMMARIES_CHARS} chars"
-            )
-            ctx = ctx[:self._MAX_RAW_SUMMARIES_CHARS] + "\n\n[... summaries trimmed for brevity]"
         return ctx
 
     @staticmethod
     def _get_source_dir(prior_outputs: dict[str, Any]) -> str | None:
         """Get the codebase source directory for reading actual source files."""
         return prior_outputs.get("_source_dir")
+
+    async def _reason_with_tools(
+        self,
+        client: Any,
+        messages: list[dict],
+        prior_outputs: dict[str, Any],
+        max_rounds: int = 3,
+    ) -> str:
+        """Run reasoning with a read_file tool so the LLM can inspect source code.
+
+        The LLM receives the structural overview in the prompt and can request
+        full source of specific files via tool calling. Falls back to plain
+        generate() if tool calling is unavailable or file_contents is empty.
+
+        Args:
+            client:        LLM client with generate_with_tools()
+            messages:      Chat messages for the reasoning prompt
+            prior_outputs: Pipeline prior outputs (must contain _file_contents)
+            max_rounds:    Max tool-use rounds before forcing a final response
+
+        Returns:
+            Reasoning text (str).
+        """
+        file_contents = prior_outputs.get("_file_contents", {})
+        generate_with_tools = getattr(client, "generate_with_tools", None)
+
+        if not file_contents or generate_with_tools is None:
+            return await client.generate(messages=messages)
+
+        def read_file(path: str) -> str:
+            """Read the full source code of a file. Use this to inspect implementation details."""
+            content = file_contents.get(path)
+            if content is not None:
+                return content
+            return f"File not found: {path}"
+
+        tools = [read_file]
+
+        # Add tool hint to the last user message
+        available = ", ".join(sorted(file_contents.keys()))
+        tool_hint = (
+            "\n\nYou have a read_file tool to inspect the full source of any file "
+            "in the structural overview. Use it when you need implementation details. "
+            f"Available files: {available}"
+        )
+        messages = [m.copy() for m in messages]
+        messages[-1]["content"] += tool_hint
+
+        for _round in range(max_rounds):
+            msg = await generate_with_tools(messages=messages, tools=tools)
+
+            if not msg.tool_calls:
+                return msg.content or ""
+
+            # Execute tool calls and continue conversation
+            messages.append(msg.assistant_dict)
+            for tc in msg.tool_calls:
+                if tc.name == "read_file":
+                    result = read_file(**tc.arguments)
+                else:
+                    result = f"Unknown tool: {tc.name}"
+                messages.append(
+                    client.tool_result_message(tc.id, result)
+                )
+            logger.info(
+                f"Stage '{self.name}': tool round {_round + 1}, "
+                f"{len(msg.tool_calls)} file(s) requested"
+            )
+
+        # Max rounds reached — get final text response without tools
+        return await client.generate(messages=messages)
 
     def _get_implementation_check(self, prior_outputs: dict[str, Any]) -> str:
         """Format the implementation check result for injection into prompts.

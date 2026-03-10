@@ -48,20 +48,8 @@ class AgentConfig(BaseModel):
     agent_model: str | None = Field(
         default=None, description="Model for agent tool calls (None = use ollama.model)"
     )
-    max_summary_files: int = Field(
-        default=25,
-        ge=1,
-        le=500,
-        description="Maximum number of files to summarize during context gathering",
-    )
     max_file_bytes: int = Field(
         default=50_000, description="Maximum bytes to read per file"
-    )
-    max_context_chars: int = Field(
-        default=60_000,
-        ge=10_000,
-        le=200_000,
-        description="Maximum chars of raw source to include in planning context",
     )
     source_dir: str | None = Field(
         default=None,
@@ -69,6 +57,14 @@ class AgentConfig(BaseModel):
             "Source directory for codebase context gathering. "
             "Resolution order: create_plan(source_dir=) parameter > this config value > cwd at runtime."
         ),
+    )
+    embedding_model: str = Field(
+        default="nomic-ai/nomic-embed-text-v1.5",
+        description="Sentence-transformers model for semantic file retrieval (CUDA required)",
+    )
+    reranker_model: str = Field(
+        default="cross-encoder/ms-marco-MiniLM-L-12-v2",
+        description="Cross-encoder model for reranking retrieval candidates (CUDA required)",
     )
 
 
@@ -141,6 +137,10 @@ class LMStudioConfig(BaseModel):
     timeout: int = Field(
         default=300, description="Request timeout in seconds"
     )
+    context_length: int = Field(
+        default=65536,
+        description="Context length to use when auto-loading the model via lms CLI",
+    )
 
 
 class LlamaCppModelConfig(BaseModel):
@@ -186,6 +186,28 @@ class LlamaCppConfig(BaseModel):
     )
 
 
+class GPUConfig(BaseModel):
+    """GPU thermal protection configuration."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    temp_threshold: int = Field(
+        default=73,
+        ge=0,
+        le=95,
+        description=(
+            "Pause/throttle LLM calls when GPU temperature exceeds this (°C). "
+            "0 to disable GPU temperature monitoring."
+        ),
+    )
+    cooldown_margin: int = Field(
+        default=10,
+        ge=5,
+        le=30,
+        description="Resume after pre-flight pause when temp drops this many °C below threshold",
+    )
+
+
 class FitzPlannerConfig(BaseModel):
     """Root configuration for fitz-graveyard."""
 
@@ -201,3 +223,4 @@ class FitzPlannerConfig(BaseModel):
     output: OutputConfig = Field(default_factory=OutputConfig)
     confidence: ConfidenceConfig = Field(default_factory=ConfidenceConfig)
     anthropic: AnthropicConfig = Field(default_factory=AnthropicConfig)
+    gpu: GPUConfig = Field(default_factory=GPUConfig)
