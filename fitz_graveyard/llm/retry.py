@@ -3,7 +3,6 @@
 
 import logging
 
-from ollama import ResponseError
 from tenacity import (
     before_sleep_log,
     retry,
@@ -26,6 +25,11 @@ def is_retryable(exception: BaseException) -> bool:
     """
     if isinstance(exception, ConnectionError):
         return True
+
+    try:
+        from ollama import ResponseError
+    except ImportError:
+        return False
 
     if isinstance(exception, ResponseError):
         status = exception.status_code

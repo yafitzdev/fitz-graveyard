@@ -1,12 +1,18 @@
 # fitz_graveyard/llm/factory.py
 """Factory for creating the configured LLM client."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from fitz_graveyard.config.schema import FitzPlannerConfig
 
-from .client import OllamaClient
 from .gpu_monitor import GPUTemperatureGuard
 from .llama_cpp import LlamaCppClient
 from .lm_studio import LMStudioClient
+
+if TYPE_CHECKING:
+    from .client import OllamaClient
 
 
 def _create_gpu_guard(config: FitzPlannerConfig) -> GPUTemperatureGuard | None:
@@ -70,6 +76,8 @@ def create_llm_client(
             startup_timeout=cfg.startup_timeout,
             gpu_guard=gpu_guard,
         )
+    from .client import OllamaClient
+
     return OllamaClient(
         base_url=config.ollama.base_url,
         model=config.ollama.model,

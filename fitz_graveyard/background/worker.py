@@ -5,18 +5,22 @@ Background worker for sequential job processing.
 Polls the job queue, processes jobs one at a time, and handles graceful shutdown.
 """
 
+from __future__ import annotations
+
 import asyncio
 import logging
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING as _TC
 
 from fitz_graveyard.config.schema import FitzPlannerConfig
-from fitz_graveyard.llm.client import OllamaClient
 from fitz_graveyard.llm.llama_cpp import LlamaCppClient
 from fitz_graveyard.llm.lm_studio import LMStudioClient
 from fitz_graveyard.llm.memory import MemoryMonitor
+
+if _TC:
+    from fitz_graveyard.llm.client import OllamaClient
 from fitz_graveyard.models.jobs import JobState
 from fitz_graveyard.models.store import JobStore
 from fitz_graveyard.planning.pipeline.checkpoint import CheckpointManager
@@ -425,7 +429,7 @@ class BackgroundWorker:
 
         # Step 4: Build diagnostics and create PlanOutput
         call_metrics = []
-        if isinstance(self._ollama_client, (OllamaClient, LMStudioClient)):
+        if hasattr(self._ollama_client, "drain_call_metrics"):
             call_metrics = self._ollama_client.drain_call_metrics()
         diagnostics: dict[str, Any] = {
             "provider": self._config.provider,
