@@ -1,30 +1,23 @@
 # fitz_graveyard/planning/agent/gatherer.py
 """
-AgentContextGatherer — Multi-signal retrieval pipeline.
+AgentContextGatherer — Structural-scan retrieval pipeline.
 
 Pipeline:
   Pass 1:  Map              (pure Python — pathlib walk, build file list)
   Pass 2:  Query expand      (LLM — generate search terms + HyDE code)
   Pass 3:  Structural scan   (LLM — review structural index for relevant files)
-  Pass 4:  BM25 screen       (pure Python — expanded query against all files)
-  Pass 5:  Embedding recall   (sentence-transformers — semantic similarity)
-  Pass 6:  Cross-encoder rerank (sentence-transformers — rerank merged candidates)
-  Pass 7:  Import expand      (pure Python — BFS depth 2, both directions)
-  Pass 8:  Neighbor expand    (pure Python — same-directory files)
-  Pass 9:  Read raw source    (pure Python — stuff into context)
+  Pass 4:  Import expand     (pure Python — BFS depth 1, forward only)
+  Pass 5:  Neighbor expand   (pure Python — same-directory files)
+  Pass 6:  Read raw source   (pure Python — stuff into context)
 
 Two LLM calls total (query expand, structural scan).
-Structural scan hits are protected — they always survive to final selection.
-Embedding and reranking use lightweight in-process models (~360MB VRAM total).
-Falls back to BM25 if sentence-transformers is unavailable.
+Structural scan hits are the primary selection signal.
 """
 
 import json
 import logging
-import math
 import re
 import time
-from collections import Counter
 from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
@@ -49,44 +42,8 @@ _MAX_TREE_FILES = 2000
 # Directories that are never source code in any project.
 _SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv"}
 
-# BM25 parameters (Okapi BM25 standard defaults)
-_BM25_K1 = 1.5
-_BM25_B = 0.75
-_PATH_BONUS_WEIGHT = 2.0
-
-# English stopwords (compact set for tokenization)
-_STOPWORDS = frozenset({
-    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
-    "of", "with", "by", "from", "is", "it", "as", "be", "was", "are",
-    "this", "that", "not", "can", "all", "if", "do", "my", "no", "so",
-    "we", "he", "up", "one", "its", "has", "had", "may", "our", "out",
-    "you", "his", "her", "she", "how", "new", "now", "old", "see",
-    "way", "who", "did", "get", "let", "say", "too", "use",
-    "import", "from", "def", "class", "self", "return", "none", "true",
-    "false", "pass", "else", "elif", "try", "except", "finally",
-    "raise", "yield", "lambda", "assert", "global", "nonlocal",
-    "while", "for", "break", "continue", "del", "with", "async", "await",
-})
-
-# File extensions excluded from BM25 scoring (too text-dense, drown out code).
-_BM25_SKIP_EXTS = frozenset({".md"})
-
-# Maximum chars of file content for embedding / reranking input
-_EMBED_MAX_CHARS = 4000
-
-# Maximum candidates sent to cross-encoder reranking
-_MAX_CANDIDATES_FOR_RERANK = 200
-
-# Cross-encoder reranking output size
-_RERANK_TOP_K = 20
-
 # Neighbor expansion: screen siblings via LLM if a directory adds more than this many
 _NEIGHBOR_SCREEN_THRESHOLD = 10
-
-# VRAM headroom (MB) required to keep LLM loaded during embedding/reranking.
-# Embedding (~275MB) + reranker (~85MB) + working memory ≈ 2GB total.
-# 6GB threshold gives comfortable margin for CUDA context overhead.
-_VRAM_HEADROOM_MB = 6_000
 
 # Seed-and-fetch: only a small seed set goes into the prompt.
 # The rest are available via read_file/read_files tools during reasoning.
@@ -98,11 +55,10 @@ _DEFAULT_MAX_SEED_FILES = 30
 
 class AgentContextGatherer:
     """
-    Multi-signal retrieval pipeline to gather codebase context.
+    Structural-scan retrieval pipeline to gather codebase context.
 
-    Combines BM25 keyword search, embedding-based semantic search,
-    structural index scanning, cross-encoder reranking, and LLM
-    judgment to select the most relevant files for a planning task.
+    Uses LLM structural index scanning as the primary selection signal,
+    augmented by import expansion and neighbor expansion.
     """
 
     def __init__(self, config: "AgentConfig", source_dir: str) -> None:
@@ -182,147 +138,13 @@ class AgentContextGatherer:
                 f"{len(scan_hits)} files ({time.monotonic() - t0:.1f}s)"
             )
 
-            # Pass 4: BM25 screen with expanded query (pure Python)
-            await self._report(progress_callback, 0.068, "agent:bm25")
-            t0 = time.monotonic()
-            bm25_top_k = min(200, len(file_paths))
-            bm25_candidates, bm25_scores = self._bm25_screen(
-                file_paths, expanded_query, bm25_top_k,
-            )
-            logger.info(
-                f"AgentContextGatherer: BM25 selected "
-                f"{len(bm25_candidates)} candidates "
-                f"({time.monotonic() - t0:.1f}s)"
-            )
-
-            # VRAM router: if >= 6GB free, keep LLM loaded during
-            # embedding/reranking (~360MB). Otherwise unload first.
-            # If unload fails, skip embedding entirely — system is memory-constrained.
-            llm_unloaded = False
-            skip_embedding = False
-            unload = getattr(client, "unload_model", None)
-            if unload is not None:
-                from fitz_graveyard.llm.gpu_monitor import GPUTemperatureGuard
-                free_mb = GPUTemperatureGuard.get_free_vram_mb()
-                if free_mb is not None and free_mb >= _VRAM_HEADROOM_MB:
-                    logger.info(
-                        f"AgentContextGatherer: {free_mb} MB VRAM free "
-                        f"(>= {_VRAM_HEADROOM_MB} MB), keeping LLM loaded"
-                    )
-                else:
-                    reason = (
-                        f"{free_mb} MB free" if free_mb is not None
-                        else "VRAM unknown"
-                    )
-                    logger.info(
-                        f"AgentContextGatherer: {reason} "
-                        f"(< {_VRAM_HEADROOM_MB} MB), unloading LLM"
-                    )
-                    await self._report(
-                        progress_callback, 0.069, "agent:unloading_llm",
-                    )
-                    llm_unloaded = await unload()
-                    if not llm_unloaded:
-                        logger.warning(
-                            "AgentContextGatherer: unload failed — skipping "
-                            "embedding/reranking to avoid OOM (falling back to BM25)"
-                        )
-                        skip_embedding = True
-
-            # Pass 5: Embedding recall (if sentence-transformers available)
-            embedding_candidates: list[str] = []
-            if skip_embedding:
-                logger.info(
-                    "AgentContextGatherer: embedding skipped (unload failed, memory constrained)"
-                )
-            else:
-                try:
-                    await self._report(progress_callback, 0.070, "agent:embedding")
-                    t0 = time.monotonic()
-                    embedding_candidates = self._embedding_recall(
-                        file_paths, job_description, hyde_code,
-                        top_k=100,
-                    )
-                    logger.info(
-                        f"AgentContextGatherer: embedding recall found "
-                        f"{len(embedding_candidates)} candidates "
-                        f"({time.monotonic() - t0:.1f}s)"
-                    )
-                except ImportError:
-                    logger.info(
-                        "AgentContextGatherer: sentence-transformers not installed, "
-                        "skipping embedding recall"
-                    )
-                except MemoryError as e:
-                    logger.warning(
-                        f"AgentContextGatherer: skipping embedding — {e}"
-                    )
-                except Exception:
-                    logger.warning(
-                        "AgentContextGatherer: embedding recall failed",
-                        exc_info=True,
-                    )
-
-            # Merge candidates from all signals
-            merged = self._merge_candidates(
-                bm25_candidates, embedding_candidates, scan_hits, file_paths,
-            )
-            logger.info(
-                f"AgentContextGatherer: merged {len(merged)} unique candidates "
-                f"(BM25={len(bm25_candidates)}, embed={len(embedding_candidates)}, "
-                f"scan={len(scan_hits)})"
-            )
-
-            # Pass 6: Cross-encoder rerank (if sentence-transformers available)
-            reranked = merged
-            if skip_embedding:
-                logger.info(
-                    "AgentContextGatherer: reranking skipped (memory constrained)"
-                )
-            else:
-                try:
-                    if len(merged) > _RERANK_TOP_K:
-                        await self._report(
-                            progress_callback, 0.073, "agent:reranking",
-                        )
-                        t0 = time.monotonic()
-                        reranked = self._rerank_candidates(
-                            merged, job_description, top_k=_RERANK_TOP_K,
-                        )
-                        logger.info(
-                            f"AgentContextGatherer: reranked to "
-                            f"{len(reranked)} files "
-                            f"({time.monotonic() - t0:.1f}s)"
-                        )
-                except ImportError:
-                    logger.info(
-                        "AgentContextGatherer: sentence-transformers not installed, "
-                        "skipping reranking"
-                    )
-                except MemoryError as e:
-                    logger.warning(
-                        f"AgentContextGatherer: skipping reranking — {e}"
-                    )
-                except Exception:
-                    logger.warning(
-                        "AgentContextGatherer: reranking failed",
-                        exc_info=True,
-                    )
-
-            # Reload LLM if it was unloaded
-            if llm_unloaded:
-                await self._report(progress_callback, 0.075, "agent:reloading_llm")
-                reload = getattr(client, "reload_model", None)
-                if reload is not None:
-                    await reload()
-
-            # Build import graph once (reused by import expansion + read raw source)
+            # Build import graph (reused by import expansion)
+            await self._report(progress_callback, 0.070, "agent:import_expand")
             forward_map, _module_lookup = build_import_graph(
                 self._source_dir, file_paths, self._config.max_file_bytes,
             )
 
-            # Pass 7: Import expansion (scan hits only — reranked files are
-            # noisy keyword matches whose imports cascade into irrelevant code)
+            # Pass 4: Import expansion (from scan hits only)
             scan_expanded = self._import_expand(scan_hits, file_paths, forward_map)
             import_added = len(scan_expanded) - len(scan_hits)
             if import_added > 0:
@@ -330,31 +152,16 @@ class AgentContextGatherer:
                     f"AgentContextGatherer: import expansion added "
                     f"{import_added} files (from {len(scan_hits)} scan hits)"
                 )
-            # Merge: scan hits + their imports first (high-confidence), then reranked
-            expanded_set = set(scan_expanded)
-            expanded = list(scan_expanded)
-            for path in reranked:
-                if path not in expanded_set:
-                    expanded_set.add(path)
-                    expanded.append(path)
-            logger.info(
-                f"AgentContextGatherer: combined {len(expanded)} candidates "
-                f"(scan+imports={len(scan_expanded)}, reranked={len(reranked)})"
-            )
 
-            # Pass 8: Neighbor expansion (pure Python, same-directory files)
-            # Only expand from high-confidence sources: scan hits (LLM-picked
-            # from structural index) and files import-reachable from scan hits
-            # (structurally connected). BM25/embedding-only hits are noisy
-            # keyword matches that would expand irrelevant directories.
-            await self._report(progress_callback, 0.078, "agent:neighbor_expand")
+            # Pass 5: Neighbor expansion
+            await self._report(progress_callback, 0.075, "agent:neighbor_expand")
             high_confidence = self._import_reachable(
-                scan_hits, forward_map, set(expanded),
+                scan_hits, forward_map, set(scan_expanded),
             )
             neighbor_expanded = self._neighbor_expand(
-                expanded, file_paths, expand_from=high_confidence,
+                scan_expanded, file_paths, expand_from=high_confidence,
             )
-            neighbor_added = len(neighbor_expanded) - len(expanded)
+            neighbor_added = len(neighbor_expanded) - len(scan_expanded)
             if neighbor_added > 0:
                 logger.info(
                     f"AgentContextGatherer: neighbor expansion added "
@@ -362,9 +169,9 @@ class AgentContextGatherer:
                     f"high-confidence triggers)"
                 )
 
-            # Pass 8b: Screen large-directory neighbors (1 LLM call per large dir)
+            # Pass 5b: Screen large-directory neighbors
             screened = await self._screen_neighbors(
-                client, smart, job_description, expanded, neighbor_expanded,
+                client, smart, job_description, scan_expanded, neighbor_expanded,
             )
             screen_removed = len(neighbor_expanded) - len(screened)
             if screen_removed > 0:
@@ -375,7 +182,7 @@ class AgentContextGatherer:
 
             selected = self._prioritize_for_summary(screened)
 
-            # Pass 9: Read selected files + compress for planning context
+            # Pass 6: Read selected files + compress for planning context
             await self._report(progress_callback, 0.080, "agent:reading")
             file_contents, included = self._read_selected_files(selected)
 
@@ -413,8 +220,6 @@ class AgentContextGatherer:
             structural_overview = "\n\n".join(overview_parts)
 
             # Compress file contents for planning context.
-            # AST-based: strips docstrings, comments, collapses long bodies.
-            # Structural index was built from raw disk files (unaffected).
             from fitz_graveyard.planning.agent.compressor import compress_file
 
             raw_chars = sum(len(c) for c in file_contents.values())
@@ -430,16 +235,10 @@ class AgentContextGatherer:
             )
 
             # Seed-and-fetch: include only a small seed set in the prompt.
-            # The LLM gets the full structural overview (signatures + index)
-            # plus seed files as full source. Remaining files are available
-            # via read_file/read_files tools — the LLM must actively explore.
             max_seeds = getattr(self._config, "max_seed_files", _DEFAULT_MAX_SEED_FILES)
-
-            # Structural overview is always included (compact, ground truth)
             raw_summaries = structural_overview
 
-            # Priority order: scan hits first (LLM-picked from index),
-            # then rest of included files in retrieval order
+            # Priority order: scan hits first, then rest in retrieval order
             scan_set = set(scan_hits)
             priority_files: list[str] = list(scan_hits)
             for path in included:
@@ -481,15 +280,10 @@ class AgentContextGatherer:
                 for dep in deps:
                     reverse_count[dep] = reverse_count.get(dep, 0) + 1
 
-            # Build per-file provenance for traceability.
-            # For each included file, record which retrieval signals found it
-            # and whether it's a seed file (in prompt) or tool-pool (deferred).
+            # Build per-file provenance (signals: scan, import, neighbor)
             scan_set = set(scan_hits)
-            bm25_set = set(bm25_candidates)
-            embed_set = set(embedding_candidates)
-            rerank_set = set(reranked)
             import_set = set(scan_expanded) - scan_set
-            neighbor_set = set(neighbor_expanded) - set(expanded)
+            neighbor_set = set(neighbor_expanded) - set(scan_expanded)
             seed_set = set(seed_files)
 
             file_provenance: dict[str, dict] = {}
@@ -497,12 +291,6 @@ class AgentContextGatherer:
                 signals: list[str] = []
                 if path in scan_set:
                     signals.append("scan")
-                if path in bm25_set:
-                    signals.append("bm25")
-                if path in embed_set:
-                    signals.append("embed")
-                if path in rerank_set:
-                    signals.append("rerank")
                 if path in import_set:
                     signals.append("import")
                 if path in neighbor_set:
@@ -526,10 +314,7 @@ class AgentContextGatherer:
                 "file_contents": file_contents,
                 "agent_files": {
                     "total_screened": len(file_paths),
-                    "bm25_candidates": bm25_candidates[:20],
                     "scan_hits": scan_hits,
-                    "embedding_candidates": embedding_candidates[:20],
-                    "reranked": reranked[:20],
                     "selected": selected,
                     "included": included,
                     "forward_map": serializable_fwd,
@@ -663,7 +448,7 @@ class AgentContextGatherer:
             return []
 
     # ------------------------------------------------------------------
-    # Pass 4: BM25 screen
+    # File reading helpers
     # ------------------------------------------------------------------
 
     def _read_file_content(self, rel_path: str) -> str:
@@ -691,215 +476,8 @@ class AgentContextGatherer:
         self._file_cache[rel_path] = content
         return content
 
-    def _bm25_screen(
-        self,
-        file_paths: list[str],
-        job_description: str,
-        top_k: int,
-    ) -> tuple[list[str], list[float]]:
-        """Score all files by BM25 relevance to job description.
-
-        Pure Python Okapi BM25 implementation. Also applies a path bonus
-        for files whose path segments match query terms.
-
-        Returns:
-            Tuple of (sorted_paths, sorted_scores) for top K candidates.
-            Only includes files with score > 0.
-        """
-        query_terms = _tokenize(job_description)
-        if not query_terms:
-            return [], []
-
-        # Build corpus: tokenize each file's content (skip text-heavy extensions)
-        corpus: list[tuple[str, list[str]]] = []
-        for path in file_paths:
-            ext = Path(path).suffix.lower()
-            if ext in _BM25_SKIP_EXTS:
-                continue
-            content = self._read_file_content(path)
-            if not content.strip():
-                continue
-            tokens = _tokenize(content)
-            # Add path segments as bonus tokens
-            path_tokens = _tokenize(path.replace("/", " ").replace(".", " "))
-            tokens.extend(path_tokens * int(_PATH_BONUS_WEIGHT))
-            corpus.append((path, tokens))
-
-        if not corpus:
-            return [], []
-
-        # Compute document lengths and average
-        doc_lengths = [len(tokens) for _, tokens in corpus]
-        avgdl = sum(doc_lengths) / len(doc_lengths) if doc_lengths else 1.0
-        n_docs = len(corpus)
-
-        # Compute IDF for query terms
-        query_set = set(query_terms)
-        doc_freq: Counter[str] = Counter()
-        for _, tokens in corpus:
-            present = query_set & set(tokens)
-            for term in present:
-                doc_freq[term] += 1
-
-        idf: dict[str, float] = {}
-        for term in query_set:
-            df = doc_freq.get(term, 0)
-            # IDF with smoothing (prevents negative values)
-            idf[term] = math.log((n_docs - df + 0.5) / (df + 0.5) + 1.0)
-
-        # Score each document
-        scores: list[tuple[str, float]] = []
-        for i, (path, tokens) in enumerate(corpus):
-            tf_counter = Counter(tokens)
-            dl = doc_lengths[i]
-            score = 0.0
-            for term in query_terms:
-                tf = tf_counter.get(term, 0)
-                if tf == 0:
-                    continue
-                numerator = tf * (_BM25_K1 + 1)
-                denominator = tf + _BM25_K1 * (1 - _BM25_B + _BM25_B * dl / avgdl)
-                score += idf.get(term, 0) * numerator / denominator
-            scores.append((path, score))
-
-        # Sort by score descending, filter zero scores
-        scores.sort(key=lambda x: x[1], reverse=True)
-        scores = [(p, s) for p, s in scores if s > 0]
-
-        # Take top K
-        top = scores[:top_k]
-        if not top:
-            return [], []
-
-        return [p for p, _ in top], [s for _, s in top]
-
     # ------------------------------------------------------------------
-    # Pass 5: Embedding recall
-    # ------------------------------------------------------------------
-
-    def _embedding_recall(
-        self,
-        file_paths: list[str],
-        job_description: str,
-        hyde_code: str,
-        top_k: int = 100,
-    ) -> list[str]:
-        """Semantic file retrieval using sentence-transformers embeddings.
-
-        Encodes query + HyDE code and all file contents, returns top-K
-        by cosine similarity. Raises ImportError if sentence-transformers
-        is not installed.
-        """
-        import numpy as np
-
-        from fitz_graveyard.planning.agent.models import EmbeddingModel
-
-        embedder = EmbeddingModel()
-        try:
-            embedder.load(self._config.embedding_model)
-
-            is_nomic = "nomic" in self._config.embedding_model.lower()
-            q_prefix = "search_query: " if is_nomic else ""
-            d_prefix = "search_document: " if is_nomic else ""
-
-            # Encode queries (original + HyDE)
-            queries = [f"{q_prefix}{job_description}"]
-            if hyde_code:
-                queries.append(f"{q_prefix}{hyde_code[:_EMBED_MAX_CHARS]}")
-            query_embs = embedder.encode(queries)
-
-            # Encode all file contents
-            doc_texts = []
-            valid_paths = []
-            for path in file_paths:
-                content = self._read_file_content(path)
-                if not content.strip():
-                    continue
-                doc_text = f"{d_prefix}{path}\n{content[:_EMBED_MAX_CHARS]}"
-                doc_texts.append(doc_text)
-                valid_paths.append(path)
-
-            if not doc_texts:
-                return []
-
-            doc_embs = embedder.encode(doc_texts)
-
-            # Cosine similarity (embeddings are normalized → dot product)
-            # Take max similarity across query representations
-            similarities = np.max(query_embs @ doc_embs.T, axis=0)
-
-            # Top-K by similarity
-            top_indices = np.argsort(similarities)[::-1][:top_k]
-            return [valid_paths[i] for i in top_indices if similarities[i] > 0]
-
-        finally:
-            embedder.unload()
-
-    # ------------------------------------------------------------------
-    # Merge + Pass 6: Cross-encoder rerank
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _merge_candidates(
-        bm25: list[str],
-        embedding: list[str],
-        scan: list[str],
-        all_paths: list[str],
-    ) -> list[str]:
-        """Merge and deduplicate candidates from all retrieval signals.
-
-        Order: scan hits first (LLM-selected from structural index),
-        then BM25 (keyword match), then embedding (semantic match).
-        Deduplication preserves first appearance.
-        """
-        seen: set[str] = set()
-        merged: list[str] = []
-        all_paths_set = set(all_paths)
-
-        for path in scan + bm25 + embedding:
-            if path not in seen and path in all_paths_set:
-                seen.add(path)
-                merged.append(path)
-
-        return merged[:_MAX_CANDIDATES_FOR_RERANK]
-
-    def _rerank_candidates(
-        self,
-        candidates: list[str],
-        job_description: str,
-        top_k: int = 50,
-    ) -> list[str]:
-        """Cross-encoder reranking of merged candidates.
-
-        Raises ImportError if sentence-transformers is not installed.
-        """
-        from fitz_graveyard.planning.agent.models import RerankerModel
-
-        reranker = RerankerModel()
-        try:
-            reranker.load(self._config.reranker_model)
-
-            doc_texts = []
-            valid_paths = []
-            for path in candidates:
-                content = self._read_file_content(path)
-                if not content.strip():
-                    continue
-                doc_text = f"{path}\n{content[:_EMBED_MAX_CHARS]}"
-                doc_texts.append(doc_text)
-                valid_paths.append(path)
-
-            if not doc_texts:
-                return candidates
-
-            ranked = reranker.rank(job_description, doc_texts, top_k=top_k)
-            return [valid_paths[idx] for idx, _score in ranked]
-
-        finally:
-            reranker.unload()
-
-    # ------------------------------------------------------------------
-    # Pass 7: Import expansion
+    # Pass 4: Import expansion
     # ------------------------------------------------------------------
 
     def _import_expand(
@@ -989,7 +567,7 @@ class AgentContextGatherer:
         return sorted(paths, key=_tier)
 
     # ------------------------------------------------------------------
-    # Pass 8: Neighbor expansion
+    # Pass 5: Neighbor expansion
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -1155,7 +733,7 @@ class AgentContextGatherer:
         return ""
 
     # ------------------------------------------------------------------
-    # Pass 9: Read raw source
+    # Pass 6: Read raw source
     # ------------------------------------------------------------------
 
     def _read_selected_files(
@@ -1241,9 +819,3 @@ class AgentContextGatherer:
         result = callback(progress, phase)
         if hasattr(result, "__await__"):
             await result
-
-
-def _tokenize(text: str) -> list[str]:
-    """Tokenize text for BM25: lowercase, split on non-alphanumeric, remove stopwords."""
-    tokens = re.findall(r"[a-z][a-z0-9_]*", text.lower())
-    return [t for t in tokens if t not in _STOPWORDS and len(t) > 1]

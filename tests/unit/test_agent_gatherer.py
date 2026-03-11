@@ -11,7 +11,6 @@ from fitz_graveyard.config.schema import AgentConfig
 from fitz_graveyard.planning.agent.gatherer import (
     AgentContextGatherer,
     _MAX_TREE_FILES,
-    _tokenize,
 )
 from fitz_graveyard.planning.agent.indexer import build_import_graph
 
@@ -34,57 +33,6 @@ def mock_client():
     client.unload_model = AsyncMock(return_value=True)
     client.reload_model = AsyncMock(return_value=True)
     return client
-
-
-# ---------------------------------------------------------------------------
-# Tokenizer
-# ---------------------------------------------------------------------------
-class TestTokenize:
-    def test_basic_tokenization(self):
-        result = _tokenize("build an openai chat plugin")
-        assert "build" in result
-        assert "openai" in result
-        assert "chat" in result
-        assert "plugin" in result
-        assert "an" not in result
-
-    def test_removes_stopwords(self):
-        result = _tokenize("the quick and simple test")
-        assert "the" not in result
-        assert "and" not in result
-        assert "quick" in result
-        assert "simple" in result
-        assert "test" in result
-
-    def test_removes_python_keywords(self):
-        result = _tokenize("import os from pathlib def main class Foo")
-        assert "import" not in result
-        assert "from" not in result
-        assert "def" not in result
-        assert "class" not in result
-        assert "pathlib" in result
-        assert "main" in result
-        assert "foo" in result
-
-    def test_lowercases(self):
-        result = _tokenize("OpenAI ChatPlugin")
-        assert "openai" in result
-        assert "chatplugin" in result
-
-    def test_splits_on_non_alphanumeric(self):
-        result = _tokenize("foo/bar.py")
-        assert "foo" in result
-        assert "bar" in result
-        assert "py" in result
-
-    def test_empty_input(self):
-        assert _tokenize("") == []
-
-    def test_removes_single_char_tokens(self):
-        result = _tokenize("a b c dd ee")
-        assert "dd" in result
-        assert "ee" in result
-        assert len([t for t in result if len(t) == 1]) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -249,141 +197,7 @@ class TestStructuralScan:
 
 
 # ---------------------------------------------------------------------------
-# Pass 4: BM25 screening
-# ---------------------------------------------------------------------------
-class TestBm25Screen:
-    def test_scores_relevant_files_higher(self, tmp_path):
-        (tmp_path / "openai_provider.py").write_text(
-            "class OpenAIProvider:\n    def chat(self, prompt): pass"
-        )
-        (tmp_path / "utils.py").write_text(
-            "def format_string(s): return s.strip()"
-        )
-        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        paths, scores = gatherer._bm25_screen(
-            ["openai_provider.py", "utils.py"],
-            "build an openai chat plugin",
-            top_k=10,
-        )
-        assert len(paths) > 0
-        assert paths[0] == "openai_provider.py"
-
-    def test_returns_top_k(self, tmp_path):
-        for i in range(10):
-            (tmp_path / f"file_{i}.py").write_text(f"keyword_{i} = {i}")
-        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        all_paths = [f"file_{i}.py" for i in range(10)]
-        paths, scores = gatherer._bm25_screen(all_paths, "keyword_0 keyword_1", top_k=3)
-        assert len(paths) <= 3
-
-    def test_empty_query_returns_empty(self, tmp_path):
-        (tmp_path / "main.py").write_text("x = 1")
-        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        paths, scores = gatherer._bm25_screen(["main.py"], "the and or", top_k=10)
-        assert paths == []
-        assert scores == []
-
-    def test_no_files_returns_empty(self, tmp_path):
-        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        paths, scores = gatherer._bm25_screen([], "some query", top_k=10)
-        assert paths == []
-
-    def test_filters_zero_score_files(self, tmp_path):
-        (tmp_path / "relevant.py").write_text("openai chat provider interface")
-        (tmp_path / "unrelated.py").write_text("zzzzz qqqqq wwwww")
-        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        paths, scores = gatherer._bm25_screen(
-            ["relevant.py", "unrelated.py"],
-            "openai chat",
-            top_k=10,
-        )
-        assert "relevant.py" in paths
-        for s in scores:
-            assert s > 0
-
-    def test_path_bonus_boosts_matching_paths(self, tmp_path):
-        (tmp_path / "openai.py").write_text("provider = 1")
-        (tmp_path / "other.py").write_text("provider = 1")
-        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        paths, scores = gatherer._bm25_screen(
-            ["openai.py", "other.py"],
-            "openai provider",
-            top_k=10,
-        )
-        assert paths[0] == "openai.py"
-
-    def test_skips_empty_files(self, tmp_path):
-        (tmp_path / "empty.py").write_text("")
-        (tmp_path / "real.py").write_text("openai chat provider")
-        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        paths, scores = gatherer._bm25_screen(
-            ["empty.py", "real.py"], "openai", top_k=10,
-        )
-        assert "empty.py" not in paths
-        assert "real.py" in paths
-
-    def test_skips_markdown_files(self, tmp_path):
-        (tmp_path / "docs.md").write_text("openai chat provider plugin interface")
-        (tmp_path / "code.py").write_text("openai chat provider")
-        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        paths, scores = gatherer._bm25_screen(
-            ["docs.md", "code.py"], "openai chat", top_k=10,
-        )
-        assert "code.py" in paths
-        assert "docs.md" not in paths
-
-    def test_scores_are_descending(self, tmp_path):
-        for i in range(5):
-            content = "openai " * (i + 1) + "filler " * 20
-            (tmp_path / f"f{i}.py").write_text(content)
-        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        all_paths = [f"f{i}.py" for i in range(5)]
-        paths, scores = gatherer._bm25_screen(all_paths, "openai", top_k=10)
-        assert scores == sorted(scores, reverse=True)
-
-
-# ---------------------------------------------------------------------------
-# Merge candidates
-# ---------------------------------------------------------------------------
-class TestMergeCandidates:
-    def test_deduplicates(self):
-        result = AgentContextGatherer._merge_candidates(
-            bm25=["a.py", "b.py"],
-            embedding=["b.py", "c.py"],
-            scan=["a.py", "d.py"],
-            all_paths=["a.py", "b.py", "c.py", "d.py"],
-        )
-        assert len(result) == 4
-        assert len(set(result)) == 4
-
-    def test_scan_first_order(self):
-        result = AgentContextGatherer._merge_candidates(
-            bm25=["b.py"],
-            embedding=["c.py"],
-            scan=["a.py"],
-            all_paths=["a.py", "b.py", "c.py"],
-        )
-        assert result[0] == "a.py"
-
-    def test_filters_invalid_paths(self):
-        result = AgentContextGatherer._merge_candidates(
-            bm25=["a.py", "nonexistent.py"],
-            embedding=[],
-            scan=[],
-            all_paths=["a.py", "b.py"],
-        )
-        assert "nonexistent.py" not in result
-        assert "a.py" in result
-
-    def test_empty_inputs(self):
-        result = AgentContextGatherer._merge_candidates(
-            bm25=[], embedding=[], scan=[], all_paths=["a.py"],
-        )
-        assert result == []
-
-
-# ---------------------------------------------------------------------------
-# Pass 8: Neighbor expansion
+# Pass 5: Neighbor expansion
 # ---------------------------------------------------------------------------
 class TestNeighborExpand:
     def test_adds_same_directory_files(self):
@@ -481,7 +295,7 @@ class TestNeighborExpand:
 
 
 # ---------------------------------------------------------------------------
-# Pass 8b: Neighbor screening
+# Pass 5b: Neighbor screening
 # ---------------------------------------------------------------------------
 class TestScreenNeighbors:
     @pytest.mark.asyncio
@@ -572,7 +386,7 @@ class TestScreenNeighbors:
 
 
 # ---------------------------------------------------------------------------
-# Pass 9: _read_selected_files
+# Pass 6: _read_selected_files
 # ---------------------------------------------------------------------------
 class TestReadSelectedFiles:
     def test_reads_all_files_into_dict(self, tmp_path):
@@ -941,10 +755,7 @@ class TestGatherEndToEnd:
         )
         result = await gatherer.gather(mock_client, "openai chat")
         agent_files = result["agent_files"]
-        assert "bm25_candidates" in agent_files
         assert "scan_hits" in agent_files
-        assert "embedding_candidates" in agent_files
-        assert "reranked" in agent_files
         assert "selected" in agent_files
         assert "included" in agent_files
 
@@ -972,7 +783,7 @@ class TestProgressCallback:
         assert "mapping" in phase_names
         assert "expanding_query" in phase_names
         assert "scanning_index" in phase_names
-        assert "bm25" in phase_names
+        assert "import_expand" in phase_names
         assert "neighbor_expand" in phase_names
         assert "reading" in phase_names
 

@@ -275,41 +275,19 @@ class PlanRenderer:
                 sections.append("### Agent File Selection")
                 sections.append("")
                 total = agent_files.get("total_screened", 0)
-                bm25 = agent_files.get("bm25_candidates", [])
                 scan_hits = agent_files.get("scan_hits", [])
-                embed = agent_files.get("embedding_candidates", [])
-                reranked = agent_files.get("reranked", [])
                 selected = agent_files.get("selected", [])
                 included = agent_files.get("included", [])
                 sections.append(
                     f"**Screened**: {total} files"
                 )
                 sections.append("")
-                if bm25:
-                    sections.append(
-                        f"**BM25** ({len(bm25)} candidates):"
-                    )
-                    for f in bm25:
-                        sections.append(f"- {f}")
-                    sections.append("")
-                if embed:
-                    sections.append(
-                        f"**Embedding recall** ({len(embed)} candidates):"
-                    )
-                    for f in embed:
-                        sections.append(f"- {f}")
-                    sections.append("")
                 if scan_hits:
                     sections.append(
                         f"**Structural scan** ({len(scan_hits)} hits):"
                     )
                     for f in scan_hits:
                         sections.append(f"- {f}")
-                    sections.append("")
-                if reranked:
-                    sections.append(
-                        f"**Reranked**: {len(reranked)} candidates"
-                    )
                     sections.append("")
                 sections.append(
                     f"**Selected**: {len(selected)} files, "

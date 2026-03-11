@@ -66,14 +66,6 @@ class AgentConfig(BaseModel):
             "Lower values force the LLM to actively explore via tool calls."
         ),
     )
-    embedding_model: str = Field(
-        default="nomic-ai/nomic-embed-text-v1.5",
-        description="Sentence-transformers model for semantic file retrieval (CUDA required)",
-    )
-    reranker_model: str = Field(
-        default="cross-encoder/ms-marco-MiniLM-L-12-v2",
-        description="Cross-encoder model for reranking retrieval candidates (CUDA required)",
-    )
 
 
 class OutputConfig(BaseModel):
