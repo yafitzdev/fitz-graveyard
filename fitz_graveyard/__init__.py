@@ -21,4 +21,4 @@ if sys.platform == "win32":
             raise OSError("WMI disabled to prevent deadlock")
         platform._wmi_query = _wmi_disabled
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
