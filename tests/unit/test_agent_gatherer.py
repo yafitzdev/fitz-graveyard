@@ -11,7 +11,6 @@ from fitz_graveyard.config.schema import AgentConfig
 from fitz_graveyard.planning.agent.gatherer import (
     AgentContextGatherer,
     _MAX_TREE_FILES,
-    _tokenize,
 )
 from fitz_graveyard.planning.agent.indexer import build_import_graph
 
@@ -34,57 +33,6 @@ def mock_client():
     client.unload_model = AsyncMock(return_value=True)
     client.reload_model = AsyncMock(return_value=True)
     return client
-
-
-# ---------------------------------------------------------------------------
-# Tokenizer
-# ---------------------------------------------------------------------------
-class TestTokenize:
-    def test_basic_tokenization(self):
-        result = _tokenize("build an openai chat plugin")
-        assert "build" in result
-        assert "openai" in result
-        assert "chat" in result
-        assert "plugin" in result
-        assert "an" not in result
-
-    def test_removes_stopwords(self):
-        result = _tokenize("the quick and simple test")
-        assert "the" not in result
-        assert "and" not in result
-        assert "quick" in result
-        assert "simple" in result
-        assert "test" in result
-
-    def test_removes_python_keywords(self):
-        result = _tokenize("import os from pathlib def main class Foo")
-        assert "import" not in result
-        assert "from" not in result
-        assert "def" not in result
-        assert "class" not in result
-        assert "pathlib" in result
-        assert "main" in result
-        assert "foo" in result
-
-    def test_lowercases(self):
-        result = _tokenize("OpenAI ChatPlugin")
-        assert "openai" in result
-        assert "chatplugin" in result
-
-    def test_splits_on_non_alphanumeric(self):
-        result = _tokenize("foo/bar.py")
-        assert "foo" in result
-        assert "bar" in result
-        assert "py" in result
-
-    def test_empty_input(self):
-        assert _tokenize("") == []
-
-    def test_removes_single_char_tokens(self):
-        result = _tokenize("a b c dd ee")
-        assert "dd" in result
-        assert "ee" in result
-        assert len([t for t in result if len(t) == 1]) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -249,141 +197,7 @@ class TestStructuralScan:
 
 
 # ---------------------------------------------------------------------------
-# Pass 4: BM25 screening
-# ---------------------------------------------------------------------------
-class TestBm25Screen:
-    def test_scores_relevant_files_higher(self, tmp_path):
-        (tmp_path / "openai_provider.py").write_text(
-            "class OpenAIProvider:\n    def chat(self, prompt): pass"
-        )
-        (tmp_path / "utils.py").write_text(
-            "def format_string(s): return s.strip()"
-        )
-        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        paths, scores = gatherer._bm25_screen(
-            ["openai_provider.py", "utils.py"],
-            "build an openai chat plugin",
-            top_k=10,
-        )
-        assert len(paths) > 0
-        assert paths[0] == "openai_provider.py"
-
-    def test_returns_top_k(self, tmp_path):
-        for i in range(10):
-            (tmp_path / f"file_{i}.py").write_text(f"keyword_{i} = {i}")
-        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        all_paths = [f"file_{i}.py" for i in range(10)]
-        paths, scores = gatherer._bm25_screen(all_paths, "keyword_0 keyword_1", top_k=3)
-        assert len(paths) <= 3
-
-    def test_empty_query_returns_empty(self, tmp_path):
-        (tmp_path / "main.py").write_text("x = 1")
-        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        paths, scores = gatherer._bm25_screen(["main.py"], "the and or", top_k=10)
-        assert paths == []
-        assert scores == []
-
-    def test_no_files_returns_empty(self, tmp_path):
-        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        paths, scores = gatherer._bm25_screen([], "some query", top_k=10)
-        assert paths == []
-
-    def test_filters_zero_score_files(self, tmp_path):
-        (tmp_path / "relevant.py").write_text("openai chat provider interface")
-        (tmp_path / "unrelated.py").write_text("zzzzz qqqqq wwwww")
-        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        paths, scores = gatherer._bm25_screen(
-            ["relevant.py", "unrelated.py"],
-            "openai chat",
-            top_k=10,
-        )
-        assert "relevant.py" in paths
-        for s in scores:
-            assert s > 0
-
-    def test_path_bonus_boosts_matching_paths(self, tmp_path):
-        (tmp_path / "openai.py").write_text("provider = 1")
-        (tmp_path / "other.py").write_text("provider = 1")
-        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        paths, scores = gatherer._bm25_screen(
-            ["openai.py", "other.py"],
-            "openai provider",
-            top_k=10,
-        )
-        assert paths[0] == "openai.py"
-
-    def test_skips_empty_files(self, tmp_path):
-        (tmp_path / "empty.py").write_text("")
-        (tmp_path / "real.py").write_text("openai chat provider")
-        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        paths, scores = gatherer._bm25_screen(
-            ["empty.py", "real.py"], "openai", top_k=10,
-        )
-        assert "empty.py" not in paths
-        assert "real.py" in paths
-
-    def test_skips_markdown_files(self, tmp_path):
-        (tmp_path / "docs.md").write_text("openai chat provider plugin interface")
-        (tmp_path / "code.py").write_text("openai chat provider")
-        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        paths, scores = gatherer._bm25_screen(
-            ["docs.md", "code.py"], "openai chat", top_k=10,
-        )
-        assert "code.py" in paths
-        assert "docs.md" not in paths
-
-    def test_scores_are_descending(self, tmp_path):
-        for i in range(5):
-            content = "openai " * (i + 1) + "filler " * 20
-            (tmp_path / f"f{i}.py").write_text(content)
-        gatherer = AgentContextGatherer(config=_make_config(), source_dir=str(tmp_path))
-        all_paths = [f"f{i}.py" for i in range(5)]
-        paths, scores = gatherer._bm25_screen(all_paths, "openai", top_k=10)
-        assert scores == sorted(scores, reverse=True)
-
-
-# ---------------------------------------------------------------------------
-# Merge candidates
-# ---------------------------------------------------------------------------
-class TestMergeCandidates:
-    def test_deduplicates(self):
-        result = AgentContextGatherer._merge_candidates(
-            bm25=["a.py", "b.py"],
-            embedding=["b.py", "c.py"],
-            scan=["a.py", "d.py"],
-            all_paths=["a.py", "b.py", "c.py", "d.py"],
-        )
-        assert len(result) == 4
-        assert len(set(result)) == 4
-
-    def test_scan_first_order(self):
-        result = AgentContextGatherer._merge_candidates(
-            bm25=["b.py"],
-            embedding=["c.py"],
-            scan=["a.py"],
-            all_paths=["a.py", "b.py", "c.py"],
-        )
-        assert result[0] == "a.py"
-
-    def test_filters_invalid_paths(self):
-        result = AgentContextGatherer._merge_candidates(
-            bm25=["a.py", "nonexistent.py"],
-            embedding=[],
-            scan=[],
-            all_paths=["a.py", "b.py"],
-        )
-        assert "nonexistent.py" not in result
-        assert "a.py" in result
-
-    def test_empty_inputs(self):
-        result = AgentContextGatherer._merge_candidates(
-            bm25=[], embedding=[], scan=[], all_paths=["a.py"],
-        )
-        assert result == []
-
-
-# ---------------------------------------------------------------------------
-# Pass 8: Neighbor expansion
+# Pass 5: Neighbor expansion
 # ---------------------------------------------------------------------------
 class TestNeighborExpand:
     def test_adds_same_directory_files(self):
@@ -481,7 +295,7 @@ class TestNeighborExpand:
 
 
 # ---------------------------------------------------------------------------
-# Pass 8b: Neighbor screening
+# Pass 5b: Neighbor screening
 # ---------------------------------------------------------------------------
 class TestScreenNeighbors:
     @pytest.mark.asyncio
@@ -572,7 +386,7 @@ class TestScreenNeighbors:
 
 
 # ---------------------------------------------------------------------------
-# Pass 9: _read_selected_files
+# Pass 6: _read_selected_files
 # ---------------------------------------------------------------------------
 class TestReadSelectedFiles:
     def test_reads_all_files_into_dict(self, tmp_path):
@@ -941,10 +755,7 @@ class TestGatherEndToEnd:
         )
         result = await gatherer.gather(mock_client, "openai chat")
         agent_files = result["agent_files"]
-        assert "bm25_candidates" in agent_files
         assert "scan_hits" in agent_files
-        assert "embedding_candidates" in agent_files
-        assert "reranked" in agent_files
         assert "selected" in agent_files
         assert "included" in agent_files
 
@@ -972,7 +783,7 @@ class TestProgressCallback:
         assert "mapping" in phase_names
         assert "expanding_query" in phase_names
         assert "scanning_index" in phase_names
-        assert "bm25" in phase_names
+        assert "import_expand" in phase_names
         assert "neighbor_expand" in phase_names
         assert "reading" in phase_names
 
@@ -996,84 +807,85 @@ class TestProgressCallback:
 # ---------------------------------------------------------------------------
 # Budget-aware file inclusion
 # ---------------------------------------------------------------------------
-class TestBudgetAwareInclusion:
+class TestSeedAndFetch:
     @pytest.mark.asyncio
-    async def test_all_files_fit_within_budget(self, tmp_path, mock_client):
-        """With large context window, all files fit in raw_summaries."""
+    async def test_all_files_as_seeds_when_under_cap(self, tmp_path, mock_client):
+        """With fewer files than max_seed_files, all become seeds."""
         (tmp_path / "main.py").write_text("def run(): pass")
         (tmp_path / "util.py").write_text("def helper(): pass")
-        mock_client.context_size = 65536  # ~104K chars budget
         mock_client.generate = AsyncMock(side_effect=[
             "TERMS:\nrun\n\nHYPOTHETICAL:\n```python\nx=1\n```",
             '["main.py", "util.py"]',
         ])
         gatherer = AgentContextGatherer(
-            config=_make_config(), source_dir=str(tmp_path),
+            config=_make_config(max_seed_files=30), source_dir=str(tmp_path),
         )
         result = await gatherer.gather(mock_client, "run helper")
-        # Both files should be in raw_summaries
+        # Both files should be in raw_summaries as seeds
         assert "### main.py" in result["raw_summaries"]
         assert "### util.py" in result["raw_summaries"]
+        assert "SEED FILES" in result["raw_summaries"]
 
     @pytest.mark.asyncio
-    async def test_tiny_budget_defers_files(self, tmp_path, mock_client):
-        """With tiny context window, some files deferred to read_file tool."""
-        # Create files big enough to exceed a tiny budget
-        (tmp_path / "main.py").write_text("def run(): pass\n" * 100)
-        (tmp_path / "big.py").write_text("def process(): pass\n" * 100)
-        mock_client.context_size = 256  # ~410 chars budget (256 * 4 * 0.4)
+    async def test_seed_cap_defers_excess_to_tool_pool(self, tmp_path, mock_client):
+        """Files beyond max_seed_files go to tool pool (file_contents only)."""
+        for i in range(5):
+            (tmp_path / f"file{i}.py").write_text(f"def func{i}(): pass")
         mock_client.generate = AsyncMock(side_effect=[
-            "TERMS:\nrun\n\nHYPOTHETICAL:\n```python\nx=1\n```",
-            '["main.py", "big.py"]',
+            "TERMS:\nfunc\n\nHYPOTHETICAL:\n```python\nx=1\n```",
+            '["file0.py", "file1.py", "file2.py", "file3.py", "file4.py"]',
         ])
         gatherer = AgentContextGatherer(
-            config=_make_config(), source_dir=str(tmp_path),
+            config=_make_config(max_seed_files=2), source_dir=str(tmp_path),
         )
-        result = await gatherer.gather(mock_client, "run process")
-        # Both files should still be in file_contents for read_file tool
-        assert "main.py" in result["file_contents"]
-        assert "big.py" in result["file_contents"]
-        # raw_summaries should have structural overview at minimum
-        assert "STRUCTURAL OVERVIEW" in result["raw_summaries"]
+        result = await gatherer.gather(mock_client, "func")
+        # All 5 files should be in file_contents for tool access
+        for i in range(5):
+            assert f"file{i}.py" in result["file_contents"]
+        # But only first 2 (scan hits first) should be in raw_summaries
+        raw = result["raw_summaries"]
+        seed_count = sum(1 for i in range(5) if f"### file{i}.py" in raw)
+        assert seed_count == 2
 
     @pytest.mark.asyncio
-    async def test_scan_hits_prioritized_over_reranked(self, tmp_path, mock_client):
-        """Scan hits are included before reranked files when budget is tight."""
+    async def test_scan_hits_prioritized_in_seed_set(self, tmp_path, mock_client):
+        """Scan hits become seeds before BM25/embedding matches."""
         (tmp_path / "scan_hit.py").write_text("def scanned(): pass")
         (tmp_path / "bm25_match.py").write_text("def matched(): pass")
-        mock_client.context_size = 65536
         mock_client.generate = AsyncMock(side_effect=[
             "TERMS:\nscanned\n\nHYPOTHETICAL:\n```python\nx=1\n```",
             '["scan_hit.py"]',  # Only scan_hit.py from structural scan
         ])
         gatherer = AgentContextGatherer(
-            config=_make_config(), source_dir=str(tmp_path),
+            config=_make_config(max_seed_files=1), source_dir=str(tmp_path),
         )
         result = await gatherer.gather(mock_client, "scanned matched")
         raw = result["raw_summaries"]
-        # Scan hit should appear before BM25-only match
-        if "### scan_hit.py" in raw and "### bm25_match.py" in raw:
-            assert raw.index("### scan_hit.py") < raw.index("### bm25_match.py")
+        # scan_hit.py should be seed, bm25_match.py should be tool pool
+        assert "### scan_hit.py" in raw
+        # bm25_match should be in file_contents but not in raw_summaries
+        if "bm25_match.py" in result.get("file_contents", {}):
+            assert "### bm25_match.py" not in raw
 
     @pytest.mark.asyncio
-    async def test_no_mid_file_truncation(self, tmp_path, mock_client):
-        """Files are included whole or not at all — never truncated mid-content."""
-        content = "def big_function():\n" + "    x = 1\n" * 200
-        (tmp_path / "big.py").write_text(content)
-        (tmp_path / "small.py").write_text("x = 1")
-        mock_client.context_size = 1024  # ~1638 chars budget
+    async def test_provenance_tracks_seed_vs_pool(self, tmp_path, mock_client):
+        """File provenance correctly marks seed vs tool_pool files."""
+        for i in range(4):
+            (tmp_path / f"m{i}.py").write_text(f"def f{i}(): pass")
         mock_client.generate = AsyncMock(side_effect=[
-            "TERMS:\nbig\n\nHYPOTHETICAL:\n```python\nx=1\n```",
-            '["big.py", "small.py"]',
+            "TERMS:\nfunc\n\nHYPOTHETICAL:\n```python\nx=1\n```",
+            '["m0.py", "m1.py"]',  # scan hits
         ])
         gatherer = AgentContextGatherer(
-            config=_make_config(), source_dir=str(tmp_path),
+            config=_make_config(max_seed_files=2), source_dir=str(tmp_path),
         )
-        result = await gatherer.gather(mock_client, "big small")
-        raw = result["raw_summaries"]
-        # If big.py is in raw_summaries, it should be complete (not truncated)
-        if "### big.py" in raw:
-            start = raw.index("### big.py")
-            block = raw[start:]
-            # Should contain the closing ``` fence (file included whole)
-            assert "```" in block[len("### big.py\n```"):]
+        result = await gatherer.gather(mock_client, "func")
+        prov = result.get("agent_files", {}).get("file_provenance", {})
+        # Scan hits (m0, m1) should be in_prompt=True (seeds)
+        for p in ["m0.py", "m1.py"]:
+            if p in prov:
+                assert prov[p]["in_prompt"] is True
+        # Non-scan files should be in_prompt=False (tool pool)
+        for p in ["m2.py", "m3.py"]:
+            if p in prov:
+                assert prov[p]["in_prompt"] is False

@@ -57,6 +57,12 @@ _GENERIC_CODE_EXTS = {
 # Files without these extensions are invisible to the agent.
 INDEXABLE_EXTENSIONS = _PYTHON_EXTS | _CONFIG_EXTS | _MARKDOWN_EXTS | _GENERIC_CODE_EXTS
 
+# Decorators worth showing in the structural index (architectural cues).
+_KEY_DECORATORS = frozenset({
+    "dataclass", "abstractmethod", "property", "staticmethod",
+    "classmethod", "override",
+})
+
 
 def build_structural_index(
     source_dir: str,
@@ -131,40 +137,62 @@ def _extract_python(content: str) -> str:
 
     lines: list[str] = []
 
-    # Classes with bases and method names
+    # Module docstring (first line only)
+    module_doc = ast.get_docstring(tree)
+    if module_doc:
+        first_line = module_doc.strip().splitlines()[0]
+        lines.append(f'doc: "{first_line}"')
+
+    # Classes with bases, decorators, and method names + return types
     classes = []
     for node in ast.iter_child_nodes(tree):
         if isinstance(node, ast.ClassDef):
             bases = []
             for base in node.bases:
                 bases.append(_ast_name(base))
-            methods = [
-                n.name for n in ast.iter_child_nodes(node)
-                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
-            ]
+            methods = []
+            for n in ast.iter_child_nodes(node):
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    m_str = n.name
+                    if n.returns:
+                        try:
+                            ret = ast.unparse(n.returns)
+                        except Exception:
+                            ret = _ast_name(n.returns)
+                        m_str += f" -> {ret}"
+                    methods.append(m_str)
             cls_str = node.name
             if bases:
                 cls_str += f"({', '.join(bases)})"
+            decs = _extract_key_decorators(node.decorator_list)
+            if decs:
+                cls_str += f" [{', '.join(f'@{d}' for d in decs)}]"
             if methods:
                 cls_str += f" [{', '.join(methods)}]"
             classes.append(cls_str)
     if classes:
         lines.append(f"classes: {'; '.join(classes)}")
 
-    # Top-level functions with parameter names
+    # Top-level functions with parameter names, return types, decorators
     functions = []
     for node in ast.iter_child_nodes(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             params = [arg.arg for arg in node.args.args if arg.arg != "self"]
             func_str = f"{node.name}({', '.join(params)})"
+            if node.returns:
+                try:
+                    ret = ast.unparse(node.returns)
+                except Exception:
+                    ret = _ast_name(node.returns)
+                func_str += f" -> {ret}"
+            decs = _extract_key_decorators(node.decorator_list)
+            if decs:
+                func_str += f" [{', '.join(f'@{d}' for d in decs)}]"
             functions.append(func_str)
     if functions:
         lines.append(f"functions: {', '.join(functions)}")
 
     # Imports — walk full tree to catch TYPE_CHECKING and conditional imports.
-    # Show full dotted paths for intra-project imports so the LLM can trace
-    # architectural connections (e.g. "fitz_ai.llm.providers.base" not "fitz_ai").
-    # External packages still use top-level name only.
     imports: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -172,8 +200,6 @@ def _extract_python(content: str) -> str:
                 imports.add(alias.name)
         elif isinstance(node, ast.ImportFrom):
             if node.module:
-                # Keep full path for multi-segment (intra-project) imports,
-                # top-level only for stdlib/external (single segment).
                 if "." in node.module:
                     imports.add(node.module)
                 else:
@@ -207,6 +233,26 @@ def _ast_name(node: ast.expr) -> str:
     if isinstance(node, ast.Subscript):
         return _ast_name(node.value)
     return "?"
+
+
+def _extract_key_decorators(decorator_list: list[ast.expr]) -> list[str]:
+    """Extract recognized decorator names from an AST decorator list."""
+    result = []
+    for dec in decorator_list:
+        name = None
+        if isinstance(dec, ast.Name):
+            name = dec.id
+        elif isinstance(dec, ast.Attribute):
+            name = dec.attr
+        elif isinstance(dec, ast.Call):
+            func = dec.func
+            if isinstance(func, ast.Name):
+                name = func.id
+            elif isinstance(func, ast.Attribute):
+                name = func.attr
+        if name and name in _KEY_DECORATORS:
+            result.append(name)
+    return result
 
 
 def _extract_python_regex(content: str) -> str:

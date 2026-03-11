@@ -58,13 +58,13 @@ class AgentConfig(BaseModel):
             "Resolution order: create_plan(source_dir=) parameter > this config value > cwd at runtime."
         ),
     )
-    embedding_model: str = Field(
-        default="nomic-ai/nomic-embed-text-v1.5",
-        description="Sentence-transformers model for semantic file retrieval (CUDA required)",
-    )
-    reranker_model: str = Field(
-        default="cross-encoder/ms-marco-MiniLM-L-12-v2",
-        description="Cross-encoder model for reranking retrieval candidates (CUDA required)",
+    max_seed_files: int = Field(
+        default=30,
+        description=(
+            "Maximum files included as full source in the planning prompt (seed set). "
+            "Remaining files are available via read_file tool during reasoning. "
+            "Lower values force the LLM to actively explore via tool calls."
+        ),
     )
 
 
