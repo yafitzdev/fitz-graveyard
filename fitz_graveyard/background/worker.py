@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
@@ -434,11 +435,27 @@ class BackgroundWorker:
         diagnostics: dict[str, Any] = {
             "provider": self._config.provider,
             "model": self._ollama_client.model,
+            "context_length": getattr(self._ollama_client, "context_size", None),
             "agent_enabled": self._config.agent.enabled,
             "stage_timings_s": result.stage_timings,
             "total_llm_calls": len(call_metrics),
             "total_generation_s": round(sum(m["elapsed_s"] for m in call_metrics), 1),
         }
+
+        # Provider-specific model details
+        if self._config.provider == "llama_cpp":
+            model_cfg = self._config.llama_cpp.fast_model
+            diagnostics["model_file"] = model_cfg.path
+            if model_cfg.cache_type_k:
+                diagnostics["cache_type_k"] = model_cfg.cache_type_k
+            if model_cfg.cache_type_v:
+                diagnostics["cache_type_v"] = model_cfg.cache_type_v
+
+        # Extract quant from model path/name (e.g. "Q6_K_XL" from GGUF filename)
+        model_id = diagnostics.get("model_file") or diagnostics.get("model", "")
+        quant_match = re.search(r"[_-](Q\d+_K(?:_[A-Z]+)?|Q\d+_\d+|IQ\d+_[A-Z]+|F16|F32|BF16)", model_id, re.IGNORECASE)
+        if quant_match:
+            diagnostics["quant"] = quant_match.group(1).upper()
         agent_ctx = result.outputs.get("_agent_context", {})
         if isinstance(agent_ctx, dict) and "agent_files" in agent_ctx:
             diagnostics["agent_files"] = agent_ctx["agent_files"]
@@ -458,6 +475,7 @@ class BackgroundWorker:
             design=DesignOutput(**result.outputs["design"]),
             roadmap=RoadmapOutput(**result.outputs["roadmap"]),
             risk=RiskOutput(**result.outputs["risk"]),
+            job_description=job.description,
             git_sha=result.git_sha or "",
             generated_at=datetime.now(),
             api_review_requested=job.api_review,

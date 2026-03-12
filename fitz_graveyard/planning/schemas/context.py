@@ -24,7 +24,7 @@ class ContextOutput(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     project_description: str = Field(
-        ...,
+        default="",
         description="Clear summary of what is being built",
     )
 

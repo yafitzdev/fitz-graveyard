@@ -269,10 +269,20 @@ class PlanningPipeline:
                 if hasattr(result_or_coro, '__await__'):
                     await result_or_coro
 
-            # Set sub-step callback so stage can report reasoning/formatting progress
+            # Set sub-step callback so stage can report incremental progress.
+            # Each sub-step advances progress within the stage's range.
+            _EXPECTED_SUBSTEPS = {"context": 7, "architecture_design": 11, "roadmap_risk": 6}
+            substep_counter = [0]  # mutable for closure
+
             async def _substep_cb(phase_detail: str, _stage=stage) -> None:
                 if progress_callback:
-                    result_or_coro = progress_callback(_stage.progress_range[0], phase_detail)
+                    substep_counter[0] += 1
+                    lo, hi = _stage.progress_range
+                    expected = _EXPECTED_SUBSTEPS.get(_stage.name, 5)
+                    # Advance within range, never exceed hi (leave room for stage_complete)
+                    frac = min(substep_counter[0] / (expected + 1), 0.95)
+                    interpolated = lo + frac * (hi - lo)
+                    result_or_coro = progress_callback(interpolated, phase_detail)
                     if hasattr(result_or_coro, '__await__'):
                         await result_or_coro
 
@@ -484,7 +494,7 @@ class PlanningPipeline:
             from fitz_graveyard.planning.pipeline.stages.base import extract_json
             fixes = extract_json(response)
             if isinstance(fixes, dict):
-                logger.warning(f"Coherence check found issues in: {list(fixes.keys())}")
+                logger.debug(f"Coherence check found issues in: {list(fixes.keys())}")
                 return fixes
             return {}
         except Exception as e:

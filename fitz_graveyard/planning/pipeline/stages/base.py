@@ -911,7 +911,7 @@ class PipelineStage(ABC):
                         )
                         return compressed
                 except Exception as e:
-                    logger.warning(f"Stage '{self.name}': disk read failed for '{path}': {e}")
+                    logger.debug(f"Stage '{self.name}': disk read failed for '{path}': {e}")
 
             return f"File not found: {path}. Check the structural overview for correct paths."
 

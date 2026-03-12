@@ -112,7 +112,7 @@ class GPUTemperatureGuard:
         if temp is None or temp < self.threshold:
             return
 
-        logger.warning(
+        logger.debug(
             f"GPU at {temp}°C (threshold {self.threshold}°C), "
             f"waiting for cooldown to {self.cooldown_target}°C..."
         )
@@ -124,19 +124,19 @@ class GPUTemperatureGuard:
             elapsed = time.monotonic() - t0
 
             if temp is None or temp <= self.cooldown_target:
-                logger.info(
+                logger.debug(
                     f"GPU cooled to {temp}°C after {elapsed:.0f}s, resuming"
                 )
                 return
 
             if elapsed > self.cooldown_timeout:
-                logger.warning(
+                logger.debug(
                     f"GPU still at {temp}°C after {elapsed:.0f}s cooldown "
                     f"timeout, proceeding anyway"
                 )
                 return
 
-            logger.info(
+            logger.debug(
                 f"GPU at {temp}°C, waiting... ({elapsed:.0f}s elapsed)"
             )
 

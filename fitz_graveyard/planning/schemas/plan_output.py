@@ -47,6 +47,11 @@ class PlanOutput(BaseModel):
     )
 
     # Provenance
+    job_description: str = Field(
+        default="",
+        description="Original user request that triggered this plan",
+    )
+
     git_sha: str = Field(
         default="",
         description="Git SHA of codebase when plan was generated (if available)",

@@ -648,17 +648,9 @@ class LlamaCppClient:
         t0 = time.monotonic()
         t_first_token = None
         accumulated = []
-        # Suppress thinking: append a pre-closed <think> block as assistant
-        # prefill.  llama.cpp-based servers treat a trailing assistant message
-        # as a continuation prefix, so the model sees thinking already done
-        # and skips straight to answering.  Belt-and-suspenders with
-        # chat_template_kwargs for servers that support it.
-        prefilled = list(messages)
-        if not prefilled or prefilled[-1].get("role") != "assistant":
-            prefilled.append({"role": "assistant", "content": "<think>\n\n</think>\n\n"})
         kwargs: dict = {
             "model": effective_model,
-            "messages": prefilled,
+            "messages": messages,
             "stream": True,
             "max_tokens": max_tokens,
             "extra_body": {

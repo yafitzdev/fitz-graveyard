@@ -316,17 +316,9 @@ class LMStudioClient:
 
         t0 = time.monotonic()
         accumulated = []
-        # Suppress thinking: append a pre-closed <think> block as assistant
-        # prefill.  llama.cpp-based servers treat a trailing assistant message
-        # as a continuation prefix, so the model sees thinking already done
-        # and skips straight to answering.  Works for Qwen3/3.5 and any model
-        # that uses <think> tags; harmless for models that don't.
-        prefilled = list(messages)
-        if not prefilled or prefilled[-1].get("role") != "assistant":
-            prefilled.append({"role": "assistant", "content": "<think>\n\n</think>\n\n"})
         kwargs: dict = {
             "model": model,
-            "messages": prefilled,
+            "messages": messages,
             "stream": True,
             "max_tokens": max_tokens,
             "extra_body": {

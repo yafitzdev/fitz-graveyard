@@ -48,9 +48,9 @@ class PlanRenderer:
             sections.append("> This plan may not reflect the latest codebase state.")
             sections.append("")
 
-        # Title
-        project_name = plan.context.project_description.split("\n")[0][:80]
-        sections.append(f"# Project: {project_name}")
+        # Title — use original job description (user's words), not LLM expansion
+        title = plan.job_description or plan.context.project_description.split("\n")[0]
+        sections.append(f"# {title}")
         sections.append("")
 
         # Context
@@ -260,13 +260,26 @@ class PlanRenderer:
                 sections.append(f"| Provider | {diag['provider']} |")
             if "model" in diag:
                 sections.append(f"| Model | {diag['model']} |")
+            if diag.get("quant"):
+                sections.append(f"| Quantization | {diag['quant']} |")
+            if diag.get("cache_type_k") or diag.get("cache_type_v"):
+                k = diag.get("cache_type_k", "default")
+                v = diag.get("cache_type_v", "default")
+                sections.append(f"| KV cache | K={k}, V={v} |")
+            if diag.get("context_length"):
+                sections.append(f"| Context window | {diag['context_length']:,} tokens |")
             if "agent_enabled" in diag:
                 sections.append(f"| Agent | {'enabled' if diag['agent_enabled'] else 'disabled'} |")
             if "total_llm_calls" in diag:
                 sections.append(f"| Total LLM calls | {diag['total_llm_calls']} |")
             if "total_generation_s" in diag:
                 sections.append(f"| Total generation time | {diag['total_generation_s']:.1f}s |")
-            for key, val in diag.get("stage_timings_s", {}).items():
+            timings = diag.get("stage_timings_s", {})
+            if timings:
+                wall_time = sum(timings.values())
+                mins, secs = divmod(wall_time, 60)
+                sections.append(f"| Total wall time | {int(mins)}m {secs:.0f}s |")
+            for key, val in timings.items():
                 sections.append(f"| Stage: {key} | {val:.1f}s |")
             sections.append("")
 
@@ -326,6 +339,16 @@ class PlanRenderer:
         lines = ["---"]
         lines.append(f'generated_at: "{plan.generated_at.isoformat()}"')
         lines.append(f'git_sha: "{plan.git_sha}"')
+
+        # Model info
+        diag = plan.diagnostics or {}
+        if diag.get("model"):
+            model_str = diag["model"]
+            if diag.get("quant"):
+                model_str += f" ({diag['quant']})"
+            lines.append(f'model: "{model_str}"')
+        if diag.get("context_length"):
+            lines.append(f"context_length: {diag['context_length']}")
 
         # API Review metadata
         lines.append(f"api_review_requested: {str(plan.api_review_requested).lower()}")
