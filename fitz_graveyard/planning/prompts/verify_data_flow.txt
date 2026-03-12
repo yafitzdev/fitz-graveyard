@@ -1,0 +1,26 @@
+You are tracing actual data flow through code paths that a proposed architecture will modify.
+
+PROPOSED ARCHITECTURE:
+{reasoning}
+
+SOURCE CODE (ground truth):
+{krag_context}
+
+TASK: {job_description}
+
+For each code path the proposed architecture modifies or extends:
+1. Start at the entry point (function call, API endpoint, event handler)
+2. Trace what data is available at each step (variable names, types, structure)
+3. Note where data transforms (type changes, field additions/removals)
+4. Identify what data is LOST (available at one layer but not passed through)
+
+Format as a DATA FLOW MAP:
+---
+Path: [description of code path]
+  Step 1: function_a(x: TypeA) receives field1, field2
+  Step 2: calls function_b(y: TypeB) — transforms x.field1 -> TypeB
+  Step 3: returns TypeC — field2 is DROPPED here
+  Critical: [at step N, field X is not available but the proposal assumes it is]
+---
+
+Flag every point where the proposed architecture assumes data is available that actually is not.

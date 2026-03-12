@@ -1,0 +1,28 @@
+You are extracting actual interface contracts from source code for an architectural proposal.
+
+PROPOSED ARCHITECTURE:
+{reasoning}
+
+SOURCE CODE (ground truth):
+{krag_context}
+
+TASK: {job_description}
+
+For each API, class, protocol, or function that the proposed architecture touches:
+1. Find it in the source code above
+2. Extract its EXACT signature: method name, parameter names + types, return type
+3. List its class hierarchy (what it inherits from, what inherits it)
+4. Note any constraints (ABC methods, protocol requirements, decorators)
+
+Format as a CONTRACT SHEET:
+---
+Interface: ClassName.method_name
+  Signature: def method_name(self, param: Type) -> ReturnType
+  Located: path/to/file.py
+  Constraints: [abstract, async, @decorator]
+  Note: [any relevant detail about behavior]
+---
+
+If a proposed integration point references something that does NOT exist in the source code, mark it: NOT FOUND IN CODEBASE.
+
+Be exhaustive. Include every interface the proposal will touch.

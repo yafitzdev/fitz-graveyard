@@ -532,6 +532,12 @@ class TestArchitectureDesignStage:
             "Investigation answer 3.",
             "Investigation answer 4.",
             "Reasoning...",
+            # 5 verification agents (contracts, data_flow, patterns run parallel; then sketch, assumptions)
+            "Contract sheet...",
+            "Data flow map...",
+            "Pattern catalog...",
+            "Feasibility report...",
+            "Assumption register...",
             "Reviewed reasoning...",  # critique
             "Challenged reasoning...",  # devil's advocate
             json.dumps({"approaches": [], "recommended": "", "reasoning": "", "scope_statement": ""}),
@@ -545,21 +551,23 @@ class TestArchitectureDesignStage:
         result = await stage.execute(mock_client, "Build API", prior)
         assert result.success is True
 
-        # Calls: [0..3]=investigations, [4]=reasoning, [5]=critique, [6]=DA,
-        #        [7]=approaches, [8]=tradeoffs, [9]=adrs,
-        #        [10]=components, [11]=integrations, [12]=artifacts
+        # Calls: [0..3]=investigations, [4]=reasoning,
+        #        [5..9]=verification agents (contracts, data_flow, patterns, sketch, assumptions),
+        #        [10]=critique, [11]=DA,
+        #        [12]=approaches, [13]=tradeoffs, [14]=adrs,
+        #        [15]=components, [16]=integrations, [17]=artifacts
         calls = mock_client.generate.call_args_list
 
-        # approaches (7), adrs (9), components (10),
-        # integrations (11), artifacts (12) should have krag
-        assert "Codebase Summary" in calls[7].kwargs["messages"][1]["content"]
-        assert "Codebase Summary" in calls[9].kwargs["messages"][1]["content"]
-        assert "Codebase Summary" in calls[10].kwargs["messages"][1]["content"]
-        assert "Codebase Summary" in calls[11].kwargs["messages"][1]["content"]
+        # approaches (12), adrs (14), components (15),
+        # integrations (16), artifacts (17) should have krag
         assert "Codebase Summary" in calls[12].kwargs["messages"][1]["content"]
+        assert "Codebase Summary" in calls[14].kwargs["messages"][1]["content"]
+        assert "Codebase Summary" in calls[15].kwargs["messages"][1]["content"]
+        assert "Codebase Summary" in calls[16].kwargs["messages"][1]["content"]
+        assert "Codebase Summary" in calls[17].kwargs["messages"][1]["content"]
 
-        # tradeoffs (8) should NOT
-        assert "Codebase Summary" not in calls[8].kwargs["messages"][1]["content"]
+        # tradeoffs (13) should NOT
+        assert "Codebase Summary" not in calls[13].kwargs["messages"][1]["content"]
 
     @pytest.mark.asyncio
     async def test_execute_partial_failure(self, stage):
@@ -612,6 +620,97 @@ class TestArchitectureDesignStage:
         assert result.output["architecture"]["approaches"] == []
         assert result.output["design"]["adrs"] == []
         assert result.output["design"]["components"] == []
+
+    @pytest.mark.asyncio
+    async def test_verification_agents_graceful_degradation(self, stage):
+        """All 5 verification agents failing still produces a valid plan."""
+        mock_client = AsyncMock()
+        krag = "## Code\ndef foo(x: int) -> str: ..."
+        prior = {"_gathered_context": krag}
+
+        # Track call count to fail verification agents but succeed elsewhere
+        call_count = [0]
+        investigation_responses = [
+            "Investigation 1.", "Investigation 2.",
+            "Investigation 3.", "Investigation 4.",
+        ]
+        reasoning_response = "Architecture reasoning..."
+        # 5 verification agents all raise
+        verification_error = RuntimeError("LLM unavailable")
+        critique_response = "Reviewed reasoning..."
+        advocate_response = "Challenged reasoning..."
+        extraction_responses = [
+            json.dumps({"approaches": [{"name": "A", "description": "d", "pros": [], "cons": [], "complexity": "low", "best_for": []}], "recommended": "A", "reasoning": "r", "scope_statement": "s"}),
+            json.dumps({"key_tradeoffs": {}, "technology_considerations": []}),
+            json.dumps({"adrs": []}),
+            json.dumps({"components": [], "data_model": {}}),
+            json.dumps({"integration_points": []}),
+            json.dumps({"artifacts": []}),
+        ]
+
+        all_responses = (
+            investigation_responses
+            + [reasoning_response]
+            + [verification_error] * 5  # all agents fail
+            + [critique_response, advocate_response]
+            + extraction_responses
+        )
+
+        def side_effect(*args, **kwargs):
+            nonlocal call_count
+            idx = call_count[0]
+            call_count[0] += 1
+            val = all_responses[idx]
+            if isinstance(val, Exception):
+                raise val
+            return val
+
+        mock_client.generate = AsyncMock(side_effect=side_effect)
+
+        result = await stage.execute(mock_client, "Build API", prior)
+        assert result.success is True
+        assert result.output["architecture"]["recommended"] == "A"
+
+    @pytest.mark.asyncio
+    async def test_verification_output_in_reasoning(self, stage):
+        """Verification findings are appended to reasoning before critique."""
+        mock_client = AsyncMock()
+        krag = "## Code\ndef foo(x: int) -> str: ..."
+        prior = {"_gathered_context": krag}
+
+        mock_client.generate.side_effect = [
+            # 4 investigations
+            "Inv 1.", "Inv 2.", "Inv 3.", "Inv 4.",
+            # reasoning
+            "My architecture proposal...",
+            # 5 verification agents
+            "Contract: foo(x: int) -> str",
+            "Data flow: x enters at step 1",
+            "Pattern: existing pattern found",
+            "Sketch: FEASIBLE",
+            "Assumption: VERIFIED",
+            # critique — should see verification in its input
+            "Critiqued with verification...",
+            # devil's advocate
+            "Challenged with verification...",
+            # 6 field groups
+            json.dumps({"approaches": [{"name": "X", "description": "d", "pros": [], "cons": [], "complexity": "low", "best_for": []}], "recommended": "X", "reasoning": "r", "scope_statement": "s"}),
+            json.dumps({"key_tradeoffs": {}, "technology_considerations": []}),
+            json.dumps({"adrs": []}),
+            json.dumps({"components": [], "data_model": {}}),
+            json.dumps({"integration_points": []}),
+            json.dumps({"artifacts": []}),
+        ]
+
+        result = await stage.execute(mock_client, "Build API", prior)
+        assert result.success is True
+
+        # Critique call (index 10) should contain verification findings
+        calls = mock_client.generate.call_args_list
+        critique_input = calls[10].kwargs["messages"][1]["content"]
+        assert "POST-REASONING VERIFICATION" in critique_input
+        assert "INTERFACE CONTRACTS" in critique_input
+        assert "FEASIBILITY REPORT" in critique_input
 
 
 class TestRoadmapRiskStage:

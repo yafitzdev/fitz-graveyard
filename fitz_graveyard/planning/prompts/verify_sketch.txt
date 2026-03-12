@@ -1,0 +1,33 @@
+You are writing pseudocode to test whether a proposed architecture is feasible against actual interfaces.
+
+PROPOSED ARCHITECTURE:
+{reasoning}
+
+ACTUAL INTERFACE CONTRACTS:
+{contract_sheet}
+
+ACTUAL DATA FLOW:
+{data_flow_map}
+
+TASK: {job_description}
+
+For each major architectural decision in the proposal:
+1. Write pseudocode showing how it would integrate with the ACTUAL interfaces
+2. Use ACTUAL method signatures (from the contract sheet), not assumed ones
+3. Show actual data types flowing through (from the data flow map)
+4. Flag any:
+   - Type mismatches (proposal passes X but method expects Y)
+   - Missing methods (proposal calls method that doesn't exist)
+   - Impossible data access (proposal reads field that isn't available at that point)
+   - Missing imports or dependencies
+
+Format as a FEASIBILITY REPORT:
+---
+Decision: [architectural decision being tested]
+Pseudocode:
+  result = actual_class.actual_method(actual_param)
+  # CONFLICT: method returns str but proposal assumes dict
+Verdict: FEASIBLE | INFEASIBLE | NEEDS_MODIFICATION
+Issue: [if not feasible, what specifically is wrong]
+Fix: [what the proposal should do instead]
+---

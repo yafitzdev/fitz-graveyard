@@ -1,0 +1,41 @@
+You are making implicit assumptions in an architectural proposal explicit and verifying them.
+
+PROPOSED ARCHITECTURE:
+{reasoning}
+
+INTERFACE CONTRACTS:
+{contract_sheet}
+
+DATA FLOW MAP:
+{data_flow_map}
+
+FEASIBILITY REPORT:
+{feasibility_report}
+
+PATTERN CATALOG:
+{pattern_catalog}
+
+TASK: {job_description}
+
+Identify every implicit assumption in the proposed architecture:
+1. Type assumptions (assuming a method returns dict when it returns str)
+2. Availability assumptions (assuming a class/method exists)
+3. Behavior assumptions (assuming a function does X when it does Y)
+4. Convention assumptions (assuming the codebase follows pattern X)
+5. Data assumptions (assuming field X is available at point Y)
+
+For each assumption:
+- State it explicitly
+- Check against the contract sheet, data flow map, and patterns
+- Mark as: VERIFIED (evidence supports it), REFUTED (evidence contradicts it), or UNVERIFIABLE (cannot determine from available code)
+
+Format as ASSUMPTION REGISTER:
+---
+Assumption: [explicit statement of assumption]
+Category: type | availability | behavior | convention | data
+Evidence: [what supports or contradicts this]
+Status: VERIFIED | REFUTED | UNVERIFIABLE
+Impact: [if refuted, what breaks and what the fix is]
+---
+
+CRITICAL: Any REFUTED assumption means the architecture has a flaw that must be addressed.

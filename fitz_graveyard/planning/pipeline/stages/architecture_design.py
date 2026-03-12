@@ -7,6 +7,7 @@ reasoning call, then 6 small JSON extractions — each producing a tiny
 schema that a small model can handle reliably.
 """
 
+import asyncio
 import difflib
 import json
 import logging
@@ -265,6 +266,193 @@ class ArchitectureDesignStage(PipelineStage):
             "design": design.model_dump(),
         }
 
+    # ------------------------------------------------------------------
+    # Post-reasoning verification agents
+    # ------------------------------------------------------------------
+
+    async def _verify_contracts(
+        self, client: Any, reasoning: str, krag_context: str, job_description: str,
+    ) -> str:
+        """Agent 1: Extract actual interface contracts for proposed integration points."""
+        await self._report_substep("verifying:contracts")
+        prompt = load_prompt("verify_contracts").format(
+            reasoning=reasoning, krag_context=krag_context, job_description=job_description,
+        )
+        messages = self._make_messages(prompt)
+        try:
+            t0 = time.monotonic()
+            result = await client.generate(messages=messages, temperature=0, max_tokens=4096)
+            logger.info(f"Stage '{self.name}': contract verification took {time.monotonic() - t0:.1f}s")
+            return result
+        except Exception as e:
+            logger.warning(f"Stage '{self.name}': contract verification failed: {e}")
+            return ""
+
+    async def _verify_data_flow(
+        self, client: Any, reasoning: str, krag_context: str, job_description: str,
+    ) -> str:
+        """Agent 2: Trace actual data flow through proposed modification paths."""
+        await self._report_substep("verifying:data_flow")
+        prompt = load_prompt("verify_data_flow").format(
+            reasoning=reasoning, krag_context=krag_context, job_description=job_description,
+        )
+        messages = self._make_messages(prompt)
+        try:
+            t0 = time.monotonic()
+            result = await client.generate(messages=messages, temperature=0, max_tokens=4096)
+            logger.info(f"Stage '{self.name}': data flow verification took {time.monotonic() - t0:.1f}s")
+            return result
+        except Exception as e:
+            logger.warning(f"Stage '{self.name}': data flow verification failed: {e}")
+            return ""
+
+    async def _verify_patterns(
+        self, client: Any, reasoning: str, krag_context: str, job_description: str,
+    ) -> str:
+        """Agent 4: Find existing patterns similar to proposed approaches."""
+        await self._report_substep("verifying:patterns")
+        prompt = load_prompt("verify_patterns").format(
+            reasoning=reasoning, krag_context=krag_context, job_description=job_description,
+        )
+        messages = self._make_messages(prompt)
+        try:
+            t0 = time.monotonic()
+            result = await client.generate(messages=messages, temperature=0, max_tokens=4096)
+            logger.info(f"Stage '{self.name}': pattern verification took {time.monotonic() - t0:.1f}s")
+            return result
+        except Exception as e:
+            logger.warning(f"Stage '{self.name}': pattern verification failed: {e}")
+            return ""
+
+    async def _verify_sketch(
+        self,
+        client: Any,
+        reasoning: str,
+        contract_sheet: str,
+        data_flow_map: str,
+        job_description: str,
+    ) -> str:
+        """Agent 3: Write pseudocode against real interfaces, flag mismatches."""
+        await self._report_substep("verifying:sketch")
+        prompt = load_prompt("verify_sketch").format(
+            reasoning=reasoning,
+            contract_sheet=contract_sheet or "(contract extraction unavailable)",
+            data_flow_map=data_flow_map or "(data flow tracing unavailable)",
+            job_description=job_description,
+        )
+        messages = self._make_messages(prompt)
+        try:
+            t0 = time.monotonic()
+            result = await client.generate(messages=messages, temperature=0, max_tokens=4096)
+            logger.info(f"Stage '{self.name}': sketch verification took {time.monotonic() - t0:.1f}s")
+            return result
+        except Exception as e:
+            logger.warning(f"Stage '{self.name}': sketch verification failed: {e}")
+            return ""
+
+    async def _verify_assumptions(
+        self,
+        client: Any,
+        reasoning: str,
+        contract_sheet: str,
+        data_flow_map: str,
+        feasibility_report: str,
+        pattern_catalog: str,
+        job_description: str,
+    ) -> str:
+        """Agent 5: Surface and verify every assumption in the proposed architecture."""
+        await self._report_substep("verifying:assumptions")
+        prompt = load_prompt("verify_assumptions").format(
+            reasoning=reasoning,
+            contract_sheet=contract_sheet or "(unavailable)",
+            data_flow_map=data_flow_map or "(unavailable)",
+            feasibility_report=feasibility_report or "(unavailable)",
+            pattern_catalog=pattern_catalog or "(unavailable)",
+            job_description=job_description,
+        )
+        messages = self._make_messages(prompt)
+        try:
+            t0 = time.monotonic()
+            result = await client.generate(messages=messages, temperature=0, max_tokens=4096)
+            logger.info(f"Stage '{self.name}': assumption verification took {time.monotonic() - t0:.1f}s")
+            return result
+        except Exception as e:
+            logger.warning(f"Stage '{self.name}': assumption verification failed: {e}")
+            return ""
+
+    async def _run_verification_agents(
+        self,
+        client: Any,
+        reasoning: str,
+        prior_outputs: dict[str, Any],
+        job_description: str,
+    ) -> str:
+        """Run 5 post-reasoning verification agents to catch architectural flaws.
+
+        Agents 1 (contracts), 2 (data flow), 4 (patterns) run in parallel.
+        Agent 3 (sketch test) depends on 1+2. Agent 5 (assumptions) depends on all.
+
+        Returns formatted verification findings, or empty string if all agents fail.
+        """
+        krag_context = self._get_gathered_context(prior_outputs)
+        if not krag_context:
+            logger.info(f"Stage '{self.name}': no gathered context, skipping verification agents")
+            return ""
+
+        t0 = time.monotonic()
+
+        # Parallel batch: agents 1, 2, 4 (independent inputs)
+        parallel_results = await asyncio.gather(
+            self._verify_contracts(client, reasoning, krag_context, job_description),
+            self._verify_data_flow(client, reasoning, krag_context, job_description),
+            self._verify_patterns(client, reasoning, krag_context, job_description),
+            return_exceptions=True,
+        )
+
+        contract_sheet = parallel_results[0] if not isinstance(parallel_results[0], Exception) else ""
+        data_flow_map = parallel_results[1] if not isinstance(parallel_results[1], Exception) else ""
+        pattern_catalog = parallel_results[2] if not isinstance(parallel_results[2], Exception) else ""
+
+        for i, r in enumerate(parallel_results):
+            if isinstance(r, Exception):
+                labels = ["contracts", "data_flow", "patterns"]
+                logger.warning(f"Stage '{self.name}': verification agent {labels[i]} raised: {r}")
+
+        # Sequential: agent 3 (needs agents 1+2)
+        feasibility_report = await self._verify_sketch(
+            client, reasoning, contract_sheet, data_flow_map, job_description,
+        )
+
+        # Sequential: agent 5 (needs all)
+        assumption_register = await self._verify_assumptions(
+            client, reasoning, contract_sheet, data_flow_map,
+            feasibility_report, pattern_catalog, job_description,
+        )
+
+        # Assemble findings
+        sections = []
+        if contract_sheet:
+            sections.append(f"--- INTERFACE CONTRACTS (verified against source) ---\n{contract_sheet}")
+        if data_flow_map:
+            sections.append(f"--- DATA FLOW MAP (traced through source) ---\n{data_flow_map}")
+        if pattern_catalog:
+            sections.append(f"--- EXISTING PATTERNS ---\n{pattern_catalog}")
+        if feasibility_report:
+            sections.append(f"--- FEASIBILITY REPORT ---\n{feasibility_report}")
+        if assumption_register:
+            sections.append(f"--- ASSUMPTION REGISTER ---\n{assumption_register}")
+
+        elapsed = time.monotonic() - t0
+        if sections:
+            logger.info(
+                f"Stage '{self.name}': verification agents completed in {elapsed:.1f}s "
+                f"({len(sections)}/5 agents produced output)"
+            )
+            return "\n\n".join(sections)
+
+        logger.warning(f"Stage '{self.name}': all verification agents failed ({elapsed:.1f}s)")
+        return ""
+
     async def execute(self, client: Any, job_description: str, prior_outputs: dict[str, Any]) -> StageResult:
         try:
             # 1. Focused investigations (parallel) — pre-digest the source code
@@ -282,7 +470,14 @@ class ArchitectureDesignStage(PipelineStage):
             t1 = time.monotonic()
             logger.info(f"Stage '{self.name}': reasoning took {t1 - t0:.1f}s ({len(reasoning)} chars)")
 
-            # 3. Self-critique pass — uses compact structural overview (AST-extracted).
+            # 3. Post-reasoning verification agents
+            verification = await self._run_verification_agents(
+                client, reasoning, prior_outputs, job_description,
+            )
+            if verification:
+                reasoning = reasoning + "\n\n--- POST-REASONING VERIFICATION ---\n\n" + verification
+
+            # 4. Self-critique pass — uses compact structural overview (AST-extracted).
             #    Findings are in the reasoning prompt (step 2), NOT repeated here.
             #    Including findings in critique makes it over-aggressive, treating
             #    new proposals as "hallucinations" because they don't exist yet.
@@ -291,12 +486,12 @@ class ArchitectureDesignStage(PipelineStage):
                 client, reasoning, job_description, krag_context=krag_context,
             )
 
-            # 4. Devil's advocate pass
+            # 5. Devil's advocate pass
             reasoning = await self._devil_advocate(
                 client, reasoning, job_description, krag_context=krag_context,
             )
 
-            # 5. Per-field-group extraction — compact structural overview for grounding
+            # 6. Per-field-group extraction — compact structural overview for grounding
             _CONTEXT_GROUPS = {"approaches", "adrs", "artifacts", "components", "integrations"}
             extract_context = self._get_gathered_context(prior_outputs)
 
@@ -313,7 +508,7 @@ class ArchitectureDesignStage(PipelineStage):
                 )
                 merged.update(partial)
 
-            # 5. Post-extraction validators
+            # 7. Post-extraction validators
             from fitz_graveyard.planning.pipeline.validators import (
                 ensure_correct_artifacts,
                 ensure_min_adrs,
@@ -323,7 +518,7 @@ class ArchitectureDesignStage(PipelineStage):
             merged = ensure_valid_artifacts(merged, prior_outputs)
             merged = await ensure_correct_artifacts(merged, client, prior_outputs)
 
-            # 6. Parse through existing parse_output (handles defaults + Pydantic validation)
+            # 8. Parse through existing parse_output (handles defaults + Pydantic validation)
             parsed = self.parse_output(json.dumps(merged))
             return StageResult(
                 stage_name=self.name,

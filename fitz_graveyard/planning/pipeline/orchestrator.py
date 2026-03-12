@@ -271,7 +271,7 @@ class PlanningPipeline:
 
             # Set sub-step callback so stage can report incremental progress.
             # Each sub-step advances progress within the stage's range.
-            _EXPECTED_SUBSTEPS = {"context": 7, "architecture_design": 11, "roadmap_risk": 6}
+            _EXPECTED_SUBSTEPS = {"context": 7, "architecture_design": 16, "roadmap_risk": 6}
             substep_counter = [0]  # mutable for closure
 
             async def _substep_cb(phase_detail: str, _stage=stage) -> None:

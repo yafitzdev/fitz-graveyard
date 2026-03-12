@@ -1,0 +1,28 @@
+You are finding how the codebase already solves problems similar to those in the proposed architecture.
+
+PROPOSED ARCHITECTURE:
+{reasoning}
+
+SOURCE CODE (ground truth):
+{krag_context}
+
+TASK: {job_description}
+
+For each proposed approach or technique:
+1. Search the codebase for existing code that does something similar
+2. Extract the pattern: what convention, idiom, or structure does it follow?
+3. Note whether the proposal follows or deviates from these patterns
+4. Identify reusable code the proposal could extend instead of building from scratch
+
+Format as a PATTERN CATALOG:
+---
+Proposed: [what the architecture proposes]
+Existing: [similar code found in codebase]
+  Location: path/to/file.py
+  Pattern: [description of the pattern used]
+  Convention: [naming, structure, or architectural convention]
+Match: FOLLOWS_PATTERN | DEVIATES | NO_EXISTING_PATTERN
+Note: [if deviates, what the proposal should change to match; if no pattern, this is novel]
+---
+
+Also note any anti-patterns — things the codebase explicitly avoids that the proposal introduces.
