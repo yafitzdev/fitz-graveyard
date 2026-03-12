@@ -156,6 +156,19 @@ class PlanningPipeline:
 
         # Run agent context gathering (once, before all stages, with checkpoint)
         if agent is not None and "_agent_context" not in prior_outputs:
+            # Switch to agent model if different from planning model
+            _needs_switch = (
+                hasattr(client, "switch_model")
+                and hasattr(client, "smart_model")
+                and client.smart_model != client.model
+            )
+            if _needs_switch:
+                logger.info(
+                    f"Switching to agent model: {client.smart_model} "
+                    f"(planning model: {client.model})"
+                )
+                await client.switch_model(client.smart_model)
+
             logger.info(f"Running AgentContextGatherer for job {job_id}")
             t_agent = time.monotonic()
             gathered = await agent.gather(
@@ -174,6 +187,11 @@ class PlanningPipeline:
             logger.info(
                 f"AgentContextGatherer complete: synthesized={synth_len}, raw={raw_len} chars"
             )
+
+            # Switch back to planning model
+            if _needs_switch:
+                logger.info(f"Switching back to planning model: {client.model}")
+                await client.switch_model(client.model)
         elif "_agent_context" in prior_outputs:
             logger.info(
                 f"Resuming: using checkpointed agent context for job {job_id}"

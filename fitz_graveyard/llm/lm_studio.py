@@ -109,6 +109,8 @@ class LMStudioClient:
         timeout: int = 300,
         context_length: int = 32768,
         gpu_guard: "GPUTemperatureGuard | None" = None,
+        fast_model: str | None = None,
+        smart_model: str | None = None,
     ):
         if AsyncOpenAI is None:
             raise ImportError(
@@ -122,6 +124,8 @@ class LMStudioClient:
         self._timeout = timeout
         self._context_length = context_length
         self._gpu_guard = gpu_guard
+        self._fast_model = fast_model
+        self._smart_model = smart_model
         self._client = AsyncOpenAI(base_url=base_url, api_key="lm-studio", timeout=timeout)
         self._call_metrics: list[dict] = []
 
@@ -132,18 +136,18 @@ class LMStudioClient:
 
     @property
     def fast_model(self) -> str:
-        """Model name for fast/screening tasks (same as primary for LM Studio)."""
-        return self.model
+        """Model name for fast/screening tasks."""
+        return self._fast_model or self.model
 
     @property
     def mid_model(self) -> str:
-        """Model name for mid-tier tasks (same as primary for LM Studio)."""
+        """Model name for mid-tier tasks."""
         return self.model
 
     @property
     def smart_model(self) -> str:
-        """Model name for smart/reasoning tasks (same as primary for LM Studio)."""
-        return self.model
+        """Model name for reasoning tasks."""
+        return self._smart_model or self.model
 
     async def ensure_model(
         self, model_name: str, context_size: int | None = None,
@@ -218,8 +222,13 @@ class LMStudioClient:
         except Exception:
             return True  # Can't check, assume loaded
 
-    async def _load_model_via_cli(self) -> bool:
-        """Load the configured model via ``lms load``."""
+    async def _load_model_via_cli(self, model_name: str | None = None) -> bool:
+        """Load a model via ``lms load``.
+
+        Args:
+            model_name: Model to load. Defaults to self.model.
+        """
+        model_name = model_name or self.model
         lms = shutil.which("lms")
         if not lms:
             logger.warning(
@@ -229,13 +238,13 @@ class LMStudioClient:
             return False
 
         logger.info(
-            f"Running: lms load {self.model} -y -c {self._context_length} --parallel 1"
+            f"Running: lms load {model_name} -y -c {self._context_length} --parallel 1"
         )
         try:
             result = await asyncio.to_thread(
                 subprocess.run,
                 [
-                    lms, "load", self.model, "-y",
+                    lms, "load", model_name, "-y",
                     "-c", str(self._context_length),
                     "--parallel", "1",
                 ],
@@ -243,7 +252,7 @@ class LMStudioClient:
                 encoding="utf-8", errors="replace",
             )
             if result.returncode == 0:
-                logger.info(f"Model {self.model} loaded successfully")
+                logger.info(f"Model {model_name} loaded successfully")
                 return True
             logger.error(
                 f"lms load failed (code {result.returncode}): "
@@ -256,6 +265,19 @@ class LMStudioClient:
         except Exception as e:
             logger.error(f"lms load failed: {e}")
             return False
+
+    async def switch_model(self, model_name: str) -> bool:
+        """Unload current model and load the specified one.
+
+        Args:
+            model_name: Model to switch to.
+
+        Returns:
+            True if the new model was loaded successfully.
+        """
+        logger.info(f"Switching model to {model_name}")
+        await self.unload_model()
+        return await self._load_model_via_cli(model_name)
 
     async def unload_model(self) -> bool:
         """Unload the current model via ``lms unload`` to free VRAM."""

@@ -558,8 +558,10 @@ class PipelineStage(ABC):
                 f"Stage '{self.name}': self-critique took {t1 - t0:.1f}s "
                 f"({len(reasoning_text)} → {len(refined)} chars)"
             )
-            # Only use refined if it's substantial (not a short error/refusal)
-            if len(refined) > len(reasoning_text) * 0.3:
+            # Only use refined if it's substantial (not a short error/refusal).
+            # Use absolute floor (2000 chars) — a focused critique is naturally
+            # shorter than the full reasoning it reviews.
+            if len(refined) > min(len(reasoning_text) * 0.3, 2000):
                 return refined
             logger.warning(
                 f"Stage '{self.name}': critique output too short ({len(refined)} chars), keeping original"
@@ -624,7 +626,7 @@ class PipelineStage(ABC):
                 f"Stage '{self.name}': devil's advocate took {t1 - t0:.1f}s "
                 f"({len(reasoning_text)} → {len(refined)} chars)"
             )
-            if len(refined) > len(reasoning_text) * 0.3:
+            if len(refined) > min(len(reasoning_text) * 0.3, 2000):
                 return refined
             logger.warning(
                 f"Stage '{self.name}': devil's advocate output too short "

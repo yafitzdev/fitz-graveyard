@@ -115,6 +115,7 @@ class AgentContextGatherer:
             retriever = CodeRetriever(
                 source_dir=self._source_dir,
                 chat_factory=chat_factory,
+                llm_tier="smart",
                 max_file_bytes=self._config.max_file_bytes,
             )
 

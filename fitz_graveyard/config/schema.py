@@ -131,6 +131,12 @@ class LMStudioConfig(BaseModel):
         default="http://localhost:1234/v1", description="LM Studio API base URL"
     )
     model: str = Field(default="local-model", description="LM Studio model to use for planning")
+    fast_model: str | None = Field(
+        default=None, description="Model for fast/screening tasks (None = use model)"
+    )
+    smart_model: str | None = Field(
+        default=None, description="Model for reasoning tasks (None = use model)"
+    )
     fallback_model: str | None = Field(
         default=None, description="Fallback model (None = no fallback)"
     )
