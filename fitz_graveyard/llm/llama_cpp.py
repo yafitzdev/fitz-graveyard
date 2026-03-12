@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import platform
+import re
 import statistics
 import subprocess
 import sys
@@ -39,6 +40,21 @@ except ImportError:
     AsyncOpenAI = None  # type: ignore[assignment,misc]
 
 logger = logging.getLogger(__name__)
+
+# Strip <think>...</think> blocks that some models emit even when thinking
+# is disabled.  Applied once after accumulation so all downstream parsers
+# receive clean text.
+_THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
+
+
+def _strip_thinking(text: str) -> str:
+    """Remove <think>…</think> blocks from model output."""
+    text = _THINK_RE.sub("", text)
+    # Handle unclosed <think> (generation ended mid-thought)
+    if "<think>" in text:
+        text = text.split("</think>")[-1].lstrip() if "</think>" in text else text.split("<think>")[0].rstrip()
+    return text
+
 
 # Maps Python type annotations → JSON Schema types (same as lm_studio.py)
 _TYPE_MAP = {
@@ -574,8 +590,18 @@ class LlamaCppClient:
     # Interface methods (match OllamaClient / LMStudioClient)
     # ------------------------------------------------------------------
 
+    # Minimum context window in tokens.  See LMStudioClient._MIN_CONTEXT_TOKENS.
+    _MIN_CONTEXT_TOKENS = 32_768
+
     async def health_check(self) -> bool:
-        """Check if llama-server is running and healthy."""
+        """Check if llama-server is running, healthy, and context is sufficient."""
+        ctx = self._active_context_size or self._fast_model.context_size
+        if ctx < self._MIN_CONTEXT_TOKENS:
+            raise RuntimeError(
+                f"Context window too small: {ctx} tokens "
+                f"(minimum {self._MIN_CONTEXT_TOKENS}). "
+                f"Increase context_size in llama_cpp config."
+            )
         try:
             await self._ensure_alive()
             async with httpx.AsyncClient(timeout=5.0) as http:
@@ -622,9 +648,17 @@ class LlamaCppClient:
         t0 = time.monotonic()
         t_first_token = None
         accumulated = []
+        # Suppress thinking: append a pre-closed <think> block as assistant
+        # prefill.  llama.cpp-based servers treat a trailing assistant message
+        # as a continuation prefix, so the model sees thinking already done
+        # and skips straight to answering.  Belt-and-suspenders with
+        # chat_template_kwargs for servers that support it.
+        prefilled = list(messages)
+        if not prefilled or prefilled[-1].get("role") != "assistant":
+            prefilled.append({"role": "assistant", "content": "<think>\n\n</think>\n\n"})
         kwargs: dict = {
             "model": effective_model,
-            "messages": messages,
+            "messages": prefilled,
             "stream": True,
             "max_tokens": max_tokens,
             "extra_body": {
@@ -644,7 +678,7 @@ class LlamaCppClient:
             if self._gpu_guard:
                 await self._gpu_guard.maybe_throttle()
 
-        result = "".join(accumulated)
+        result = _strip_thinking("".join(accumulated))
         t_end = time.monotonic()
         elapsed = t_end - t0
         prefill_s = (t_first_token - t0) if t_first_token else elapsed

@@ -5,6 +5,7 @@ import asyncio
 import inspect
 import json
 import logging
+import re
 import shutil
 import subprocess
 import time
@@ -25,6 +26,21 @@ except ImportError:
     AsyncOpenAI = None  # type: ignore[assignment,misc]
 
 logger = logging.getLogger(__name__)
+
+# Strip <think>...</think> blocks that some models emit even when thinking
+# is disabled.  Applied once after accumulation so all downstream parsers
+# receive clean text.
+_THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
+
+
+def _strip_thinking(text: str) -> str:
+    """Remove <think>…</think> blocks from model output."""
+    text = _THINK_RE.sub("", text)
+    # Handle unclosed <think> (generation ended mid-thought)
+    if "<think>" in text:
+        text = text.split("</think>")[-1].lstrip() if "</think>" in text else text.split("<think>")[0].rstrip()
+    return text
+
 
 # Maps Python type annotations → JSON Schema types
 _TYPE_MAP = {
@@ -137,12 +153,32 @@ class LMStudioClient:
             return
         await self._load_model_via_cli()
 
-    async def health_check(self) -> bool:
-        """Check LM Studio is reachable and the configured model is loaded.
+    # Minimum context window in tokens.  Derived from the pipeline's largest
+    # prompt: arch+design reasoning can send up to _REASONING_KRAG_BUDGET_CHARS
+    # (200K chars ≈ 50K tokens) of codebase context plus prompt template
+    # overhead (~2K tokens) plus max_tokens output (16K).  Stages that exceed
+    # the model's context will crash mid-pipeline with cryptic CUDA errors.
+    _MIN_CONTEXT_TOKENS = 32_768
 
-        If LM Studio is running but no model is loaded, auto-loads the
-        configured model via the ``lms`` CLI.
+    async def health_check(self) -> bool:
+        """Check LM Studio is reachable and load the configured model.
+
+        The config is the single source of truth for model name and context
+        length.  Any previously loaded model is unloaded and the configured
+        model is loaded with the configured context_length via ``lms load``.
+
+        Raises RuntimeError if the configured context window is below the
+        minimum required by the planning pipeline.
         """
+        # Context window preflight — fail fast instead of crashing mid-pipeline
+        if self._context_length < self._MIN_CONTEXT_TOKENS:
+            raise RuntimeError(
+                f"Context window too small: {self._context_length} tokens "
+                f"(minimum {self._MIN_CONTEXT_TOKENS}). "
+                f"Increase context_length in config."
+            )
+
+        # Check LM Studio is reachable
         try:
             async with httpx.AsyncClient(timeout=5.0) as http:
                 response = await http.get(f"{self.base_url}/models")
@@ -152,10 +188,13 @@ class LMStudioClient:
             logger.error(f"LM Studio health check failed: {e}")
             return False
 
+        # Config is the single source of truth.  If model is already loaded,
+        # accept it (lms load errors when re-loading).  If not, load via CLI
+        # with the config's model + context_length.
         if await self.is_model_loaded():
             return True
 
-        logger.info(f"No model loaded in LM Studio, auto-loading {self.model}")
+        logger.info(f"No model loaded, auto-loading {self.model} (ctx={self._context_length})")
         return await self._load_model_via_cli()
 
     async def is_model_loaded(self) -> bool:
@@ -277,9 +316,17 @@ class LMStudioClient:
 
         t0 = time.monotonic()
         accumulated = []
+        # Suppress thinking: append a pre-closed <think> block as assistant
+        # prefill.  llama.cpp-based servers treat a trailing assistant message
+        # as a continuation prefix, so the model sees thinking already done
+        # and skips straight to answering.  Works for Qwen3/3.5 and any model
+        # that uses <think> tags; harmless for models that don't.
+        prefilled = list(messages)
+        if not prefilled or prefilled[-1].get("role") != "assistant":
+            prefilled.append({"role": "assistant", "content": "<think>\n\n</think>\n\n"})
         kwargs: dict = {
             "model": model,
-            "messages": messages,
+            "messages": prefilled,
             "stream": True,
             "max_tokens": max_tokens,
             "extra_body": {
@@ -296,7 +343,7 @@ class LMStudioClient:
             if self._gpu_guard:
                 await self._gpu_guard.maybe_throttle()
 
-        result = "".join(accumulated)
+        result = _strip_thinking("".join(accumulated))
         elapsed = time.monotonic() - t0
         est_tokens = len(result) / 4
         tok_s = est_tokens / elapsed if elapsed > 0 else 0

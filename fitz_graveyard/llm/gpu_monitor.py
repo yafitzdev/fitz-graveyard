@@ -164,7 +164,7 @@ class GPUTemperatureGuard:
 
         overshoot = temp - self.threshold
         delay = min(0.5 + overshoot * 0.2, 5.0)
-        logger.warning(
+        logger.debug(
             f"GPU at {temp}°C (threshold {self.threshold}°C), "
             f"throttling stream — {delay:.1f}s pause"
         )
