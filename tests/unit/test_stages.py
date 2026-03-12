@@ -532,10 +532,11 @@ class TestArchitectureDesignStage:
             "Investigation answer 3.",
             "Investigation answer 4.",
             "Reasoning...",
-            # 5 verification agents (contracts, data_flow, patterns run parallel; then sketch, assumptions)
+            # 6 verification agents (contracts, data_flow, patterns, type_boundaries parallel; then sketch, assumptions)
             "Contract sheet...",
             "Data flow map...",
             "Pattern catalog...",
+            "Type boundary audit...",
             "Feasibility report...",
             "Assumption register...",
             "Reviewed reasoning...",  # critique
@@ -552,22 +553,22 @@ class TestArchitectureDesignStage:
         assert result.success is True
 
         # Calls: [0..3]=investigations, [4]=reasoning,
-        #        [5..9]=verification agents (contracts, data_flow, patterns, sketch, assumptions),
-        #        [10]=critique, [11]=DA,
-        #        [12]=approaches, [13]=tradeoffs, [14]=adrs,
-        #        [15]=components, [16]=integrations, [17]=artifacts
+        #        [5..10]=verification agents (contracts, data_flow, patterns, type_boundaries, sketch, assumptions),
+        #        [11]=critique, [12]=DA,
+        #        [13]=approaches, [14]=tradeoffs, [15]=adrs,
+        #        [16]=components, [17]=integrations, [18]=artifacts
         calls = mock_client.generate.call_args_list
 
-        # approaches (12), adrs (14), components (15),
-        # integrations (16), artifacts (17) should have krag
-        assert "Codebase Summary" in calls[12].kwargs["messages"][1]["content"]
-        assert "Codebase Summary" in calls[14].kwargs["messages"][1]["content"]
+        # approaches (13), adrs (15), components (16),
+        # integrations (17), artifacts (18) should have krag
+        assert "Codebase Summary" in calls[13].kwargs["messages"][1]["content"]
         assert "Codebase Summary" in calls[15].kwargs["messages"][1]["content"]
         assert "Codebase Summary" in calls[16].kwargs["messages"][1]["content"]
         assert "Codebase Summary" in calls[17].kwargs["messages"][1]["content"]
+        assert "Codebase Summary" in calls[18].kwargs["messages"][1]["content"]
 
-        # tradeoffs (13) should NOT
-        assert "Codebase Summary" not in calls[13].kwargs["messages"][1]["content"]
+        # tradeoffs (14) should NOT
+        assert "Codebase Summary" not in calls[14].kwargs["messages"][1]["content"]
 
     @pytest.mark.asyncio
     async def test_execute_partial_failure(self, stage):
@@ -623,7 +624,7 @@ class TestArchitectureDesignStage:
 
     @pytest.mark.asyncio
     async def test_verification_agents_graceful_degradation(self, stage):
-        """All 5 verification agents failing still produces a valid plan."""
+        """All 6 verification agents failing still produces a valid plan."""
         mock_client = AsyncMock()
         krag = "## Code\ndef foo(x: int) -> str: ..."
         prior = {"_gathered_context": krag}
@@ -635,7 +636,7 @@ class TestArchitectureDesignStage:
             "Investigation 3.", "Investigation 4.",
         ]
         reasoning_response = "Architecture reasoning..."
-        # 5 verification agents all raise
+        # 6 verification agents all raise
         verification_error = RuntimeError("LLM unavailable")
         critique_response = "Reviewed reasoning..."
         advocate_response = "Challenged reasoning..."
@@ -651,7 +652,7 @@ class TestArchitectureDesignStage:
         all_responses = (
             investigation_responses
             + [reasoning_response]
-            + [verification_error] * 5  # all agents fail
+            + [verification_error] * 6  # all agents fail
             + [critique_response, advocate_response]
             + extraction_responses
         )
@@ -683,10 +684,11 @@ class TestArchitectureDesignStage:
             "Inv 1.", "Inv 2.", "Inv 3.", "Inv 4.",
             # reasoning
             "My architecture proposal...",
-            # 5 verification agents
+            # 6 verification agents
             "Contract: foo(x: int) -> str",
             "Data flow: x enters at step 1",
             "Pattern: existing pattern found",
+            "Boundary: caller -> receiver\nVerdict: INCOMPATIBLE",
             "Sketch: FEASIBLE",
             "Assumption: VERIFIED",
             # critique — should see verification in its input
@@ -705,11 +707,12 @@ class TestArchitectureDesignStage:
         result = await stage.execute(mock_client, "Build API", prior)
         assert result.success is True
 
-        # Critique call (index 10) should contain verification findings
+        # Critique call (index 11) should contain verification findings
         calls = mock_client.generate.call_args_list
-        critique_input = calls[10].kwargs["messages"][1]["content"]
+        critique_input = calls[11].kwargs["messages"][1]["content"]
         assert "POST-REASONING VERIFICATION" in critique_input
         assert "INTERFACE CONTRACTS" in critique_input
+        assert "TYPE BOUNDARY AUDIT" in critique_input
         assert "FEASIBILITY REPORT" in critique_input
 
 

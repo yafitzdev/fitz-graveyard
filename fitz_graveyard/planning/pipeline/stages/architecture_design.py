@@ -324,6 +324,24 @@ class ArchitectureDesignStage(PipelineStage):
             logger.warning(f"Stage '{self.name}': pattern verification failed: {e}")
             return ""
 
+    async def _verify_type_boundaries(
+        self, client: Any, reasoning: str, krag_context: str, job_description: str,
+    ) -> str:
+        """Agent 6: Audit type boundaries — trace concrete runtime types, catch DATA LOST."""
+        await self._report_substep("verifying:type_boundaries")
+        prompt = load_prompt("verify_type_boundaries").format(
+            reasoning=reasoning, krag_context=krag_context, job_description=job_description,
+        )
+        messages = self._make_messages(prompt)
+        try:
+            t0 = time.monotonic()
+            result = await client.generate(messages=messages, temperature=0, max_tokens=4096)
+            logger.info(f"Stage '{self.name}': type boundary audit took {time.monotonic() - t0:.1f}s")
+            return result
+        except Exception as e:
+            logger.warning(f"Stage '{self.name}': type boundary audit failed: {e}")
+            return ""
+
     async def _verify_sketch(
         self,
         client: Any,
@@ -387,9 +405,9 @@ class ArchitectureDesignStage(PipelineStage):
         prior_outputs: dict[str, Any],
         job_description: str,
     ) -> str:
-        """Run 5 post-reasoning verification agents to catch architectural flaws.
+        """Run 6 post-reasoning verification agents to catch architectural flaws.
 
-        Agents 1 (contracts), 2 (data flow), 4 (patterns) run in parallel.
+        Agents 1 (contracts), 2 (data flow), 4 (patterns), 6 (type boundaries) run in parallel.
         Agent 3 (sketch test) depends on 1+2. Agent 5 (assumptions) depends on all.
 
         Returns formatted verification findings, or empty string if all agents fail.
@@ -401,21 +419,23 @@ class ArchitectureDesignStage(PipelineStage):
 
         t0 = time.monotonic()
 
-        # Parallel batch: agents 1, 2, 4 (independent inputs)
+        # Parallel batch: agents 1, 2, 4, 6 (independent inputs)
         parallel_results = await asyncio.gather(
             self._verify_contracts(client, reasoning, krag_context, job_description),
             self._verify_data_flow(client, reasoning, krag_context, job_description),
             self._verify_patterns(client, reasoning, krag_context, job_description),
+            self._verify_type_boundaries(client, reasoning, krag_context, job_description),
             return_exceptions=True,
         )
 
         contract_sheet = parallel_results[0] if not isinstance(parallel_results[0], Exception) else ""
         data_flow_map = parallel_results[1] if not isinstance(parallel_results[1], Exception) else ""
         pattern_catalog = parallel_results[2] if not isinstance(parallel_results[2], Exception) else ""
+        type_boundary_audit = parallel_results[3] if not isinstance(parallel_results[3], Exception) else ""
 
         for i, r in enumerate(parallel_results):
             if isinstance(r, Exception):
-                labels = ["contracts", "data_flow", "patterns"]
+                labels = ["contracts", "data_flow", "patterns", "type_boundaries"]
                 logger.warning(f"Stage '{self.name}': verification agent {labels[i]} raised: {r}")
 
         # Sequential: agent 3 (needs agents 1+2)
@@ -435,6 +455,8 @@ class ArchitectureDesignStage(PipelineStage):
             sections.append(f"--- INTERFACE CONTRACTS (verified against source) ---\n{contract_sheet}")
         if data_flow_map:
             sections.append(f"--- DATA FLOW MAP (traced through source) ---\n{data_flow_map}")
+        if type_boundary_audit:
+            sections.append(f"--- TYPE BOUNDARY AUDIT ---\n{type_boundary_audit}")
         if pattern_catalog:
             sections.append(f"--- EXISTING PATTERNS ---\n{pattern_catalog}")
         if feasibility_report:
@@ -446,11 +468,11 @@ class ArchitectureDesignStage(PipelineStage):
         if sections:
             logger.info(
                 f"Stage '{self.name}': verification agents completed in {elapsed:.1f}s "
-                f"({len(sections)}/5 agents produced output)"
+                f"({len(sections)}/6 agents produced output)"
             )
             return "\n\n".join(sections)
 
-        logger.warning(f"Stage '{self.name}': all verification agents failed ({elapsed:.1f}s)")
+        logger.warning(f"Stage '{self.name}': all 6 verification agents failed ({elapsed:.1f}s)")
         return ""
 
     async def execute(self, client: Any, job_description: str, prior_outputs: dict[str, Any]) -> StageResult:

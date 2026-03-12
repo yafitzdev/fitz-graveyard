@@ -15,18 +15,35 @@ For each major architectural decision in the proposal:
 1. Write pseudocode showing how it would integrate with the ACTUAL interfaces
 2. Use ACTUAL method signatures (from the contract sheet), not assumed ones
 3. Show actual data types flowing through (from the data flow map)
+
+CRITICAL TYPE SUBSTITUTION RULE:
+At every step of your pseudocode, annotate each variable with its CONCRETE type.
+Do NOT use `Any` or assumed types. Look up the actual return type from the contract
+sheet and write it explicitly. Example:
+
+  result: str = provider.chat(messages)  # chat() -> str per contract sheet
+  hook.on_call_end(ctx, result)  # result is str, NOT the SDK response object
+  # Q: Can we access result.usage? NO — str has no .usage attribute
+  # VERDICT: INFEASIBLE — token data is lost when chat() returns str
+
+If the declared type is `Any`, trace back to the actual call site to find the concrete
+type that flows through at runtime. `Any` means "the interface accepts anything" but
+the caller determines what it actually IS.
+
 4. Flag any:
    - Type mismatches (proposal passes X but method expects Y)
    - Missing methods (proposal calls method that doesn't exist)
    - Impossible data access (proposal reads field that isn't available at that point)
    - Missing imports or dependencies
+   - DATA ALREADY DISCARDED (proposal assumes data exists at point X, but it was
+     converted to a simpler type at an earlier point — identify where)
 
 Format as a FEASIBILITY REPORT:
 ---
 Decision: [architectural decision being tested]
 Pseudocode:
-  result = actual_class.actual_method(actual_param)
-  # CONFLICT: method returns str but proposal assumes dict
+  result: str = actual_class.actual_method(actual_param)  # return type from contract
+  # CONFLICT: method returns str but proposal assumes dict with .usage
 Verdict: FEASIBLE | INFEASIBLE | NEEDS_MODIFICATION
 Issue: [if not feasible, what specifically is wrong]
 Fix: [what the proposal should do instead]

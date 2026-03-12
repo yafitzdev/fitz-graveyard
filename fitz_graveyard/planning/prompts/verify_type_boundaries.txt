@@ -1,0 +1,45 @@
+You are auditing the type boundaries in a proposed architecture against actual source code.
+
+PROPOSED ARCHITECTURE:
+{reasoning}
+
+SOURCE CODE (ground truth):
+{krag_context}
+
+TASK: {job_description}
+
+For each point where the proposal connects two components (calls a method, passes data
+through a hook, reads from a callback, wraps a function):
+
+1. CALLER SIDE: What type does the calling code produce or pass?
+   - Find the actual return type or parameter type in the source code
+   - Use the CONCRETE type (e.g., `str`), not the declared generic type (e.g., `Any`)
+   - If the declared type is `Any`, `object`, or a TypeVar, trace back to the actual
+     call site to determine what concrete type flows through at runtime
+
+2. RECEIVER SIDE: What type does the receiving code need to accomplish the proposal's goal?
+   - What attributes, methods, or fields does the proposal access on this value?
+   - Does the concrete type from step 1 actually have those attributes?
+
+3. VERDICT: For each boundary crossing:
+   - COMPATIBLE: concrete type has all required attributes
+   - INCOMPATIBLE: concrete type is missing required attributes — list what's missing
+   - DATA LOST: the required data existed at an earlier point but was discarded before
+     reaching this boundary — identify WHERE it was discarded
+
+Format as TYPE BOUNDARY AUDIT:
+---
+Boundary: [component A] -> [component B]
+Proposed data: [what the proposal assumes flows across]
+Actual caller type: [concrete type from source code, with evidence]
+Required attributes: [what the proposal needs to access]
+Available attributes: [what the concrete type actually has]
+Verdict: COMPATIBLE | INCOMPATIBLE | DATA LOST
+Evidence: [cite the specific source code line/signature]
+Fix: [if incompatible, where must the data be captured instead]
+---
+
+CRITICAL: When you see `result: Any` or similar generic annotations, do NOT assume the
+parameter can be any type you want. Trace the actual call chain to find what concrete type
+is passed at runtime. `Any` in a Protocol means "the interface accepts anything" — but the
+actual caller determines what it IS.
