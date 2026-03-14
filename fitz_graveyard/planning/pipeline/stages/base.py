@@ -683,12 +683,14 @@ class PipelineStage(ABC):
     ) -> str:
         """Run focused investigation questions in parallel before reasoning.
 
-        Each question gets its own LLM call with the full source context,
-        producing pre-digested facts that the reasoning pass can build on.
+        Each question gets its own LLM call with the compact structural
+        overview (gathered_context), NOT the full source code. The reasoning
+        pass that follows has tool access for deeper exploration — investigations
+        only need signatures and structure to pre-digest questions.
 
         Returns formatted findings string, or empty string on failure.
         """
-        krag_context = self._get_raw_summaries(prior_outputs)
+        krag_context = self._get_gathered_context(prior_outputs)
         if not krag_context:
             return ""
 
