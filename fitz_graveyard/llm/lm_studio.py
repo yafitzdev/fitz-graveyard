@@ -201,11 +201,11 @@ class LMStudioClient:
         logger.info(f"No model loaded, auto-loading {self.model} (ctx={self._context_length})")
         return await self._load_model_via_cli()
 
-    async def is_model_loaded(self) -> bool:
-        """Check if any model is currently loaded (not just available)."""
+    async def get_loaded_model(self) -> str | None:
+        """Return the identifier of the currently loaded model, or None."""
         lms = shutil.which("lms")
         if not lms:
-            return True  # Can't check, assume loaded
+            return None
 
         try:
             result = await asyncio.to_thread(
@@ -214,13 +214,22 @@ class LMStudioClient:
                 capture_output=True, text=True, timeout=10,
                 encoding="utf-8", errors="replace",
             )
-            # lms ps writes to stderr, not stdout
             output = result.stdout + result.stderr
             if "No models" in output:
-                return False
-            return True
+                return None
+            # Parse table: first non-header line, first column is identifier
+            for line in output.splitlines():
+                line = line.strip()
+                if not line or line.startswith("IDENTIFIER") or line.startswith("-"):
+                    continue
+                return line.split()[0]
+            return None
         except Exception:
-            return True  # Can't check, assume loaded
+            return None
+
+    async def is_model_loaded(self) -> bool:
+        """Check if any model is currently loaded (not just available)."""
+        return await self.get_loaded_model() is not None
 
     async def _load_model_via_cli(self, model_name: str | None = None) -> bool:
         """Load a model via ``lms load``.
@@ -269,13 +278,20 @@ class LMStudioClient:
     async def switch_model(self, model_name: str) -> bool:
         """Unload current model and load the specified one.
 
+        Skips the switch if the target model is already loaded (avoids
+        CUDA context destruction on WDDM consumer GPUs).
+
         Args:
             model_name: Model to switch to.
 
         Returns:
-            True if the new model was loaded successfully.
+            True if the target model is loaded (was already or newly loaded).
         """
-        logger.info(f"Switching model to {model_name}")
+        loaded = await self.get_loaded_model()
+        if loaded and loaded == model_name:
+            logger.info(f"Model {model_name} already loaded, skipping switch")
+            return True
+        logger.info(f"Switching model: {loaded} -> {model_name}")
         await self.unload_model()
         return await self._load_model_via_cli(model_name)
 
