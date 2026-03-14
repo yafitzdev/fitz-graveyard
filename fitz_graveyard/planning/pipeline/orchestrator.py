@@ -142,6 +142,13 @@ class PlanningPipeline:
             await self._checkpoint_mgr.clear_checkpoint(job_id)
             logger.info(f"Starting fresh pipeline for job {job_id}")
 
+        # Benchmark overrides: inject pre-built context dicts directly
+        if _bench_overrides:
+            for key, val in _bench_overrides.items():
+                if val:
+                    prior_outputs[key] = val
+            logger.info(f"Applied {len(_bench_overrides)} bench overrides")
+
         # Inject pre-gathered context if provided (skips agent gathering)
         if pre_gathered_context is not None and "_agent_context" not in prior_outputs:
             prior_outputs["_agent_context"] = {
@@ -220,14 +227,6 @@ class PlanningPipeline:
                 prior_outputs["_gathered_context"] = agent_ctx.get("synthesized", "")
                 prior_outputs["_raw_summaries"] = agent_ctx.get("raw_summaries", "")
                 prior_outputs["_file_contents"] = agent_ctx.get("file_contents", {})
-
-        # Benchmark overrides: inject raw_summaries/file_contents/source_dir
-        # when pre_gathered_context only provides synthesized
-        if _bench_overrides:
-            for key, val in _bench_overrides.items():
-                if val:
-                    prior_outputs[key] = val
-                    logger.debug(f"Bench override: {key} ({len(str(val))} chars)")
 
         # Implementation check: does the codebase already solve this task?
         if (
