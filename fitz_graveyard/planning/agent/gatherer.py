@@ -89,8 +89,18 @@ class AgentContextGatherer:
         client: Any,
         job_description: str,
         progress_callback: Callable[[float, str], None] | None = None,
+        override_files: list[str] | None = None,
     ) -> dict[str, str]:
         """Run fitz-ai retrieval and return context dict.
+
+        Args:
+            client: LLM client for retrieval calls.
+            job_description: Natural language task description.
+            progress_callback: Optional progress reporter.
+            override_files: If set, skip LLM retrieval and use these
+                file paths directly. All post-processing (compress,
+                structural overview, seed splitting, provenance) runs
+                identically. Used by benchmarks to isolate reasoning.
 
         Returns:
             Dict with "synthesized", "raw_summaries", "file_contents",
@@ -105,22 +115,58 @@ class AgentContextGatherer:
         t_pipeline = time.monotonic()
 
         try:
-            # Step 1: Bridge async client → sync ChatFactory
-            await self._report(progress_callback, 0.06, "agent:mapping")
-            loop = asyncio.get_running_loop()
-            chat_factory = _make_chat_factory(client, loop)
+            if override_files is not None:
+                # Benchmark mode: skip LLM retrieval, use fixed file list
+                from fitz_ai.code.indexer import build_file_list
+                from fitz_ai.engines.fitz_krag.context.compressor import compress_python
+                from fitz_ai.engines.fitz_krag.types import Address, AddressKind, ReadResult
 
-            # Step 2: Run fitz-ai CodeRetriever (in thread — it's sync)
-            await self._report(progress_callback, 0.065, "agent:scanning_index")
-            retriever = CodeRetriever(
-                source_dir=self._source_dir,
-                chat_factory=chat_factory,
-                llm_tier="smart",
-                max_file_bytes=self._config.max_file_bytes,
-            )
+                await self._report(progress_callback, 0.06, "agent:mapping")
+                file_paths = build_file_list(
+                    Path(self._source_dir), max_files=2000,
+                )
+                src = Path(self._source_dir)
+                results = []
+                for rel in override_files:
+                    full = src / rel
+                    if not full.is_file():
+                        continue
+                    try:
+                        text = full.read_bytes()[:self._config.max_file_bytes]
+                        content = text.decode("utf-8", errors="replace")
+                        if rel.endswith(".py"):
+                            content = compress_python(content)
+                    except OSError:
+                        continue
+                    addr = Address(
+                        kind=AddressKind.FILE, source_id=rel,
+                        location=rel, summary=rel, score=1.0,
+                        metadata={"origin": "selected"},
+                    )
+                    results.append(ReadResult(address=addr, content=content, file_path=rel))
 
-            results = await asyncio.to_thread(retriever.retrieve, job_description)
-            file_paths = await asyncio.to_thread(retriever.get_file_paths)
+                logger.info(
+                    f"AgentContextGatherer: using {len(results)} override files "
+                    f"(skipped LLM retrieval)"
+                )
+            else:
+                # Normal mode: LLM retrieval
+                # Step 1: Bridge async client → sync ChatFactory
+                await self._report(progress_callback, 0.06, "agent:mapping")
+                loop = asyncio.get_running_loop()
+                chat_factory = _make_chat_factory(client, loop)
+
+                # Step 2: Run fitz-ai CodeRetriever (in thread — it's sync)
+                await self._report(progress_callback, 0.065, "agent:scanning_index")
+                retriever = CodeRetriever(
+                    source_dir=self._source_dir,
+                    chat_factory=chat_factory,
+                    llm_tier="smart",
+                    max_file_bytes=self._config.max_file_bytes,
+                )
+
+                results = await asyncio.to_thread(retriever.retrieve, job_description)
+                file_paths = await asyncio.to_thread(retriever.get_file_paths)
 
             if not results:
                 logger.warning("AgentContextGatherer: retrieval returned no results")

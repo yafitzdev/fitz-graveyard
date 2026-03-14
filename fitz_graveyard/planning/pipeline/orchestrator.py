@@ -111,7 +111,7 @@ class PlanningPipeline:
         progress_callback: Callable[[float, str], None] | Callable[[float, str], Any] | None = None,
         agent: "AgentContextGatherer | None" = None,
         pre_gathered_context: str | None = None,
-        _bench_overrides: dict[str, Any] | None = None,
+        _bench_override_files: list[str] | None = None,
     ) -> PipelineResult:
         """
         Execute the planning pipeline.
@@ -142,13 +142,6 @@ class PlanningPipeline:
             await self._checkpoint_mgr.clear_checkpoint(job_id)
             logger.info(f"Starting fresh pipeline for job {job_id}")
 
-        # Benchmark overrides: inject pre-built context dicts directly
-        if _bench_overrides:
-            for key, val in _bench_overrides.items():
-                if val:
-                    prior_outputs[key] = val
-            logger.info(f"Applied {len(_bench_overrides)} bench overrides")
-
         # Inject pre-gathered context if provided (skips agent gathering)
         if pre_gathered_context is not None and "_agent_context" not in prior_outputs:
             prior_outputs["_agent_context"] = {
@@ -165,8 +158,10 @@ class PlanningPipeline:
         # Run agent context gathering (once, before all stages, with checkpoint)
         if agent is not None and "_agent_context" not in prior_outputs:
             # Switch to agent model if different from planning model
+            # (skip if using override_files — no LLM calls needed)
             _needs_switch = (
-                hasattr(client, "switch_model")
+                not _bench_override_files
+                and hasattr(client, "switch_model")
                 and hasattr(client, "smart_model")
                 and client.smart_model != client.model
             )
@@ -183,6 +178,7 @@ class PlanningPipeline:
                 client=client,
                 job_description=job_description,
                 progress_callback=progress_callback,
+                override_files=_bench_override_files,
             )
             # gathered is {"synthesized": str, "raw_summaries": str}
             await self._checkpoint_mgr.save_stage(

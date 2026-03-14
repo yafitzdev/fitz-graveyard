@@ -44,79 +44,6 @@ class _NullCheckpointManager:
         pass
 
 
-def _build_agent_context(context: dict, source_dir: str) -> dict:
-    """Build the exact dict that AgentContextGatherer.gather() returns.
-
-    Uses the pre-computed file list from context, reads and compresses
-    files from disk, builds structural overview — same post-processing
-    as the real gatherer but without the LLM retrieval step.
-    """
-    from fitz_ai.code.indexer import build_structural_index
-    from fitz_ai.engines.fitz_krag.context.compressor import compress_python
-    from fitz_graveyard.planning.agent.compressor import compress_file
-    from fitz_graveyard.planning.agent.indexer import (
-        extract_interface_signatures,
-        extract_library_signatures,
-    )
-
-    file_list = context.get("file_list", [])
-    src = Path(source_dir)
-
-    # Read and compress (mirrors gatherer Step 4)
-    file_contents: dict[str, str] = {}
-    for rel in file_list:
-        full = src / rel
-        if not full.is_file():
-            continue
-        try:
-            text = full.read_bytes()[:50_000].decode("utf-8", errors="replace")
-            if rel.endswith(".py"):
-                text = compress_python(text)
-            file_contents[rel] = compress_file(text, rel)
-        except OSError:
-            pass
-
-    # Build structural overview (mirrors gatherer Step 5)
-    selected_index = build_structural_index(src, file_list, max_file_bytes=50_000)
-    signatures = extract_interface_signatures(source_dir, file_list, 50_000)
-    lib_sigs = extract_library_signatures(source_dir, file_list, [], 50_000)
-
-    parts: list[str] = []
-    if signatures:
-        parts.append("--- INTERFACE SIGNATURES (auto-extracted, ground truth) ---\n" + signatures)
-    if lib_sigs:
-        parts.append("--- LIBRARY API REFERENCE (installed packages, ground truth) ---\n" + lib_sigs)
-    parts.append("--- STRUCTURAL OVERVIEW (all selected files) ---\n" + selected_index)
-    structural_overview = "\n\n".join(parts)
-
-    # Build raw_summaries with seed files (mirrors gatherer Step 6)
-    seed_blocks = []
-    for rel in file_list:
-        if rel in file_contents:
-            seed_blocks.append(f"### {rel}\n```\n{file_contents[rel]}\n```")
-    raw_summaries = structural_overview
-    if seed_blocks:
-        raw_summaries += (
-            f"\n\n--- SEED FILES ({len(seed_blocks)}/{len(file_list)}) ---\n\n"
-            + "\n\n".join(seed_blocks)
-        )
-
-    return {
-        "synthesized": structural_overview,
-        "raw_summaries": raw_summaries,
-        "file_contents": file_contents,
-        "agent_files": {
-            "total_screened": 711,
-            "scan_hits": file_list[:11],
-            "selected": file_list,
-            "included": file_list,
-            "forward_map": {},
-            "reverse_count": {},
-            "file_provenance": {p: {"signals": ["bench"], "in_prompt": True} for p in file_list},
-        },
-    }
-
-
 def _ts() -> str:
     return time.strftime("%Y%m%d_%H%M%S")
 
@@ -329,9 +256,17 @@ async def _run_reasoning_once(
     run_id: int,
     out_dir: Path,
 ) -> dict:
-    """Run planning pipeline with pre-gathered context."""
+    """Run the real planning pipeline with fixed retrieval files.
+
+    Uses AgentContextGatherer with override_files to skip LLM retrieval
+    but run identical post-processing (compress, structural overview,
+    seed splitting, tool pool, provenance). The planning stages then
+    execute exactly as they would in a normal run.
+    """
     from fitz_graveyard.config import load_config
     from fitz_graveyard.llm.factory import create_llm_client
+    from fitz_graveyard.planning.agent import AgentContextGatherer
+    from fitz_graveyard.planning.pipeline.checkpoint import CheckpointManager
     from fitz_graveyard.planning.pipeline.orchestrator import PlanningPipeline
     from fitz_graveyard.planning.pipeline.stages import DEFAULT_STAGES
 
@@ -353,10 +288,12 @@ async def _run_reasoning_once(
     )
     job_id = f"bench_{run_id:03d}"
 
-    # Build the exact _agent_context dict that the real pipeline produces,
-    # then pre-inject it so the orchestrator skips agent gathering but
-    # everything else runs identically (tool-use, critique, extractions).
-    agent_context = _build_agent_context(context, source_dir)
+    # Create agent with override_files — skips LLM retrieval,
+    # runs identical post-processing as the real pipeline
+    agent = AgentContextGatherer(
+        config=config.agent,
+        source_dir=source_dir,
+    )
 
     t0 = time.monotonic()
     result = await pipeline.execute(
@@ -364,7 +301,8 @@ async def _run_reasoning_once(
         job_id=job_id,
         job_description=query,
         resume=False,
-        _bench_overrides={"_agent_context": agent_context, "_source_dir": source_dir},
+        agent=agent,
+        _bench_override_files=context.get("file_list"),
     )
     elapsed = time.monotonic() - t0
 
