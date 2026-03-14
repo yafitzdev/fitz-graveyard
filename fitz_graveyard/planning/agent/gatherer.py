@@ -135,6 +135,7 @@ class AgentContextGatherer:
             await self._report(progress_callback, 0.070, "agent:import_expand")
             scan_hits: list[str] = []
             import_added: list[str] = []
+            hub_added: list[str] = []
             neighbor_added: list[str] = []
 
             for r in results:
@@ -143,6 +144,8 @@ class AgentContextGatherer:
                     scan_hits.append(r.file_path)
                 elif origin == "import":
                     import_added.append(r.file_path)
+                elif origin == "hub":
+                    hub_added.append(r.file_path)
                 elif origin == "neighbor":
                     neighbor_added.append(r.file_path)
 
@@ -150,7 +153,8 @@ class AgentContextGatherer:
 
             logger.info(
                 f"AgentContextGatherer: {len(scan_hits)} selected, "
-                f"{len(import_added)} import, {len(neighbor_added)} neighbor"
+                f"{len(import_added)} import, {len(hub_added)} hub, "
+                f"{len(neighbor_added)} neighbor"
             )
 
             # Step 4: Build file_contents with planning compression
@@ -250,6 +254,7 @@ class AgentContextGatherer:
             seed_set = set(seed_files)
             scan_set_prov = set(scan_hits)
             import_set = set(import_added)
+            hub_set = set(hub_added)
             neighbor_set = set(neighbor_added)
 
             file_provenance: dict[str, dict] = {}
@@ -259,6 +264,8 @@ class AgentContextGatherer:
                     signals.append("scan")
                 if path in import_set:
                     signals.append("import")
+                if path in hub_set:
+                    signals.append("hub")
                 if path in neighbor_set:
                     signals.append("neighbor")
                 file_provenance[path] = {
