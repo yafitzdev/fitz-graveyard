@@ -1,0 +1,940 @@
+{
+  "context": {
+    "project_description": "Add token usage tracking for LLM query execution within Fitz's KRAG engine to provide visibility into token consumption per query for cost optimization and monitoring.",
+    "key_requirements": [
+      "Track input and output tokens separately for cost accounting",
+      "Work across all supported LLM providers (OpenAI, Anthropic, Cohere, Ollama) without modifying each one individually",
+      "Integrate with existing multi-provider architecture and instrumentation system",
+      "Maintain backward compatibility with current functionality",
+      "Log token usage to structured logger with context (query ID, model name, provider)"
+    ],
+    "constraints": [
+      "Must integrate with existing provider interfaces (ChatProvider, EmbeddingProvider, etc.)",
+      "Cannot break current functionality or change existing method signatures",
+      "Performance overhead must be acceptable (<10% for typical queries)",
+      "All supported LLM providers must support token counting or have fallback mechanism"
+    ],
+    "existing_context": "fitz_ai/llm/providers/base.py, fitz_ai/core/instrumentation.py, fitz_ai/engines/fitz_krag/engine.py, fitz_ai/logging/logger.py",
+    "stakeholders": [
+      "SDK Users who want to know how much their queries will cost and see per-request breakdowns",
+      "Platform Engineers responsible for monitoring resource consumption patterns across LLM providers",
+      "Product Owners interested in tracking and controlling LLM spending over time",
+      "DevOps team members who need logs with sufficient information for alerting or billing systems"
+    ],
+    "scope_boundaries": {
+      "in_scope": [
+        "Track input/output tokens for chat and chat_stream methods",
+        "Optionally track embeddings if API returns count info",
+        "Log token usage to structured logger with context (query ID, model name, provider)",
+        "Integrate cleanly into existing instrumentation system"
+      ],
+      "out_of_scope": [
+        "Cost conversion logic (pricing models)",
+        "Streaming token counting for partial responses",
+        "Aggregated dashboards or UI components",
+        "Cache hit/miss tracking based on tokens"
+      ]
+    },
+    "existing_files": [
+      "fitz_ai/llm/providers/base.py \u2014 Provider protocols for LLM clients.",
+      "fitz_ai/core/instrumentation.py \u2014 Instrumentation system for benchmarking plugin performance.",
+      "fitz_ai/llm/providers/openai.py \u2014 OpenAI provider wrappers using the official SDK.",
+      "fitz_ai/llm/providers/anthropic.py \u2014 Anthropic provider wrappers using the official SDK.",
+      "fitz_ai/llm/providers/cohere.py \u2014 Cohere provider wrappers using the official SDK.",
+      "fitz_ai/llm/providers/ollama.py \u2014 Ollama provider wrappers using direct HTTP calls."
+    ],
+    "needed_artifacts": [],
+    "assumptions": [
+      {
+        "assumption": "Each provider SDK returns token counts from their APIs (e.g., OpenAI's `usage` field)",
+        "impact": "Will require fallback logic to compute approximate token counts; may fail silently",
+        "confidence": "high"
+      },
+      {
+        "assumption": "If not available natively, we can infer from prompt/response lengths (approximate)",
+        "impact": "May result in inaccurate cost attribution and billing discrepancies",
+        "confidence": "medium"
+      },
+      {
+        "assumption": "The system already has logging/metrics infrastructure in place",
+        "impact": "If not true, need to implement logging context or pass around query IDs manually",
+        "confidence": "high"
+      },
+      {
+        "assumption": "Users want this data primarily for billing/monitoring rather than real-time optimization",
+        "impact": "Could limit the feature's utility if users also want real-time cost control capabilities",
+        "confidence": "medium"
+      }
+    ]
+  },
+  "architecture_design": {
+    "architecture": {
+      "approaches": [
+        {
+          "name": "Provider-Level Token Counting with Instrumentation Overlay",
+          "description": "Adds token counting logic directly into each ChatProvider and EmbeddingProvider implementation. Each concrete LLM wrapper wraps its calls to underlying SDKs with internal tracking using instance variables. The instrumentation system accesses internal storage via shared state access patterns after method execution.",
+          "pros": [
+            "Respects existing patterns and interfaces",
+            "Aligns closely with current architecture",
+            "Provides clear separation of concerns",
+            "Gives full control over implementation per provider"
+          ],
+          "cons": [
+            "Operational burden is medium-high due to need to manually update multiple files per provider",
+            "Risk of inconsistent data if some provider wrappers don't correctly expose usage info via shared state mechanisms"
+          ],
+          "complexity": "medium",
+          "best_for": [
+            "Production systems requiring detailed observability with minimal architectural changes"
+          ]
+        },
+        {
+          "name": "Centralized Token Counter Decorator",
+          "description": "Uses a decorator-based mechanism applied to provider methods. A new module defines decorators that wrap all LLM calls, capturing token usage by accessing internal state within providers. It leverages the existing instrumentation framework via InstrumentedProxy but applies it at method level.",
+          "pros": [
+            "Centralizes logic for consistent handling",
+            "Leverages existing instrumentation patterns"
+          ],
+          "cons": [
+            "Risk of inconsistency due to decorator logic being hard to maintain across SDK variations",
+            "Issues with async methods unless carefully adapted",
+            "Complexity compared to direct integration unless applied globally through factory injection"
+          ],
+          "complexity": "medium",
+          "best_for": [
+            "Systems where centralized control is preferred and SDK differences can be abstracted away"
+          ]
+        },
+        {
+          "name": "Wrapper Abstraction Layer with Shared Metrics Collector",
+          "description": "Introduces a separate abstraction layer that wraps all provider instances using the instrumentation system. This wrapper captures inputs and outputs, infers token counts from message lengths or SDK-provided data, logs them to structured logger, and passes results forward.",
+          "pros": [
+            "Provides comprehensive tracking of all LLM calls",
+            "Can be applied selectively without factory modification"
+          ],
+          "cons": [
+            "Performance overhead from interception on every LLM call",
+            "Complexity increases maintenance burden due to double-layer abstraction",
+            "Requires integration into instantiation logic and careful handling of proxy introduction"
+          ],
+          "complexity": "high",
+          "best_for": [
+            "Systems requiring full observability with minimal impact on core provider logic"
+          ]
+        }
+      ],
+      "recommended": "Provider-Level Token Counting with Instrumentation Overlay",
+      "reasoning": "This approach is correct because it respects existing patterns and interfaces, aligns closely with current architecture by leveraging instrumentation infrastructure without changing protocols, provides clear separation of concerns where providers handle token counting locally while logging happens centrally through hooks that access shared state. The other approaches are wrong because Approach 2 risks inconsistency due to decorator logic complexity across SDK variations and async handling challenges, while Approach 3 introduces unnecessary complexity with wrapper layers unless tightly integrated, breaking backward compatibility in many cases.",
+      "key_tradeoffs": {
+        "provider_level_vs_centralized_tracking": "Provider-level tracking offers more control and SDK-specific handling but increases implementation burden across multiple files, whereas centralized approaches reduce duplication but struggle with provider-specific nuances and async method complexities.",
+        "instrumentation_approach": "Using shared state mechanisms (instance variables/thread locals) instead of hook parameters provides flexibility in data access but requires careful synchronization to avoid race conditions in concurrent environments.",
+        "heuristic_estimation_accuracy": "Relying on heuristics for providers without native token support like Ollama trades accuracy for availability, potentially leading to misleading logs or silent failures if estimation logic fails."
+      },
+      "technology_considerations": [
+        "OpenAI SDK for reliable token usage extraction via response.usage field",
+        "Anthropic SDK requires heuristic estimation since it doesn't expose tokens directly",
+        "Cohere SDK has partial built-in support with careful edge case handling needed",
+        "Ollama HTTP API needs approximate character-based token calculation due to lack of native token fields",
+        "Thread-local storage mechanism for concurrent safe access during async operations"
+      ],
+      "scope_statement": "This task involves extending existing LLM provider implementations and integrating them into the instrumentation system without requiring changes to API surfaces or introducing new services. The engineering effort centers on adding token tracking logic per provider using instance variables that hooks can access post-call, ensuring minimal disruption while enabling detailed observability."
+    },
+    "design": {
+      "adrs": [
+        {
+          "title": "ADR: Provider-Level Token Counting with Instrumentation Overlay",
+          "context": "Need to add token usage tracking for LLM calls without breaking existing protocols or requiring extensive API changes.",
+          "decision": "Implement token counting directly in each LLM provider wrapper (OpenAIChat, AnthropicChat, etc.) using instance variables to store usage data that can be accessed by instrumentation hooks after method execution.",
+          "rationale": "This approach respects existing protocol contracts, leverages the current instrumentation infrastructure in core/instrumentation.py without requiring interface changes, and allows each provider to handle SDK-specific nuances of token retrieval or estimation. It provides clear separation of concerns where providers manage their own token counting logic while hooks centralize logging.",
+          "consequences": [
+            "Providers must implement internal tracking for token usage via instance variables like _last_token_usage",
+            "Instrumentation system accesses stored data post-call through shared state mechanisms rather than receiving parameters in callbacks",
+            "Requires careful handling of async methods and streaming responses to ensure accurate token capture",
+            "Performance overhead from additional method wrapping and storage operations"
+          ],
+          "alternatives_considered": [
+            "Alternative 1 (Centralized Token Counter Decorator) - rejected because it would require complex decorator logic per provider SDK, risk inconsistency across providers with varying async support, and complicate handling of streaming methods",
+            "Alternative 2 (Wrapper Abstraction Layer) - rejected because it introduces unnecessary complexity with double-layer abstraction, requires deep integration into instantiation systems, and could break backward compatibility if not carefully designed"
+          ]
+        },
+        {
+          "title": "ADR: Token Usage Logging via Shared Storage Mechanisms",
+          "context": "Instrumentation hooks need to access token usage data after LLM calls complete without modifying the existing protocol contracts.",
+          "decision": "Use shared storage mechanisms (thread-local or instance variables) in providers to store token usage data that instrumentation hooks can retrieve post-call, rather than passing token usage as parameters to hook methods.",
+          "rationale": "The InstrumentedProxy class and BenchmarkHook protocol are designed for method interception without parameter passing; the actual implementation requires state access patterns. This approach maintains backward compatibility with existing interfaces while enabling detailed observability of LLM usage through structured logging.",
+          "consequences": [
+            "Instrumentation hooks must retrieve token usage from known provider instance variables or thread-local storage",
+            "Providers must manage internal state consistently (e.g., _last_token_usage) to ensure hook access works reliably",
+            "Potential race conditions in concurrent environments if not handled with proper thread-local isolation",
+            "Simpler and more reliable than attempting to pass additional parameters through hooks"
+          ],
+          "alternatives_considered": [
+            "Alternative 1 (Pass token usage as hook parameters) - rejected because BenchmarkHook.on_call_end only receives method_name, result, duration; passing extra parameters would break the defined protocol",
+            "Alternative 2 (Modify protocols to include optional methods like token_usage()) - rejected because this violates architectural principle of minimal interface changes and breaks existing implementations"
+          ]
+        },
+        {
+          "title": "ADR: Heuristic Estimation for Providers Without Native Token Support",
+          "context": "Some LLM providers like Ollama don't expose token counts directly in their APIs, requiring estimation methods.",
+          "decision": "For providers without native token support (Anthropic, Cohere, Ollama), use character count-based heuristics to estimate input/output tokens as a fallback mechanism.",
+          "rationale": "This approach provides usable metrics even when SDKs don't expose token information directly. While not perfectly accurate for all cases, it's acceptable for observability purposes and maintains consistent behavior across provider implementations with varying support levels.",
+          "consequences": [
+            "Token estimates may be inaccurate for some providers/models due to heuristic-based calculation",
+            "Requires careful implementation of approximation rules based on known tokenization characteristics per model type",
+            "May lead to misleading cost tracking if users rely too heavily on these estimates",
+            "Provides better data than no logging at all for edge cases where native support is absent"
+          ],
+          "alternatives_considered": [
+            "Alternative 1 (Fail silently when tokens not available) - rejected because this leads to incomplete observability and makes debugging difficult",
+            "Alternative 2 (Provide exact zero counts) - rejected because it creates false impressions of low usage and masks actual token consumption"
+          ]
+        },
+        {
+          "title": "ADR: No Token Counting for EmbeddingProvider Protocol",
+          "context": "The embedding provider protocol does not reliably expose token information across different vendors in a consistent way.",
+          "decision": "Skip tracking tokens for embeddings unless specifically provided by underlying SDKs, since most embedding APIs don't expose per-call token counts consistently.",
+          "rationale": "This maintains consistency with how providers behave currently and avoids adding complexity to protocols that may not support this feature. It prevents false assumptions about embedding usage while preserving the ability to track tokens when available from specific vendors.",
+          "consequences": [
+            "Token tracking will only apply to chat methods, not embedding operations",
+            "Consistent behavior across all embedding providers regardless of whether they have token info",
+            "Potential gap in complete LLM resource usage tracking if users focus solely on embeddings",
+            "Future enhancement path exists for when embedding APIs improve their token exposure"
+          ],
+          "alternatives_considered": [
+            "Alternative 1 (Extend EmbeddingProvider with optional token methods) - rejected because it breaks protocol consistency and most embedding providers don't support this reliably across implementations",
+            "Alternative 2 (Attempt to infer from text length) - rejected because embedding models handle input differently than chat models, making naive character counting unreliable for accurate estimation"
+          ]
+        },
+        {
+          "title": "ADR: Backward Compatibility Through Optional Implementation",
+          "context": "Any changes must not break existing functionality or force breaking API modifications.",
+          "decision": "All token tracking implementations are optional and backward-compatible with default values, allowing current code to work unchanged while enabling new observability capabilities when providers support it.",
+          "rationale": "This preserves compatibility with existing users who may not need token usage information. It allows gradual adoption of the feature without forcing immediate migration or breaking changes to system behavior.",
+          "consequences": [
+            "Existing systems continue to function identically with no change in behavior",
+            "New telemetry is opt-in and only provides benefits when provider implementations are updated",
+            "Minimal risk of regressions from adding new features that don't affect default operation",
+            "Supports phased rollout across different LLM providers"
+          ],
+          "alternatives_considered": [
+            "Alternative 1 (Make token tracking mandatory) - rejected because this would break existing systems and require all providers to be immediately updated",
+            "Alternative 2 (Throw exception when missing tokens) - rejected because it creates brittle behavior that could fail in unexpected scenarios"
+          ]
+        }
+      ],
+      "components": [
+        {
+          "name": "OpenAIChat",
+          "purpose": "Wrapper for OpenAI chat completions API",
+          "responsibilities": [
+            "Handle chat completion requests using OpenAI SDK",
+            "Extract and store token usage information from responses"
+          ],
+          "interfaces": [
+            "__init__(client: openai.OpenAI) -> None",
+            "chat(messages: list[dict[str, Any]], model: str, **kwargs) -> str",
+            "chat_stream(messages: list[dict[str, Any]], model: str, **kwargs) -> Iterator[str]"
+          ],
+          "dependencies": [
+            "openai",
+            "fitz_ai.llm.providers.base"
+          ]
+        },
+        {
+          "name": "OpenAIEmbedding",
+          "purpose": "Wrapper for OpenAI embedding API",
+          "responsibilities": [
+            "Handle embedding requests using OpenAI SDK",
+            "Extract and store token usage information from responses"
+          ],
+          "interfaces": [
+            "__init__(client: openai.OpenAI) -> None",
+            "embed(text: str, model: str, **kwargs) -> list[float]",
+            "embed_batch(texts: list[str], model: str, **kwargs) -> list[list[float]]",
+            "dimensions(model: str) -> int"
+          ],
+          "dependencies": [
+            "openai",
+            "fitz_ai.llm.providers.base"
+          ]
+        },
+        {
+          "name": "OllamaChat",
+          "purpose": "Wrapper for Ollama chat API using HTTP calls",
+          "responsibilities": [
+            "Handle chat completion requests via direct HTTP calls to Ollama server",
+            "Estimate token usage when native support is unavailable"
+          ],
+          "interfaces": [
+            "__init__(base_url: str) -> None",
+            "chat(messages: list[dict[str, Any]], model: str, **kwargs) -> str",
+            "chat_stream(messages: list[dict[str, Any]], model: str, **kwargs) -> Iterator[str]"
+          ],
+          "dependencies": [
+            "httpx",
+            "fitz_ai.llm.providers.base"
+          ]
+        },
+        {
+          "name": "OllamaEmbedding",
+          "purpose": "Wrapper for Ollama embedding API using HTTP calls",
+          "responsibilities": [
+            "Handle embedding requests via direct HTTP calls to Ollama server",
+            "Estimate token usage when native support is unavailable"
+          ],
+          "interfaces": [
+            "__init__(base_url: str) -> None",
+            "embed(text: str, model: str, **kwargs) -> list[float]",
+            "embed_batch(texts: list[str], model: str, **kwargs) -> list[list[float]]",
+            "dimensions(model: str) -> int"
+          ],
+          "dependencies": [
+            "httpx",
+            "fitz_ai.llm.providers.base"
+          ]
+        },
+        {
+          "name": "InstrumentedProxy",
+          "purpose": "Wrapper that adds instrumentation to provider instances",
+          "responsibilities": [
+            "Wrap method calls with timing and logging hooks",
+            "Access token usage data from wrapped provider instances"
+          ],
+          "interfaces": [
+            "__init__(target: Any) -> None",
+            "__getattr__(name: str) -> Any",
+            "_wrap_method(method_name: str, method: Callable) -> Callable"
+          ],
+          "dependencies": [
+            "fitz_ai.core.instrumentation"
+          ]
+        }
+      ],
+      "data_model": {
+        "TokenUsage": [
+          "input_tokens: int = 0",
+          "output_tokens: int = 0",
+          "total_tokens: int = 0"
+        ],
+        "QueryContext": [
+          "query_id: str",
+          "model_name: str",
+          "provider: str"
+        ]
+      },
+      "integration_points": [
+        "ExternalSystem \u2014 OpenAI SDK for token usage extraction in OpenAIChat provider",
+        "ExternalSystem \u2014 Anthropic SDK for estimating tokens in AnthropicChat provider",
+        "ExternalSystem \u2014 Cohere SDK for accessing billed units in CohereChat provider",
+        "ExternalSystem \u2014 Ollama HTTP API for heuristic-based token estimation in OllamaChat provider"
+      ],
+      "artifacts": []
+    }
+  },
+  "architecture": {
+    "approaches": [
+      {
+        "name": "Provider-Level Token Counting with Instrumentation Overlay",
+        "description": "Adds token counting logic directly into each ChatProvider and EmbeddingProvider implementation. Each concrete LLM wrapper wraps its calls to underlying SDKs with internal tracking using instance variables. The instrumentation system accesses internal storage via shared state access patterns after method execution.",
+        "pros": [
+          "Respects existing patterns and interfaces",
+          "Aligns closely with current architecture",
+          "Provides clear separation of concerns",
+          "Gives full control over implementation per provider"
+        ],
+        "cons": [
+          "Operational burden is medium-high due to need to manually update multiple files per provider",
+          "Risk of inconsistent data if some provider wrappers don't correctly expose usage info via shared state mechanisms"
+        ],
+        "complexity": "medium",
+        "best_for": [
+          "Production systems requiring detailed observability with minimal architectural changes"
+        ]
+      },
+      {
+        "name": "Centralized Token Counter Decorator",
+        "description": "Uses a decorator-based mechanism applied to provider methods. A new module defines decorators that wrap all LLM calls, capturing token usage by accessing internal state within providers. It leverages the existing instrumentation framework via InstrumentedProxy but applies it at method level.",
+        "pros": [
+          "Centralizes logic for consistent handling",
+          "Leverages existing instrumentation patterns"
+        ],
+        "cons": [
+          "Risk of inconsistency due to decorator logic being hard to maintain across SDK variations",
+          "Issues with async methods unless carefully adapted",
+          "Complexity compared to direct integration unless applied globally through factory injection"
+        ],
+        "complexity": "medium",
+        "best_for": [
+          "Systems where centralized control is preferred and SDK differences can be abstracted away"
+        ]
+      },
+      {
+        "name": "Wrapper Abstraction Layer with Shared Metrics Collector",
+        "description": "Introduces a separate abstraction layer that wraps all provider instances using the instrumentation system. This wrapper captures inputs and outputs, infers token counts from message lengths or SDK-provided data, logs them to structured logger, and passes results forward.",
+        "pros": [
+          "Provides comprehensive tracking of all LLM calls",
+          "Can be applied selectively without factory modification"
+        ],
+        "cons": [
+          "Performance overhead from interception on every LLM call",
+          "Complexity increases maintenance burden due to double-layer abstraction",
+          "Requires integration into instantiation logic and careful handling of proxy introduction"
+        ],
+        "complexity": "high",
+        "best_for": [
+          "Systems requiring full observability with minimal impact on core provider logic"
+        ]
+      }
+    ],
+    "recommended": "Provider-Level Token Counting with Instrumentation Overlay",
+    "reasoning": "This approach is correct because it respects existing patterns and interfaces, aligns closely with current architecture by leveraging instrumentation infrastructure without changing protocols, provides clear separation of concerns where providers handle token counting locally while logging happens centrally through hooks that access shared state. The other approaches are wrong because Approach 2 risks inconsistency due to decorator logic complexity across SDK variations and async handling challenges, while Approach 3 introduces unnecessary complexity with wrapper layers unless tightly integrated, breaking backward compatibility in many cases.",
+    "key_tradeoffs": {
+      "provider_level_vs_centralized_tracking": "Provider-level tracking offers more control and SDK-specific handling but increases implementation burden across multiple files, whereas centralized approaches reduce duplication but struggle with provider-specific nuances and async method complexities.",
+      "instrumentation_approach": "Using shared state mechanisms (instance variables/thread locals) instead of hook parameters provides flexibility in data access but requires careful synchronization to avoid race conditions in concurrent environments.",
+      "heuristic_estimation_accuracy": "Relying on heuristics for providers without native token support like Ollama trades accuracy for availability, potentially leading to misleading logs or silent failures if estimation logic fails."
+    },
+    "technology_considerations": [
+      "OpenAI SDK for reliable token usage extraction via response.usage field",
+      "Anthropic SDK requires heuristic estimation since it doesn't expose tokens directly",
+      "Cohere SDK has partial built-in support with careful edge case handling needed",
+      "Ollama HTTP API needs approximate character-based token calculation due to lack of native token fields",
+      "Thread-local storage mechanism for concurrent safe access during async operations"
+    ],
+    "scope_statement": "This task involves extending existing LLM provider implementations and integrating them into the instrumentation system without requiring changes to API surfaces or introducing new services. The engineering effort centers on adding token tracking logic per provider using instance variables that hooks can access post-call, ensuring minimal disruption while enabling detailed observability."
+  },
+  "design": {
+    "adrs": [
+      {
+        "title": "ADR: Provider-Level Token Counting with Instrumentation Overlay",
+        "context": "Need to add token usage tracking for LLM calls without breaking existing protocols or requiring extensive API changes.",
+        "decision": "Implement token counting directly in each LLM provider wrapper (OpenAIChat, AnthropicChat, etc.) using instance variables to store usage data that can be accessed by instrumentation hooks after method execution.",
+        "rationale": "This approach respects existing protocol contracts, leverages the current instrumentation infrastructure in core/instrumentation.py without requiring interface changes, and allows each provider to handle SDK-specific nuances of token retrieval or estimation. It provides clear separation of concerns where providers manage their own token counting logic while hooks centralize logging.",
+        "consequences": [
+          "Providers must implement internal tracking for token usage via instance variables like _last_token_usage",
+          "Instrumentation system accesses stored data post-call through shared state mechanisms rather than receiving parameters in callbacks",
+          "Requires careful handling of async methods and streaming responses to ensure accurate token capture",
+          "Performance overhead from additional method wrapping and storage operations"
+        ],
+        "alternatives_considered": [
+          "Alternative 1 (Centralized Token Counter Decorator) - rejected because it would require complex decorator logic per provider SDK, risk inconsistency across providers with varying async support, and complicate handling of streaming methods",
+          "Alternative 2 (Wrapper Abstraction Layer) - rejected because it introduces unnecessary complexity with double-layer abstraction, requires deep integration into instantiation systems, and could break backward compatibility if not carefully designed"
+        ]
+      },
+      {
+        "title": "ADR: Token Usage Logging via Shared Storage Mechanisms",
+        "context": "Instrumentation hooks need to access token usage data after LLM calls complete without modifying the existing protocol contracts.",
+        "decision": "Use shared storage mechanisms (thread-local or instance variables) in providers to store token usage data that instrumentation hooks can retrieve post-call, rather than passing token usage as parameters to hook methods.",
+        "rationale": "The InstrumentedProxy class and BenchmarkHook protocol are designed for method interception without parameter passing; the actual implementation requires state access patterns. This approach maintains backward compatibility with existing interfaces while enabling detailed observability of LLM usage through structured logging.",
+        "consequences": [
+          "Instrumentation hooks must retrieve token usage from known provider instance variables or thread-local storage",
+          "Providers must manage internal state consistently (e.g., _last_token_usage) to ensure hook access works reliably",
+          "Potential race conditions in concurrent environments if not handled with proper thread-local isolation",
+          "Simpler and more reliable than attempting to pass additional parameters through hooks"
+        ],
+        "alternatives_considered": [
+          "Alternative 1 (Pass token usage as hook parameters) - rejected because BenchmarkHook.on_call_end only receives method_name, result, duration; passing extra parameters would break the defined protocol",
+          "Alternative 2 (Modify protocols to include optional methods like token_usage()) - rejected because this violates architectural principle of minimal interface changes and breaks existing implementations"
+        ]
+      },
+      {
+        "title": "ADR: Heuristic Estimation for Providers Without Native Token Support",
+        "context": "Some LLM providers like Ollama don't expose token counts directly in their APIs, requiring estimation methods.",
+        "decision": "For providers without native token support (Anthropic, Cohere, Ollama), use character count-based heuristics to estimate input/output tokens as a fallback mechanism.",
+        "rationale": "This approach provides usable metrics even when SDKs don't expose token information directly. While not perfectly accurate for all cases, it's acceptable for observability purposes and maintains consistent behavior across provider implementations with varying support levels.",
+        "consequences": [
+          "Token estimates may be inaccurate for some providers/models due to heuristic-based calculation",
+          "Requires careful implementation of approximation rules based on known tokenization characteristics per model type",
+          "May lead to misleading cost tracking if users rely too heavily on these estimates",
+          "Provides better data than no logging at all for edge cases where native support is absent"
+        ],
+        "alternatives_considered": [
+          "Alternative 1 (Fail silently when tokens not available) - rejected because this leads to incomplete observability and makes debugging difficult",
+          "Alternative 2 (Provide exact zero counts) - rejected because it creates false impressions of low usage and masks actual token consumption"
+        ]
+      },
+      {
+        "title": "ADR: No Token Counting for EmbeddingProvider Protocol",
+        "context": "The embedding provider protocol does not reliably expose token information across different vendors in a consistent way.",
+        "decision": "Skip tracking tokens for embeddings unless specifically provided by underlying SDKs, since most embedding APIs don't expose per-call token counts consistently.",
+        "rationale": "This maintains consistency with how providers behave currently and avoids adding complexity to protocols that may not support this feature. It prevents false assumptions about embedding usage while preserving the ability to track tokens when available from specific vendors.",
+        "consequences": [
+          "Token tracking will only apply to chat methods, not embedding operations",
+          "Consistent behavior across all embedding providers regardless of whether they have token info",
+          "Potential gap in complete LLM resource usage tracking if users focus solely on embeddings",
+          "Future enhancement path exists for when embedding APIs improve their token exposure"
+        ],
+        "alternatives_considered": [
+          "Alternative 1 (Extend EmbeddingProvider with optional token methods) - rejected because it breaks protocol consistency and most embedding providers don't support this reliably across implementations",
+          "Alternative 2 (Attempt to infer from text length) - rejected because embedding models handle input differently than chat models, making naive character counting unreliable for accurate estimation"
+        ]
+      },
+      {
+        "title": "ADR: Backward Compatibility Through Optional Implementation",
+        "context": "Any changes must not break existing functionality or force breaking API modifications.",
+        "decision": "All token tracking implementations are optional and backward-compatible with default values, allowing current code to work unchanged while enabling new observability capabilities when providers support it.",
+        "rationale": "This preserves compatibility with existing users who may not need token usage information. It allows gradual adoption of the feature without forcing immediate migration or breaking changes to system behavior.",
+        "consequences": [
+          "Existing systems continue to function identically with no change in behavior",
+          "New telemetry is opt-in and only provides benefits when provider implementations are updated",
+          "Minimal risk of regressions from adding new features that don't affect default operation",
+          "Supports phased rollout across different LLM providers"
+        ],
+        "alternatives_considered": [
+          "Alternative 1 (Make token tracking mandatory) - rejected because this would break existing systems and require all providers to be immediately updated",
+          "Alternative 2 (Throw exception when missing tokens) - rejected because it creates brittle behavior that could fail in unexpected scenarios"
+        ]
+      }
+    ],
+    "components": [
+      {
+        "name": "OpenAIChat",
+        "purpose": "Wrapper for OpenAI chat completions API",
+        "responsibilities": [
+          "Handle chat completion requests using OpenAI SDK",
+          "Extract and store token usage information from responses"
+        ],
+        "interfaces": [
+          "__init__(client: openai.OpenAI) -> None",
+          "chat(messages: list[dict[str, Any]], model: str, **kwargs) -> str",
+          "chat_stream(messages: list[dict[str, Any]], model: str, **kwargs) -> Iterator[str]"
+        ],
+        "dependencies": [
+          "openai",
+          "fitz_ai.llm.providers.base"
+        ]
+      },
+      {
+        "name": "OpenAIEmbedding",
+        "purpose": "Wrapper for OpenAI embedding API",
+        "responsibilities": [
+          "Handle embedding requests using OpenAI SDK",
+          "Extract and store token usage information from responses"
+        ],
+        "interfaces": [
+          "__init__(client: openai.OpenAI) -> None",
+          "embed(text: str, model: str, **kwargs) -> list[float]",
+          "embed_batch(texts: list[str], model: str, **kwargs) -> list[list[float]]",
+          "dimensions(model: str) -> int"
+        ],
+        "dependencies": [
+          "openai",
+          "fitz_ai.llm.providers.base"
+        ]
+      },
+      {
+        "name": "OllamaChat",
+        "purpose": "Wrapper for Ollama chat API using HTTP calls",
+        "responsibilities": [
+          "Handle chat completion requests via direct HTTP calls to Ollama server",
+          "Estimate token usage when native support is unavailable"
+        ],
+        "interfaces": [
+          "__init__(base_url: str) -> None",
+          "chat(messages: list[dict[str, Any]], model: str, **kwargs) -> str",
+          "chat_stream(messages: list[dict[str, Any]], model: str, **kwargs) -> Iterator[str]"
+        ],
+        "dependencies": [
+          "httpx",
+          "fitz_ai.llm.providers.base"
+        ]
+      },
+      {
+        "name": "OllamaEmbedding",
+        "purpose": "Wrapper for Ollama embedding API using HTTP calls",
+        "responsibilities": [
+          "Handle embedding requests via direct HTTP calls to Ollama server",
+          "Estimate token usage when native support is unavailable"
+        ],
+        "interfaces": [
+          "__init__(base_url: str) -> None",
+          "embed(text: str, model: str, **kwargs) -> list[float]",
+          "embed_batch(texts: list[str], model: str, **kwargs) -> list[list[float]]",
+          "dimensions(model: str) -> int"
+        ],
+        "dependencies": [
+          "httpx",
+          "fitz_ai.llm.providers.base"
+        ]
+      },
+      {
+        "name": "InstrumentedProxy",
+        "purpose": "Wrapper that adds instrumentation to provider instances",
+        "responsibilities": [
+          "Wrap method calls with timing and logging hooks",
+          "Access token usage data from wrapped provider instances"
+        ],
+        "interfaces": [
+          "__init__(target: Any) -> None",
+          "__getattr__(name: str) -> Any",
+          "_wrap_method(method_name: str, method: Callable) -> Callable"
+        ],
+        "dependencies": [
+          "fitz_ai.core.instrumentation"
+        ]
+      }
+    ],
+    "data_model": {
+      "TokenUsage": [
+        "input_tokens: int = 0",
+        "output_tokens: int = 0",
+        "total_tokens: int = 0"
+      ],
+      "QueryContext": [
+        "query_id: str",
+        "model_name: str",
+        "provider: str"
+      ]
+    },
+    "integration_points": [
+      "ExternalSystem \u2014 OpenAI SDK for token usage extraction in OpenAIChat provider",
+      "ExternalSystem \u2014 Anthropic SDK for estimating tokens in AnthropicChat provider",
+      "ExternalSystem \u2014 Cohere SDK for accessing billed units in CohereChat provider",
+      "ExternalSystem \u2014 Ollama HTTP API for heuristic-based token estimation in OllamaChat provider"
+    ],
+    "artifacts": []
+  },
+  "roadmap_risk": {
+    "roadmap": {
+      "phases": [
+        {
+          "number": 0,
+          "name": "Read Before Writing (Verification Only)",
+          "objective": "Verify that all key provider files behave as expected to support the instrumentation-based token counting approach.",
+          "deliverables": [
+            "List of verified facts from source code reading"
+          ],
+          "dependencies": [],
+          "estimated_complexity": "low",
+          "key_risks": [],
+          "verification_command": "pytest tests/test_source_code_verification.py -v",
+          "estimated_effort": "~2 hours"
+        },
+        {
+          "number": 1,
+          "name": "MVP Core Token Counting Logic & Instrumentation Overlay",
+          "objective": "Implement basic tracking in OpenAI and Ollama providers with shared token storage, integrate via InstrumentedProxy.",
+          "deliverables": [
+            "Add token counters (_input_tokens, _output_tokens) as instance variables to OpenAIChat and OllamaChat",
+            "Modify .chat() and .chat_stream() methods to record usage (OpenAI: from response.usage; Ollama: character-based heuristics)"
+          ],
+          "dependencies": [
+            0
+          ],
+          "estimated_complexity": "medium",
+          "key_risks": [],
+          "verification_command": "python -c \"from fitz_ai.llm.providers.openai import OpenAIChat; import openai; client = openai.OpenAI(api_key='test'); chat = OpenAIChat(client); result = chat.chat([{'role': 'user', 'content': 'hello'}], model='gpt-4o'); print('Input tokens:', getattr(chat, '_input_tokens')); print('Output tokens:', getattr(chat, '_output_tokens'))\"",
+          "estimated_effort": "~2 hours"
+        },
+        {
+          "number": 2,
+          "name": "Integrate Instrumentation Hook to Log Token Usage",
+          "objective": "Ensure hooks in InstrumentedProxy access token data and log it.",
+          "deliverables": [
+            "Create TokenUsageHook inheriting from BenchmarkHook with on_call_start/on_call_end methods",
+            "Update logging system in fitz_ai/logging/logger.py to accept additional metadata fields"
+          ],
+          "dependencies": [
+            1
+          ],
+          "estimated_complexity": "medium",
+          "key_risks": [],
+          "verification_command": "python -c \"from fitz_ai.core.instrumentation import register_hook, wrap; from fitz_ai.llm.providers.openai import OpenAIChat; import openai; client = openai.OpenAI(api_key='test'); wrapped_chat = wrap(client=OpenAIChat(client), layer='llm', plugin_name='openai-chat'); result = wrapped_chat.chat([{'role': 'user', 'content': 'hello'}], model='gpt-4o')\"",
+          "estimated_effort": "~1.5 hours"
+        },
+        {
+          "number": 3,
+          "name": "Add Heuristic Estimation for Ollama & Other Providers",
+          "objective": "Make token counting work even for non-native providers like Anthropic, Cohere.",
+          "deliverables": [
+            "Extend OllamaChat to estimate input/output tokens based on message length heuristics",
+            "Optionally implement similar logic for AnthropicChat and CohereChat"
+          ],
+          "dependencies": [
+            1
+          ],
+          "estimated_complexity": "medium",
+          "key_risks": [],
+          "verification_command": "python -c \"from chat_providers.ollama_chat import OllamaChat; print('OllamaChat imported successfully'); o = OllamaChat(); print(f'Estimate method exists: {hasattr(o, \"estimate_tokens\")}')\"",
+          "estimated_effort": "~1 hour"
+        },
+        {
+          "number": 4,
+          "name": "Optional: Support for Embedding Providers",
+          "objective": "Check if embedding APIs support token usage and enable them.",
+          "deliverables": [
+            "Check if OpenAIEmbedding, CohereEmbedding provide token counts (skip unless SDK returns usable fields)"
+          ],
+          "dependencies": [
+            1
+          ],
+          "estimated_complexity": "low",
+          "key_risks": [],
+          "verification_command": "python -c \"from fitz_ai.llm.providers.openai import OpenAIEmbedding; import openai; client = openai.OpenAI(api_key='test'); emb = OpenAIEmbedding(client); result = emb.embed('hello world', model='text-embedding-3-small'); print('Embedding result length:', len(result))\"",
+          "estimated_effort": "~0.5 hour"
+        },
+        {
+          "number": 5,
+          "name": "Final Integration and Testing",
+          "objective": "Run end-to-end test with actual wrapped client + instrumentation.",
+          "deliverables": [
+            "Write unit tests for token counting in OpenAIChat/OllamaChat, hook invocation during .chat() calls, instrumented proxy wrapping behavior"
+          ],
+          "dependencies": [
+            1,
+            2
+          ],
+          "estimated_complexity": "medium",
+          "key_risks": [],
+          "verification_command": "python -m pytest tests/unit/test_token_tracking.py -v",
+          "estimated_effort": "~2 hours"
+        }
+      ],
+      "critical_path": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "parallel_opportunities": [
+        [
+          1,
+          4
+        ]
+      ],
+      "total_phases": 5
+    },
+    "risk": {
+      "risks": [
+        {
+          "category": "technical",
+          "description": "The response.usage field may not always be present in certain edge cases or specific models, causing underreporting of token usage.",
+          "impact": "medium",
+          "likelihood": "high",
+          "mitigation": "Implement fallback logic that defaults to zero tokens and logs a warning when usage is missing.",
+          "contingency": "Monitor logs for warnings about missing usage data and implement manual verification for affected endpoints.",
+          "affected_phases": [
+            1,
+            2
+          ],
+          "verification": "Ensure fallback logic exists and logs warning when usage is missing"
+        },
+        {
+          "category": "technical",
+          "description": "Character-based heuristic estimates do not account for tokenization differences (e.g., special tokens, punctuation) which can lead to significant discrepancies in reported usage.",
+          "impact": "medium",
+          "likelihood": "high",
+          "mitigation": "Validate that estimates are within a reasonable margin of known GPT tokenizers and document limitations.",
+          "contingency": "Implement periodic validation against actual tokenizer outputs for sample texts and adjust heuristics accordingly.",
+          "affected_phases": [
+            3
+          ],
+          "verification": "Verify that estimates are within a reasonable margin of known GPT tokenizers"
+        },
+        {
+          "category": "technical",
+          "description": "Shared instance variables in providers can cause race conditions when multiple threads use the same provider instance simultaneously.",
+          "impact": "high",
+          "likelihood": "medium",
+          "mitigation": "Use thread-local storage or ensure immutable access patterns in multi-threaded scenarios.",
+          "contingency": "Implement thread-safe token counting mechanism using threading.local() or similar approach.",
+          "affected_phases": [
+            1,
+            2
+          ],
+          "verification": "Use thread-local storage if needed"
+        },
+        {
+          "category": "technical",
+          "description": "Instrumentation hooks may fail to correctly access shared token data from provider instances due to incorrect passing of method targets.",
+          "impact": "high",
+          "likelihood": "medium",
+          "mitigation": "Ensure InstrumentedProxy correctly passes the target instance back into hook calls and validate hook invocation in tests.",
+          "contingency": "Add assertion checks to verify that hooks can access the correct provider instance with token data.",
+          "affected_phases": [
+            2
+          ],
+          "verification": "Assert hasattr(target, '_input_tokens')"
+        }
+      ],
+      "overall_risk_level": "high",
+      "recommended_contingencies": [
+        "Monitor logs for warnings about missing usage data and implement manual verification for affected endpoints",
+        "Implement periodic validation against actual tokenizer outputs for sample texts and adjust heuristics accordingly",
+        "Implement thread-safe token counting mechanism using threading.local() or similar approach",
+        "Add assertion checks to verify that hooks can access the correct provider instance with token data"
+      ]
+    }
+  },
+  "roadmap": {
+    "phases": [
+      {
+        "number": 0,
+        "name": "Read Before Writing (Verification Only)",
+        "objective": "Verify that all key provider files behave as expected to support the instrumentation-based token counting approach.",
+        "deliverables": [
+          "List of verified facts from source code reading"
+        ],
+        "dependencies": [],
+        "estimated_complexity": "low",
+        "key_risks": [],
+        "verification_command": "pytest tests/test_source_code_verification.py -v",
+        "estimated_effort": "~2 hours"
+      },
+      {
+        "number": 1,
+        "name": "MVP Core Token Counting Logic & Instrumentation Overlay",
+        "objective": "Implement basic tracking in OpenAI and Ollama providers with shared token storage, integrate via InstrumentedProxy.",
+        "deliverables": [
+          "Add token counters (_input_tokens, _output_tokens) as instance variables to OpenAIChat and OllamaChat",
+          "Modify .chat() and .chat_stream() methods to record usage (OpenAI: from response.usage; Ollama: character-based heuristics)"
+        ],
+        "dependencies": [
+          0
+        ],
+        "estimated_complexity": "medium",
+        "key_risks": [],
+        "verification_command": "python -c \"from fitz_ai.llm.providers.openai import OpenAIChat; import openai; client = openai.OpenAI(api_key='test'); chat = OpenAIChat(client); result = chat.chat([{'role': 'user', 'content': 'hello'}], model='gpt-4o'); print('Input tokens:', getattr(chat, '_input_tokens')); print('Output tokens:', getattr(chat, '_output_tokens'))\"",
+        "estimated_effort": "~2 hours"
+      },
+      {
+        "number": 2,
+        "name": "Integrate Instrumentation Hook to Log Token Usage",
+        "objective": "Ensure hooks in InstrumentedProxy access token data and log it.",
+        "deliverables": [
+          "Create TokenUsageHook inheriting from BenchmarkHook with on_call_start/on_call_end methods",
+          "Update logging system in fitz_ai/logging/logger.py to accept additional metadata fields"
+        ],
+        "dependencies": [
+          1
+        ],
+        "estimated_complexity": "medium",
+        "key_risks": [],
+        "verification_command": "python -c \"from fitz_ai.core.instrumentation import register_hook, wrap; from fitz_ai.llm.providers.openai import OpenAIChat; import openai; client = openai.OpenAI(api_key='test'); wrapped_chat = wrap(client=OpenAIChat(client), layer='llm', plugin_name='openai-chat'); result = wrapped_chat.chat([{'role': 'user', 'content': 'hello'}], model='gpt-4o')\"",
+        "estimated_effort": "~1.5 hours"
+      },
+      {
+        "number": 3,
+        "name": "Add Heuristic Estimation for Ollama & Other Providers",
+        "objective": "Make token counting work even for non-native providers like Anthropic, Cohere.",
+        "deliverables": [
+          "Extend OllamaChat to estimate input/output tokens based on message length heuristics",
+          "Optionally implement similar logic for AnthropicChat and CohereChat"
+        ],
+        "dependencies": [
+          1
+        ],
+        "estimated_complexity": "medium",
+        "key_risks": [],
+        "verification_command": "python -c \"from chat_providers.ollama_chat import OllamaChat; print('OllamaChat imported successfully'); o = OllamaChat(); print(f'Estimate method exists: {hasattr(o, \"estimate_tokens\")}')\"",
+        "estimated_effort": "~1 hour"
+      },
+      {
+        "number": 4,
+        "name": "Optional: Support for Embedding Providers",
+        "objective": "Check if embedding APIs support token usage and enable them.",
+        "deliverables": [
+          "Check if OpenAIEmbedding, CohereEmbedding provide token counts (skip unless SDK returns usable fields)"
+        ],
+        "dependencies": [
+          1
+        ],
+        "estimated_complexity": "low",
+        "key_risks": [],
+        "verification_command": "python -c \"from fitz_ai.llm.providers.openai import OpenAIEmbedding; import openai; client = openai.OpenAI(api_key='test'); emb = OpenAIEmbedding(client); result = emb.embed('hello world', model='text-embedding-3-small'); print('Embedding result length:', len(result))\"",
+        "estimated_effort": "~0.5 hour"
+      },
+      {
+        "number": 5,
+        "name": "Final Integration and Testing",
+        "objective": "Run end-to-end test with actual wrapped client + instrumentation.",
+        "deliverables": [
+          "Write unit tests for token counting in OpenAIChat/OllamaChat, hook invocation during .chat() calls, instrumented proxy wrapping behavior"
+        ],
+        "dependencies": [
+          1,
+          2
+        ],
+        "estimated_complexity": "medium",
+        "key_risks": [],
+        "verification_command": "python -m pytest tests/unit/test_token_tracking.py -v",
+        "estimated_effort": "~2 hours"
+      }
+    ],
+    "critical_path": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "parallel_opportunities": [
+      [
+        1,
+        4
+      ]
+    ],
+    "total_phases": 5
+  },
+  "risk": {
+    "risks": [
+      {
+        "category": "technical",
+        "description": "The response.usage field may not always be present in certain edge cases or specific models, causing underreporting of token usage.",
+        "impact": "medium",
+        "likelihood": "high",
+        "mitigation": "Implement fallback logic that defaults to zero tokens and logs a warning when usage is missing.",
+        "contingency": "Monitor logs for warnings about missing usage data and implement manual verification for affected endpoints.",
+        "affected_phases": [
+          1,
+          2
+        ],
+        "verification": "Ensure fallback logic exists and logs warning when usage is missing"
+      },
+      {
+        "category": "technical",
+        "description": "Character-based heuristic estimates do not account for tokenization differences (e.g., special tokens, punctuation) which can lead to significant discrepancies in reported usage.",
+        "impact": "medium",
+        "likelihood": "high",
+        "mitigation": "Validate that estimates are within a reasonable margin of known GPT tokenizers and document limitations.",
+        "contingency": "Implement periodic validation against actual tokenizer outputs for sample texts and adjust heuristics accordingly.",
+        "affected_phases": [
+          3
+        ],
+        "verification": "Verify that estimates are within a reasonable margin of known GPT tokenizers"
+      },
+      {
+        "category": "technical",
+        "description": "Shared instance variables in providers can cause race conditions when multiple threads use the same provider instance simultaneously.",
+        "impact": "high",
+        "likelihood": "medium",
+        "mitigation": "Use thread-local storage or ensure immutable access patterns in multi-threaded scenarios.",
+        "contingency": "Implement thread-safe token counting mechanism using threading.local() or similar approach.",
+        "affected_phases": [
+          1,
+          2
+        ],
+        "verification": "Use thread-local storage if needed"
+      },
+      {
+        "category": "technical",
+        "description": "Instrumentation hooks may fail to correctly access shared token data from provider instances due to incorrect passing of method targets.",
+        "impact": "high",
+        "likelihood": "medium",
+        "mitigation": "Ensure InstrumentedProxy correctly passes the target instance back into hook calls and validate hook invocation in tests.",
+        "contingency": "Add assertion checks to verify that hooks can access the correct provider instance with token data.",
+        "affected_phases": [
+          2
+        ],
+        "verification": "Assert hasattr(target, '_input_tokens')"
+      }
+    ],
+    "overall_risk_level": "high",
+    "recommended_contingencies": [
+      "Monitor logs for warnings about missing usage data and implement manual verification for affected endpoints",
+      "Implement periodic validation against actual tokenizer outputs for sample texts and adjust heuristics accordingly",
+      "Implement thread-safe token counting mechanism using threading.local() or similar approach",
+      "Add assertion checks to verify that hooks can access the correct provider instance with token data"
+    ]
+  }
+}

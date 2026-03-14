@@ -1,0 +1,813 @@
+{
+  "context": {
+    "project_description": "A system that tracks LLM token usage per query for cost monitoring and optimization purposes, integrating with existing LLM provider interfaces to capture input/output tokens from all supported providers (OpenAI, Anthropic, Cohere, Ollama).",
+    "key_requirements": [
+      "Add token usage tracking so I can see how many LLM tokens each query costs",
+      "Capture token counts from all LLM provider interfaces (ChatProvider, EmbeddingProvider, etc.)"
+    ],
+    "constraints": [
+      "No breaking changes to existing APIs must be maintained",
+      "Minimal performance impact on LLM inference operations",
+      "Support all providers in the stack: OpenAI, Anthropic, Cohere, Ollama"
+    ],
+    "existing_context": "fitz_ai/llm/providers/base.py defines protocol interfaces for LLM clients including ChatProvider, EmbeddingProvider, etc. All provider implementations (openai.py, anthropic.py, cohere.py, ollama.py) inherit from these protocols and make actual LLM calls via their respective SDKs or HTTP clients.",
+    "stakeholders": [
+      "Platform Engineers",
+      "Product Team",
+      "Billing/Finance Team",
+      "Developers using Fitz SDK"
+    ],
+    "scope_boundaries": {
+      "in_scope": [
+        "Core tracking: Hook into each ChatProvider.chat() and similar methods (embed, etc.)",
+        "Data structure storage for counts",
+        "Integration with logging/query context"
+      ],
+      "out_of_scope": [
+        "Full metrics dashboard / UI",
+        "Billing integrations / cost calculation models",
+        "Real-time alerting based on thresholds",
+        "Cross-service token tracking across microservices"
+      ]
+    },
+    "existing_files": [
+      "fitz_ai/llm/providers/base.py \u2014 Provider protocols for LLM clients.",
+      "fitz_ai/llm/providers/openai.py \u2014 OpenAI provider wrappers using the official SDK.",
+      "fitz_ai/llm/providers/anthropic.py \u2014 Anthropic provider wrappers using the official SDK.",
+      "fitz_ai/llm/providers/cohere.py \u2014 Cohere provider wrappers using the official SDK.",
+      "fitz_ai/llm/providers/ollama.py \u2014 Ollama provider wrappers using direct HTTP calls.",
+      "fitz_ai/core/instrumentation.py \u2014 Instrumentation system for benchmarking plugin performance."
+    ],
+    "needed_artifacts": [
+      "fitz_ai/llm/token_tracker.py \u2014 Centralized logic for collecting, aggregating, and exposing token usage statistics per query",
+      "fitz_ai/llm/providers/tracked.py \u2014 Wrapper module that wraps all provider classes with token counting logic using the instrumentation system"
+    ],
+    "assumptions": [
+      {
+        "assumption": "Tracking happens at per-provider call level",
+        "impact": "Would miss some edge cases; might undercount if middleware layers wrap calls",
+        "confidence": "high"
+      },
+      {
+        "assumption": "Provider-specific token counting is available",
+        "impact": "Need fallback logic for providers like Ollama that don't expose this by default",
+        "confidence": "medium"
+      },
+      {
+        "assumption": "Exposed via logging/query context",
+        "impact": "If user expects structured API response instead, we'd have to change how data is returned",
+        "confidence": "medium"
+      },
+      {
+        "assumption": "All LLM calls go through protocol interfaces",
+        "impact": "Some low-level internal services might skip provider stack \u2014 would require tracing from root",
+        "confidence": "high"
+      },
+      {
+        "assumption": "Token counts are additive per model call",
+        "impact": "Could be wrong if a single operation triggers multiple API calls (e.g., batch embedding)",
+        "confidence": "medium"
+      }
+    ]
+  },
+  "architecture_design": {
+    "architecture": {
+      "approaches": [
+        {
+          "name": "Instrumented Proxy Wrapper with Context-Aware Aggregation",
+          "description": "Use fitz_ai/core/instrumentation.py's existing InstrumentedProxy to wrap all LLM provider methods (chat, embed, etc.) and inject token counting hooks. Each wrapped method logs input/output tokens into a thread-local or query-scoped context manager.",
+          "pros": [
+            "Seamlessly tracks tokens in all providers without modifying their interfaces",
+            "Integrates cleanly with existing hook system for observability",
+            "Leverages existing tooling rather than creating new infrastructure"
+          ],
+          "cons": [
+            "Requires careful configuration of InstrumentedProxy wrapping logic",
+            "Logging infrastructure must support querying by query ID",
+            "Failure mode if instrumentation system is not properly configured or multiple threads access shared contexts without proper isolation"
+          ],
+          "complexity": "medium",
+          "best_for": [
+            "Systems with existing instrumentation framework",
+            "Need to track tokens across multiple LLM providers consistently"
+          ]
+        },
+        {
+          "name": "Decorator-Based Token Hook Injection",
+          "description": "Add a token-counting decorator (e.g., @track_tokens) that wraps LLM methods directly inside each provider class. Decorators capture input/output tokens using the underlying SDK client APIs, then store them in thread-local state or request context.",
+          "pros": [
+            "Minimal impact on core logic",
+            "Direct injection at method level allows precise control over what gets tracked where"
+          ],
+          "cons": [
+            "High operational burden - each provider class needs explicit annotation and could introduce boilerplate",
+            "Harder to retrofit if existing implementations already exist",
+            "Inconsistent application of decorators across providers may lead to missing tracking for some methods"
+          ],
+          "complexity": "high",
+          "best_for": [
+            "Small, controlled systems where manual decoration is acceptable",
+            "When provider interfaces are stable and don't change frequently"
+          ]
+        }
+      ],
+      "recommended": "Instrumented Proxy Wrapper with Context-Aware Aggregation",
+      "reasoning": "This approach aligns perfectly with the current architecture using fitz_ai/core/instrumentation.py. The system already has a robust hooking mechanism that supports benchmarking and caching via InstrumentedProxy, which makes it natural to extend this same pattern for token counting. It avoids patching or decorating existing classes that would require invasive changes, maintains thread safety through context isolation techniques already used in logging/query systems (e.g., via set_query_context()), and scales well as more providers are added since wrapping happens at the interface level rather than specific SDKs.",
+      "key_tradeoffs": {
+        "instrumentation_vs_manual_decorators": "Instrumented proxy wrapper avoids manual decorator application and developer discipline requirements, but requires careful configuration of wrapping logic across all provider implementations",
+        "centralized_vs_per_method_tracking": "Centralized metrics middleware with SDK interception is more fragile to upstream changes but provides deeper integration; context-aware aggregation via InstrumentedProxy offers better stability at cost of slightly more complex setup",
+        "performance_impact": "Token counting hooks add minimal overhead during LLM calls, but thread-local state management and response parsing introduce small operational complexity"
+      },
+      "technology_considerations": [
+        "InstrumentedProxy from fitz_ai/core/instrumentation.py for proxy-based wrapping of LLM provider methods",
+        "threading.local() for thread-safe query-scoped token tracking context isolation",
+        "OpenAI SDK response structure parsing with getattr fallbacks for prompt_tokens and completion_tokens fields",
+        "Anthropic SDK usage field extraction using input_tokens/output_tokens instead of prompt_tokens/completion_tokens",
+        "Cohere SDK metadata parsing from response.meta.tokens structure with graceful degradation handling",
+        "Ollama API response header/body parsing for token detection with warning logs when missing",
+        "Protocol-based interface contracts (ChatProvider, EmbeddingProvider) to maintain compatibility across providers while enabling instrumentation at implementation level"
+      ],
+      "scope_statement": "This task produces two modules (token_tracker.py and tracked.py) - the challenge lies in integrating with the instrumentation framework correctly, ensuring proper aggregation of token counts per query across different providers, and not introducing performance regression during inference flows. The solution must support all current LLM provider types (OpenAI, Anthropic, Cohere, Ollama) while handling their differences in how they expose usage metadata."
+    },
+    "design": {
+      "adrs": [
+        {
+          "title": "ADR: Instrumented Proxy Wrapper with Context-Aware Aggregation for Token Tracking",
+          "context": "Need to track input/output tokens from LLM provider calls across different vendors (OpenAI, Anthropic, Cohere, Ollama) without modifying their interfaces or introducing fragile SDK patching.",
+          "decision": "Use fitz_ai/core/instrumentation.py's existing InstrumentedProxy framework to wrap concrete LLM provider classes with token counting hooks that extract usage data from SDK responses on a per-query basis using thread-local storage.",
+          "rationale": "This approach leverages existing infrastructure, ensures full compatibility across all providers through interface-level wrapping (while instrumenting concrete implementations for token access), maintains query-scoped isolation via threading.local(), and avoids brittle SDK-specific changes or manual decorator application. It also follows established patterns in the codebase like benchmarking and caching hooks.",
+          "consequences": [
+            "Minimal impact on core provider interfaces - all methods return same types",
+            "Thread-safe token tracking using existing context management practices (threading.local())",
+            "Query-scoped aggregation prevents cross-request contamination of metrics",
+            "Requires updating tracked.py to wrap concrete implementations instead of protocols for proper SDK access",
+            "Performance overhead is limited to instrumentation layer with minimal impact on inference speed"
+          ],
+          "alternatives_considered": [
+            "Decorator-Based Token Hook Injection - rejected because it requires manual application across all providers leading to maintenance burden and inconsistency risks",
+            "Centralized Metrics Middleware with Provider-Specific SDK Interception - rejected because it introduces fragile tight coupling to external SDK behaviors that can break during version upgrades or API changes"
+          ]
+        },
+        {
+          "title": "ADR: Robust Token Extraction Logic for Diverse LLM Providers",
+          "context": "Different LLM providers (OpenAI, Anthropic, Cohere, Ollama) expose token usage data in varying formats and structures within their SDK responses.",
+          "decision": "Implement provider-specific fallback logic that safely extracts tokens from SDK response objects with defensive checks for missing fields or structure differences.",
+          "rationale": "This ensures the system can gracefully handle different SDK behaviors without crashing when certain providers don't expose token usage, while still capturing available data where possible. The approach uses hasattr() and getattr() with defaults to avoid exceptions on malformed responses.",
+          "consequences": [
+            "Token extraction is robust against missing or differently structured usage fields across providers",
+            "Warning logs are emitted for incomplete token data rather than system failures",
+            "Codebase becomes more resilient to SDK version changes by not relying on fixed field names",
+            "Each provider requires careful attention during implementation and testing due to structural differences"
+          ],
+          "alternatives_considered": [
+            "Hardcoded Field Access Assumptions - rejected because it would break when SDKs change response formats or when providers don't expose tokens at all (e.g., Ollama base API)",
+            "Single Uniform Extraction Logic - rejected because different providers have completely different token exposure patterns (OpenAI vs Anthropic vs Cohere vs Ollama)"
+          ]
+        },
+        {
+          "title": "ADR: Thread-Safe Per-Query Token Tracking Context",
+          "context": "Token tracking must be isolated per query to support concurrent request handling without data corruption or incorrect attribution.",
+          "decision": "Use threading.local() storage in the token tracker with thread-local state management that integrates with existing query context systems via set_query_context() and similar logging patterns.",
+          "rationale": "This maintains consistency with how other parts of the system manage per-query state (like logging) while providing clean isolation between concurrent requests. It leverages established practices from fitz_ai/logging/logger.py rather than creating new concurrency mechanisms.",
+          "consequences": [
+            "Thread safety is guaranteed through standard library threading.local() mechanism",
+            "Per-request token tracking prevents contamination of metrics across different users/queries",
+            "Context propagation must be carefully managed in async workflows to preserve correct thread-local state",
+            "No global counters or shared mutable state required - keeps system simple and predictable"
+          ],
+          "alternatives_considered": [
+            "Global Shared Counters with Locks - rejected because it introduces complexity, potential performance bottlenecks, and violates the principle of query-scoped isolation",
+            "Process-Level Aggregation with External State Store - rejected because it's overengineered for this use case and adds unnecessary dependency on external systems"
+          ]
+        }
+      ],
+      "components": [
+        {
+          "name": "TokenTracker",
+          "purpose": "Central token tracking logic for LLM providers",
+          "responsibilities": [
+            "Record input tokens for a specific model",
+            "Record output tokens for a specific model",
+            "Aggregate and return total tokens per model",
+            "Reset current token tracking state"
+          ],
+          "interfaces": [
+            "record_input_tokens(model: str, tokens: int) -> None",
+            "record_output_tokens(model: str, tokens: int) -> None",
+            "get_total_tokens() -> dict[str, tuple[int, int]]",
+            "reset() -> None"
+          ],
+          "dependencies": []
+        },
+        {
+          "name": "TrackedProviders",
+          "purpose": "Wrapper module that instruments all LLM provider classes with token counting",
+          "responsibilities": [
+            "Wrap concrete provider classes to inject instrumentation before and after method calls",
+            "Extract token usage from SDK responses based on provider-specific patterns",
+            "Record extracted tokens using TokenTracker"
+          ],
+          "interfaces": [
+            "OpenAIChatTracked(chat(messages: list[dict[str, Any]], model: str, **kwargs) -> str)",
+            "OpenAIEmbeddingTracked(embed(text: str, model: str, **kwargs) -> list[float])",
+            "AnthropicChatTracked(chat(messages: list[dict[str, Any]], model: str, **kwargs) -> str)",
+            "AnthropicVisionTracked(describe_image(image_path: str, prompt: str, model: str, **kwargs) -> str)",
+            "CohereChatTracked(chat(messages: list[dict[str, Any]], model: str, **kwargs) -> str)",
+            "CohereEmbeddingTracked(embed(text: str, model: str, **kwargs) -> list[float])",
+            "OllamaChatTracked(chat(messages: list[dict[str, Any]], model: str, **kwargs) -> str)",
+            "OllamaEmbeddingTracked(embed(text: str, model: str, **kwargs) -> list[float])"
+          ],
+          "dependencies": [
+            "TokenTracker",
+            "InstrumentedProxy",
+            "maybe_wrap"
+          ]
+        }
+      ],
+      "data_model": {
+        "TokenUsageState": [
+          "model: str",
+          "input_tokens: int",
+          "output_tokens: int"
+        ],
+        "TokenUsageRecord": [
+          "model: str",
+          "input_tokens: int",
+          "output_tokens: int"
+        ]
+      },
+      "integration_points": [
+        "fitz_ai/core/instrumentation.py \u2014 InstrumentedProxy wrapper system used to instrument LLM provider methods with token tracking hooks",
+        "fitz_ai/llm/providers/base.py \u2014 Protocol definitions (ChatProvider, EmbeddingProvider, etc.) that are implemented by concrete providers and need to be wrapped for instrumentation",
+        "fitz_ai/llm/providers/openai.py \u2014 Concrete OpenAI provider implementations (OpenAIChat, OpenAIEmbedding) that require token extraction from SDK responses",
+        "fitz_ai/llm/providers/anthropic.py \u2014 Concrete Anthropic provider implementations (AnthropicChat, AnthropicVision) with different usage field structures requiring specialized extraction logic",
+        "fitz_ai/llm/providers/cohere.py \u2014 Concrete Cohere provider implementations (CohereChat, CohereEmbedding) that expose token data differently from OpenAI and need custom parsing",
+        "fitz_ai/llm/providers/ollama.py \u2014 Concrete Ollama provider implementations (OllamaChat, OllamaEmbedding) which have no standardized token fields requiring detection logic"
+      ],
+      "artifacts": []
+    }
+  },
+  "architecture": {
+    "approaches": [
+      {
+        "name": "Instrumented Proxy Wrapper with Context-Aware Aggregation",
+        "description": "Use fitz_ai/core/instrumentation.py's existing InstrumentedProxy to wrap all LLM provider methods (chat, embed, etc.) and inject token counting hooks. Each wrapped method logs input/output tokens into a thread-local or query-scoped context manager.",
+        "pros": [
+          "Seamlessly tracks tokens in all providers without modifying their interfaces",
+          "Integrates cleanly with existing hook system for observability",
+          "Leverages existing tooling rather than creating new infrastructure"
+        ],
+        "cons": [
+          "Requires careful configuration of InstrumentedProxy wrapping logic",
+          "Logging infrastructure must support querying by query ID",
+          "Failure mode if instrumentation system is not properly configured or multiple threads access shared contexts without proper isolation"
+        ],
+        "complexity": "medium",
+        "best_for": [
+          "Systems with existing instrumentation framework",
+          "Need to track tokens across multiple LLM providers consistently"
+        ]
+      },
+      {
+        "name": "Decorator-Based Token Hook Injection",
+        "description": "Add a token-counting decorator (e.g., @track_tokens) that wraps LLM methods directly inside each provider class. Decorators capture input/output tokens using the underlying SDK client APIs, then store them in thread-local state or request context.",
+        "pros": [
+          "Minimal impact on core logic",
+          "Direct injection at method level allows precise control over what gets tracked where"
+        ],
+        "cons": [
+          "High operational burden - each provider class needs explicit annotation and could introduce boilerplate",
+          "Harder to retrofit if existing implementations already exist",
+          "Inconsistent application of decorators across providers may lead to missing tracking for some methods"
+        ],
+        "complexity": "high",
+        "best_for": [
+          "Small, controlled systems where manual decoration is acceptable",
+          "When provider interfaces are stable and don't change frequently"
+        ]
+      }
+    ],
+    "recommended": "Instrumented Proxy Wrapper with Context-Aware Aggregation",
+    "reasoning": "This approach aligns perfectly with the current architecture using fitz_ai/core/instrumentation.py. The system already has a robust hooking mechanism that supports benchmarking and caching via InstrumentedProxy, which makes it natural to extend this same pattern for token counting. It avoids patching or decorating existing classes that would require invasive changes, maintains thread safety through context isolation techniques already used in logging/query systems (e.g., via set_query_context()), and scales well as more providers are added since wrapping happens at the interface level rather than specific SDKs.",
+    "key_tradeoffs": {
+      "instrumentation_vs_manual_decorators": "Instrumented proxy wrapper avoids manual decorator application and developer discipline requirements, but requires careful configuration of wrapping logic across all provider implementations",
+      "centralized_vs_per_method_tracking": "Centralized metrics middleware with SDK interception is more fragile to upstream changes but provides deeper integration; context-aware aggregation via InstrumentedProxy offers better stability at cost of slightly more complex setup",
+      "performance_impact": "Token counting hooks add minimal overhead during LLM calls, but thread-local state management and response parsing introduce small operational complexity"
+    },
+    "technology_considerations": [
+      "InstrumentedProxy from fitz_ai/core/instrumentation.py for proxy-based wrapping of LLM provider methods",
+      "threading.local() for thread-safe query-scoped token tracking context isolation",
+      "OpenAI SDK response structure parsing with getattr fallbacks for prompt_tokens and completion_tokens fields",
+      "Anthropic SDK usage field extraction using input_tokens/output_tokens instead of prompt_tokens/completion_tokens",
+      "Cohere SDK metadata parsing from response.meta.tokens structure with graceful degradation handling",
+      "Ollama API response header/body parsing for token detection with warning logs when missing",
+      "Protocol-based interface contracts (ChatProvider, EmbeddingProvider) to maintain compatibility across providers while enabling instrumentation at implementation level"
+    ],
+    "scope_statement": "This task produces two modules (token_tracker.py and tracked.py) - the challenge lies in integrating with the instrumentation framework correctly, ensuring proper aggregation of token counts per query across different providers, and not introducing performance regression during inference flows. The solution must support all current LLM provider types (OpenAI, Anthropic, Cohere, Ollama) while handling their differences in how they expose usage metadata."
+  },
+  "design": {
+    "adrs": [
+      {
+        "title": "ADR: Instrumented Proxy Wrapper with Context-Aware Aggregation for Token Tracking",
+        "context": "Need to track input/output tokens from LLM provider calls across different vendors (OpenAI, Anthropic, Cohere, Ollama) without modifying their interfaces or introducing fragile SDK patching.",
+        "decision": "Use fitz_ai/core/instrumentation.py's existing InstrumentedProxy framework to wrap concrete LLM provider classes with token counting hooks that extract usage data from SDK responses on a per-query basis using thread-local storage.",
+        "rationale": "This approach leverages existing infrastructure, ensures full compatibility across all providers through interface-level wrapping (while instrumenting concrete implementations for token access), maintains query-scoped isolation via threading.local(), and avoids brittle SDK-specific changes or manual decorator application. It also follows established patterns in the codebase like benchmarking and caching hooks.",
+        "consequences": [
+          "Minimal impact on core provider interfaces - all methods return same types",
+          "Thread-safe token tracking using existing context management practices (threading.local())",
+          "Query-scoped aggregation prevents cross-request contamination of metrics",
+          "Requires updating tracked.py to wrap concrete implementations instead of protocols for proper SDK access",
+          "Performance overhead is limited to instrumentation layer with minimal impact on inference speed"
+        ],
+        "alternatives_considered": [
+          "Decorator-Based Token Hook Injection - rejected because it requires manual application across all providers leading to maintenance burden and inconsistency risks",
+          "Centralized Metrics Middleware with Provider-Specific SDK Interception - rejected because it introduces fragile tight coupling to external SDK behaviors that can break during version upgrades or API changes"
+        ]
+      },
+      {
+        "title": "ADR: Robust Token Extraction Logic for Diverse LLM Providers",
+        "context": "Different LLM providers (OpenAI, Anthropic, Cohere, Ollama) expose token usage data in varying formats and structures within their SDK responses.",
+        "decision": "Implement provider-specific fallback logic that safely extracts tokens from SDK response objects with defensive checks for missing fields or structure differences.",
+        "rationale": "This ensures the system can gracefully handle different SDK behaviors without crashing when certain providers don't expose token usage, while still capturing available data where possible. The approach uses hasattr() and getattr() with defaults to avoid exceptions on malformed responses.",
+        "consequences": [
+          "Token extraction is robust against missing or differently structured usage fields across providers",
+          "Warning logs are emitted for incomplete token data rather than system failures",
+          "Codebase becomes more resilient to SDK version changes by not relying on fixed field names",
+          "Each provider requires careful attention during implementation and testing due to structural differences"
+        ],
+        "alternatives_considered": [
+          "Hardcoded Field Access Assumptions - rejected because it would break when SDKs change response formats or when providers don't expose tokens at all (e.g., Ollama base API)",
+          "Single Uniform Extraction Logic - rejected because different providers have completely different token exposure patterns (OpenAI vs Anthropic vs Cohere vs Ollama)"
+        ]
+      },
+      {
+        "title": "ADR: Thread-Safe Per-Query Token Tracking Context",
+        "context": "Token tracking must be isolated per query to support concurrent request handling without data corruption or incorrect attribution.",
+        "decision": "Use threading.local() storage in the token tracker with thread-local state management that integrates with existing query context systems via set_query_context() and similar logging patterns.",
+        "rationale": "This maintains consistency with how other parts of the system manage per-query state (like logging) while providing clean isolation between concurrent requests. It leverages established practices from fitz_ai/logging/logger.py rather than creating new concurrency mechanisms.",
+        "consequences": [
+          "Thread safety is guaranteed through standard library threading.local() mechanism",
+          "Per-request token tracking prevents contamination of metrics across different users/queries",
+          "Context propagation must be carefully managed in async workflows to preserve correct thread-local state",
+          "No global counters or shared mutable state required - keeps system simple and predictable"
+        ],
+        "alternatives_considered": [
+          "Global Shared Counters with Locks - rejected because it introduces complexity, potential performance bottlenecks, and violates the principle of query-scoped isolation",
+          "Process-Level Aggregation with External State Store - rejected because it's overengineered for this use case and adds unnecessary dependency on external systems"
+        ]
+      }
+    ],
+    "components": [
+      {
+        "name": "TokenTracker",
+        "purpose": "Central token tracking logic for LLM providers",
+        "responsibilities": [
+          "Record input tokens for a specific model",
+          "Record output tokens for a specific model",
+          "Aggregate and return total tokens per model",
+          "Reset current token tracking state"
+        ],
+        "interfaces": [
+          "record_input_tokens(model: str, tokens: int) -> None",
+          "record_output_tokens(model: str, tokens: int) -> None",
+          "get_total_tokens() -> dict[str, tuple[int, int]]",
+          "reset() -> None"
+        ],
+        "dependencies": []
+      },
+      {
+        "name": "TrackedProviders",
+        "purpose": "Wrapper module that instruments all LLM provider classes with token counting",
+        "responsibilities": [
+          "Wrap concrete provider classes to inject instrumentation before and after method calls",
+          "Extract token usage from SDK responses based on provider-specific patterns",
+          "Record extracted tokens using TokenTracker"
+        ],
+        "interfaces": [
+          "OpenAIChatTracked(chat(messages: list[dict[str, Any]], model: str, **kwargs) -> str)",
+          "OpenAIEmbeddingTracked(embed(text: str, model: str, **kwargs) -> list[float])",
+          "AnthropicChatTracked(chat(messages: list[dict[str, Any]], model: str, **kwargs) -> str)",
+          "AnthropicVisionTracked(describe_image(image_path: str, prompt: str, model: str, **kwargs) -> str)",
+          "CohereChatTracked(chat(messages: list[dict[str, Any]], model: str, **kwargs) -> str)",
+          "CohereEmbeddingTracked(embed(text: str, model: str, **kwargs) -> list[float])",
+          "OllamaChatTracked(chat(messages: list[dict[str, Any]], model: str, **kwargs) -> str)",
+          "OllamaEmbeddingTracked(embed(text: str, model: str, **kwargs) -> list[float])"
+        ],
+        "dependencies": [
+          "TokenTracker",
+          "InstrumentedProxy",
+          "maybe_wrap"
+        ]
+      }
+    ],
+    "data_model": {
+      "TokenUsageState": [
+        "model: str",
+        "input_tokens: int",
+        "output_tokens: int"
+      ],
+      "TokenUsageRecord": [
+        "model: str",
+        "input_tokens: int",
+        "output_tokens: int"
+      ]
+    },
+    "integration_points": [
+      "fitz_ai/core/instrumentation.py \u2014 InstrumentedProxy wrapper system used to instrument LLM provider methods with token tracking hooks",
+      "fitz_ai/llm/providers/base.py \u2014 Protocol definitions (ChatProvider, EmbeddingProvider, etc.) that are implemented by concrete providers and need to be wrapped for instrumentation",
+      "fitz_ai/llm/providers/openai.py \u2014 Concrete OpenAI provider implementations (OpenAIChat, OpenAIEmbedding) that require token extraction from SDK responses",
+      "fitz_ai/llm/providers/anthropic.py \u2014 Concrete Anthropic provider implementations (AnthropicChat, AnthropicVision) with different usage field structures requiring specialized extraction logic",
+      "fitz_ai/llm/providers/cohere.py \u2014 Concrete Cohere provider implementations (CohereChat, CohereEmbedding) that expose token data differently from OpenAI and need custom parsing",
+      "fitz_ai/llm/providers/ollama.py \u2014 Concrete Ollama provider implementations (OllamaChat, OllamaEmbedding) which have no standardized token fields requiring detection logic"
+    ],
+    "artifacts": []
+  },
+  "roadmap_risk": {
+    "roadmap": {
+      "phases": [
+        {
+          "number": 0,
+          "name": "Source Code Verification",
+          "objective": "Verify token usage extraction patterns and infrastructure alignment across all LLM providers to ensure implementation accuracy.",
+          "deliverables": [
+            "List of verified facts from source code review ensuring provider-specific token structures are correctly identified"
+          ],
+          "dependencies": [],
+          "estimated_complexity": "medium",
+          "key_risks": [
+            "Inconsistent SDK response structures may cause silent failures in token extraction logic"
+          ],
+          "verification_command": "python -c \"from fitz_ai.llm.token_tracker import TokenTracker; tracker = TokenTracker.get_instance(); print('Verification complete')\"",
+          "estimated_effort": "~15 minutes"
+        },
+        {
+          "number": 1,
+          "name": "Core TokenTracker Implementation",
+          "objective": "Implement the core token tracking mechanism that aggregates input/output tokens per model within a thread-local context.",
+          "deliverables": [
+            "New file: fitz_ai/llm/token_tracker.py with ThreadLocal-based TokenTracker class and methods"
+          ],
+          "dependencies": [
+            0
+          ],
+          "estimated_complexity": "low",
+          "key_risks": [
+            "Thread safety issues if concurrent queries are not properly isolated using threading.local()"
+          ],
+          "verification_command": "python -c \"from fitz_ai.llm.token_tracker import TokenTracker; tracker = TokenTracker.get_instance(); tracker.record_input_tokens('gpt-4', 100); tracker.record_output_tokens('gpt-4', 50); assert tracker.get_total_tokens() == {'gpt-4': (100, 50)}; print('TokenTracker working correctly')\"",
+          "estimated_effort": "~30 minutes"
+        },
+        {
+          "number": 2,
+          "name": "Tracked Providers Module Generation",
+          "objective": "Generate instrumented provider wrappers that extract and track token usage from each supported LLM SDK.",
+          "deliverables": [
+            "New file: fitz_ai/llm/providers/tracked.py implementing wrapped providers with custom handlers for token extraction"
+          ],
+          "dependencies": [
+            1
+          ],
+          "estimated_complexity": "high",
+          "key_risks": [
+            "Provider-specific SDK changes could break response parsing logic in _extract_tokens_from_response function"
+          ],
+          "verification_command": "python -c \"from fitz_ai.llm.providers.tracked import get_tracked_chat_provider, OpenAIChat; from unittest.mock import Mock; mock_provider = Mock(); mock_provider.chat.return_value = type('Response', (), {'usage': Mock(prompt_tokens=100, completion_tokens=50)})(); wrapped = get_tracked_chat_provider(OpenAIChat); result = wrapped.chat(messages=[], model='gpt-4'); print(result)\"",
+          "estimated_effort": "~2 hours"
+        },
+        {
+          "number": 3,
+          "name": "Integration With LLM Factory",
+          "objective": "Modify the provider factory to return tracked providers when token tracking is enabled.",
+          "deliverables": [
+            "Updated fitz_ai/llm/factory.py using tracked provider factories for ChatProvider, EmbeddingProvider"
+          ],
+          "dependencies": [
+            2
+          ],
+          "estimated_complexity": "medium",
+          "key_risks": [
+            "Instrumentation layer might not support safe wrapping of all providers or could introduce double-wrapping errors"
+          ],
+          "verification_command": "python -c \"from fitz_ai.llm.factory import create_chat_provider; provider = create_chat_provider('openai'); print(type(provider).__name__)\"",
+          "estimated_effort": "~1 hour"
+        },
+        {
+          "number": 4,
+          "name": "Logging Integration & Query Context Awareness",
+          "objective": "Integrate token logging into the existing query context and ensure final counts are reported with proper scope.",
+          "deliverables": [
+            "Updated fitz_ai/logging/logger.py including log_query_tokens function that reports current thread's token usage"
+          ],
+          "dependencies": [
+            1
+          ],
+          "estimated_complexity": "medium",
+          "key_risks": [
+            "Token counts may leak between concurrent requests if query context management is not precise"
+          ],
+          "verification_command": "python -c \"import logging; from fitz_ai.logging.logger import get_logger, log_query_tokens; logger = get_logger('test'); log_query_tokens(logger); print('Token logging integration checked.')\"",
+          "estimated_effort": "~1 hour"
+        }
+      ],
+      "critical_path": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "parallel_opportunities": [],
+      "total_phases": 5
+    },
+    "risk": {
+      "risks": [
+        {
+          "category": "technical",
+          "description": "Different SDKs expose usage in inconsistent ways. If one provider changes its field structure, it will break the extractor logic.",
+          "impact": "high",
+          "likelihood": "medium",
+          "mitigation": "Implement robust error handling with try-except blocks and fallback behavior for missing fields in token extraction functions",
+          "contingency": "If a provider's usage structure changes, update the corresponding _extract_tokens_from_response function to handle new format while maintaining backward compatibility",
+          "affected_phases": [
+            2
+          ],
+          "verification": "Run tests against mocked OpenAI response with missing .usage fields to confirm fallback behavior works"
+        },
+        {
+          "category": "technical",
+          "description": "If the application uses multiple threads (e.g., async handlers), there's potential for state leakage between concurrent queries unless context management is very precise.",
+          "impact": "high",
+          "likelihood": "medium",
+          "mitigation": "Ensure comprehensive thread-local storage testing and implement strict isolation checks using threading.local()",
+          "contingency": "Add race condition tests to verify token tracking isolation across threads when executing concurrent requests in parallel",
+          "affected_phases": [
+            1,
+            2,
+            4
+          ],
+          "verification": "Use threading tests to simulate race conditions on token recording and verify isolation with threading.local()"
+        },
+        {
+          "category": "technical",
+          "description": "The current instrumentation system was built for benchmark hooks, not token counting. Some edge cases might cause method interception or wrapping failures when multiple proxies are stacked.",
+          "impact": "medium",
+          "likelihood": "low",
+          "mitigation": "Thoroughly test each concrete provider type being instrumented via maybe_wrap() and implement defensive programming techniques",
+          "contingency": "If provider wrapping fails, fall back to direct method injection rather than using InstrumentedProxy for that specific provider",
+          "affected_phases": [
+            2
+          ],
+          "verification": "Run unit tests on each concrete provider type being instrumented via maybe_wrap() and verify no exceptions occur during wrapping"
+        },
+        {
+          "category": "technical",
+          "description": "Ollama doesn't have standard usage fields, so we silently skip tracking which could cause silent underreporting of costs for models that don't expose token info.",
+          "impact": "medium",
+          "likelihood": "low",
+          "mitigation": "Add explicit logging when skipping Ollama token tracking to ensure visibility into this limitation",
+          "contingency": "Provide alternative cost estimation mechanisms or warnings in documentation for Ollama users who rely on token counting",
+          "affected_phases": [
+            2
+          ],
+          "verification": "Manually inspect a real Ollama API response and confirm no token fields exist; verify fallback logic in _extract_tokens_from_response handles this gracefully"
+        },
+        {
+          "category": "technical",
+          "description": "OpenAI SDK version changes could affect .usage field structure, breaking our parser silently.",
+          "impact": "high",
+          "likelihood": "low",
+          "mitigation": "Implement flexible parsing logic that can handle variations in OpenAI's response format and add comprehensive test coverage with various structures",
+          "contingency": "Update token extraction function to be resilient against API schema changes by checking for presence of fields before accessing them",
+          "affected_phases": [
+            2
+          ],
+          "verification": "Write a test that mocks various structures of openai.ChatCompletion and ensures all pass through _extract_tokens_from_response"
+        },
+        {
+          "category": "technical",
+          "description": "Token counts not reset correctly between queries if query contexts aren't managed properly via set_query_context().",
+          "impact": "high",
+          "likelihood": "medium",
+          "mitigation": "Implement strict verification in token tracker's reset method and ensure all query execution paths call reset() appropriately",
+          "contingency": "Add assertion checks that verify isolated token logs per thread by running concurrent tests simulating multiple requests",
+          "affected_phases": [
+            1,
+            4
+          ],
+          "verification": "Run concurrent tests that simulate two requests (e.g., threads) and ensure each has isolated token logs (get_total_tokens)"
+        },
+        {
+          "category": "external",
+          "description": "Future OpenAI SDK version changes may alter how usage is reported, breaking our parser without error.",
+          "impact": "high",
+          "likelihood": "low",
+          "mitigation": "Create a wrapper around token extraction logic that can adapt to changing API structures with minimal disruption to functionality",
+          "contingency": "Implement version-specific parsers or schema validation for OpenAI responses and provide upgrade path documentation",
+          "affected_phases": [
+            2
+          ],
+          "verification": "Write integration tests covering different versions of openai.ChatCompletion response objects"
+        }
+      ],
+      "overall_risk_level": "medium",
+      "recommended_contingencies": [
+        "Implement comprehensive multi-threaded testing for token tracking isolation",
+        "Add explicit logging when skipping Ollama token tracking to maintain visibility into cost estimation gaps",
+        "Create version-resilient parsing logic for OpenAI SDK response structures with backward compatibility layer",
+        "Ensure all query execution paths properly call TokenTracker.reset() to prevent cross-request contamination"
+      ]
+    }
+  },
+  "roadmap": {
+    "phases": [
+      {
+        "number": 0,
+        "name": "Source Code Verification",
+        "objective": "Verify token usage extraction patterns and infrastructure alignment across all LLM providers to ensure implementation accuracy.",
+        "deliverables": [
+          "List of verified facts from source code review ensuring provider-specific token structures are correctly identified"
+        ],
+        "dependencies": [],
+        "estimated_complexity": "medium",
+        "key_risks": [
+          "Inconsistent SDK response structures may cause silent failures in token extraction logic"
+        ],
+        "verification_command": "python -c \"from fitz_ai.llm.token_tracker import TokenTracker; tracker = TokenTracker.get_instance(); print('Verification complete')\"",
+        "estimated_effort": "~15 minutes"
+      },
+      {
+        "number": 1,
+        "name": "Core TokenTracker Implementation",
+        "objective": "Implement the core token tracking mechanism that aggregates input/output tokens per model within a thread-local context.",
+        "deliverables": [
+          "New file: fitz_ai/llm/token_tracker.py with ThreadLocal-based TokenTracker class and methods"
+        ],
+        "dependencies": [
+          0
+        ],
+        "estimated_complexity": "low",
+        "key_risks": [
+          "Thread safety issues if concurrent queries are not properly isolated using threading.local()"
+        ],
+        "verification_command": "python -c \"from fitz_ai.llm.token_tracker import TokenTracker; tracker = TokenTracker.get_instance(); tracker.record_input_tokens('gpt-4', 100); tracker.record_output_tokens('gpt-4', 50); assert tracker.get_total_tokens() == {'gpt-4': (100, 50)}; print('TokenTracker working correctly')\"",
+        "estimated_effort": "~30 minutes"
+      },
+      {
+        "number": 2,
+        "name": "Tracked Providers Module Generation",
+        "objective": "Generate instrumented provider wrappers that extract and track token usage from each supported LLM SDK.",
+        "deliverables": [
+          "New file: fitz_ai/llm/providers/tracked.py implementing wrapped providers with custom handlers for token extraction"
+        ],
+        "dependencies": [
+          1
+        ],
+        "estimated_complexity": "high",
+        "key_risks": [
+          "Provider-specific SDK changes could break response parsing logic in _extract_tokens_from_response function"
+        ],
+        "verification_command": "python -c \"from fitz_ai.llm.providers.tracked import get_tracked_chat_provider, OpenAIChat; from unittest.mock import Mock; mock_provider = Mock(); mock_provider.chat.return_value = type('Response', (), {'usage': Mock(prompt_tokens=100, completion_tokens=50)})(); wrapped = get_tracked_chat_provider(OpenAIChat); result = wrapped.chat(messages=[], model='gpt-4'); print(result)\"",
+        "estimated_effort": "~2 hours"
+      },
+      {
+        "number": 3,
+        "name": "Integration With LLM Factory",
+        "objective": "Modify the provider factory to return tracked providers when token tracking is enabled.",
+        "deliverables": [
+          "Updated fitz_ai/llm/factory.py using tracked provider factories for ChatProvider, EmbeddingProvider"
+        ],
+        "dependencies": [
+          2
+        ],
+        "estimated_complexity": "medium",
+        "key_risks": [
+          "Instrumentation layer might not support safe wrapping of all providers or could introduce double-wrapping errors"
+        ],
+        "verification_command": "python -c \"from fitz_ai.llm.factory import create_chat_provider; provider = create_chat_provider('openai'); print(type(provider).__name__)\"",
+        "estimated_effort": "~1 hour"
+      },
+      {
+        "number": 4,
+        "name": "Logging Integration & Query Context Awareness",
+        "objective": "Integrate token logging into the existing query context and ensure final counts are reported with proper scope.",
+        "deliverables": [
+          "Updated fitz_ai/logging/logger.py including log_query_tokens function that reports current thread's token usage"
+        ],
+        "dependencies": [
+          1
+        ],
+        "estimated_complexity": "medium",
+        "key_risks": [
+          "Token counts may leak between concurrent requests if query context management is not precise"
+        ],
+        "verification_command": "python -c \"import logging; from fitz_ai.logging.logger import get_logger, log_query_tokens; logger = get_logger('test'); log_query_tokens(logger); print('Token logging integration checked.')\"",
+        "estimated_effort": "~1 hour"
+      }
+    ],
+    "critical_path": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "parallel_opportunities": [],
+    "total_phases": 5
+  },
+  "risk": {
+    "risks": [
+      {
+        "category": "technical",
+        "description": "Different SDKs expose usage in inconsistent ways. If one provider changes its field structure, it will break the extractor logic.",
+        "impact": "high",
+        "likelihood": "medium",
+        "mitigation": "Implement robust error handling with try-except blocks and fallback behavior for missing fields in token extraction functions",
+        "contingency": "If a provider's usage structure changes, update the corresponding _extract_tokens_from_response function to handle new format while maintaining backward compatibility",
+        "affected_phases": [
+          2
+        ],
+        "verification": "Run tests against mocked OpenAI response with missing .usage fields to confirm fallback behavior works"
+      },
+      {
+        "category": "technical",
+        "description": "If the application uses multiple threads (e.g., async handlers), there's potential for state leakage between concurrent queries unless context management is very precise.",
+        "impact": "high",
+        "likelihood": "medium",
+        "mitigation": "Ensure comprehensive thread-local storage testing and implement strict isolation checks using threading.local()",
+        "contingency": "Add race condition tests to verify token tracking isolation across threads when executing concurrent requests in parallel",
+        "affected_phases": [
+          1,
+          2,
+          4
+        ],
+        "verification": "Use threading tests to simulate race conditions on token recording and verify isolation with threading.local()"
+      },
+      {
+        "category": "technical",
+        "description": "The current instrumentation system was built for benchmark hooks, not token counting. Some edge cases might cause method interception or wrapping failures when multiple proxies are stacked.",
+        "impact": "medium",
+        "likelihood": "low",
+        "mitigation": "Thoroughly test each concrete provider type being instrumented via maybe_wrap() and implement defensive programming techniques",
+        "contingency": "If provider wrapping fails, fall back to direct method injection rather than using InstrumentedProxy for that specific provider",
+        "affected_phases": [
+          2
+        ],
+        "verification": "Run unit tests on each concrete provider type being instrumented via maybe_wrap() and verify no exceptions occur during wrapping"
+      },
+      {
+        "category": "technical",
+        "description": "Ollama doesn't have standard usage fields, so we silently skip tracking which could cause silent underreporting of costs for models that don't expose token info.",
+        "impact": "medium",
+        "likelihood": "low",
+        "mitigation": "Add explicit logging when skipping Ollama token tracking to ensure visibility into this limitation",
+        "contingency": "Provide alternative cost estimation mechanisms or warnings in documentation for Ollama users who rely on token counting",
+        "affected_phases": [
+          2
+        ],
+        "verification": "Manually inspect a real Ollama API response and confirm no token fields exist; verify fallback logic in _extract_tokens_from_response handles this gracefully"
+      },
+      {
+        "category": "technical",
+        "description": "OpenAI SDK version changes could affect .usage field structure, breaking our parser silently.",
+        "impact": "high",
+        "likelihood": "low",
+        "mitigation": "Implement flexible parsing logic that can handle variations in OpenAI's response format and add comprehensive test coverage with various structures",
+        "contingency": "Update token extraction function to be resilient against API schema changes by checking for presence of fields before accessing them",
+        "affected_phases": [
+          2
+        ],
+        "verification": "Write a test that mocks various structures of openai.ChatCompletion and ensures all pass through _extract_tokens_from_response"
+      },
+      {
+        "category": "technical",
+        "description": "Token counts not reset correctly between queries if query contexts aren't managed properly via set_query_context().",
+        "impact": "high",
+        "likelihood": "medium",
+        "mitigation": "Implement strict verification in token tracker's reset method and ensure all query execution paths call reset() appropriately",
+        "contingency": "Add assertion checks that verify isolated token logs per thread by running concurrent tests simulating multiple requests",
+        "affected_phases": [
+          1,
+          4
+        ],
+        "verification": "Run concurrent tests that simulate two requests (e.g., threads) and ensure each has isolated token logs (get_total_tokens)"
+      },
+      {
+        "category": "external",
+        "description": "Future OpenAI SDK version changes may alter how usage is reported, breaking our parser without error.",
+        "impact": "high",
+        "likelihood": "low",
+        "mitigation": "Create a wrapper around token extraction logic that can adapt to changing API structures with minimal disruption to functionality",
+        "contingency": "Implement version-specific parsers or schema validation for OpenAI responses and provide upgrade path documentation",
+        "affected_phases": [
+          2
+        ],
+        "verification": "Write integration tests covering different versions of openai.ChatCompletion response objects"
+      }
+    ],
+    "overall_risk_level": "medium",
+    "recommended_contingencies": [
+      "Implement comprehensive multi-threaded testing for token tracking isolation",
+      "Add explicit logging when skipping Ollama token tracking to maintain visibility into cost estimation gaps",
+      "Create version-resilient parsing logic for OpenAI SDK response structures with backward compatibility layer",
+      "Ensure all query execution paths properly call TokenTracker.reset() to prevent cross-request contamination"
+    ]
+  }
+}

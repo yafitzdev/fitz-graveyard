@@ -1,0 +1,895 @@
+{
+  "context": {
+    "project_description": "A token usage tracking system that records LLM token consumption per query across OpenAI, Anthropic, Cohere, and Ollama providers, logging exact input/output token counts via existing infrastructure.",
+    "key_requirements": [
+      "Track token usage per query at the LLM client level",
+      "Show exact input/output token costs for each provider call",
+      "Work across all supported LLM providers (OpenAI, Anthropic, Cohere, Ollama)",
+      "Integrate cleanly with existing architecture without breaking changes",
+      "Log token counts via existing structured logging system with contextual tags"
+    ],
+    "constraints": [
+      "Must work with existing provider protocols (ChatProvider, EmbeddingProvider, etc.) in base.py",
+      "Cannot modify core protocol interfaces defined in base.py",
+      "Should not impact performance significantly",
+      "Integration must preserve all current functionality and behavior"
+    ],
+    "existing_context": "fitz_ai/llm/providers/base.py, fitz_ai/llm/providers/openai.py, fitz_ai/llm/providers/anthropic.py, fitz_ai/llm/providers/cohere.py, fitz_ai/llm/providers/ollama.py, fitz_ai/core/instrumentation.py, fitz_ai/logging/logger.py, fitz_ai/engines/fitz_krag/engine.py",
+    "stakeholders": [
+      "Platform Engineers",
+      "Product Managers",
+      "Data Scientists / Researchers",
+      "DevOps Team"
+    ],
+    "scope_boundaries": {
+      "in_scope": [
+        "Add token counting capability inside ChatProvider methods (chat, chat_stream)",
+        "Record input/output token counts for each call",
+        "Log these values via existing logging infrastructure with contextual tags",
+        "Extend base provider interfaces minimally if needed"
+      ],
+      "out_of_scope": [
+        "Metric aggregation dashboard or UI components",
+        "Real-time cost estimation APIs",
+        "Historical reporting / billing exports",
+        "Token normalization across models"
+      ]
+    },
+    "existing_files": [
+      "fitz_ai/llm/providers/base.py \u2014 Provider protocols for LLM clients.",
+      "fitz_ai/llm/providers/openai.py \u2014 OpenAI provider wrappers using the official SDK.",
+      "fitz_ai/llm/providers/anthropic.py \u2014 Anthropic provider wrappers using the official SDK.",
+      "fitz_ai/llm/providers/cohere.py \u2014 Cohere provider wrappers using the official SDK.",
+      "fitz_ai/llm/providers/ollama.py \u2014 Ollama provider wrappers using direct HTTP calls.",
+      "fitz_ai/core/instrumentation.py \u2014 Instrumentation system for benchmarking plugin performance.",
+      "fitz_ai/logging/logger.py \u2014 Unified logging setup for the entire Fitz project."
+    ],
+    "needed_artifacts": [
+      "fitz_ai/llm/tracking/token_counter.py \u2014 Generic token counting logic that works across providers",
+      "fitz_ai/llm/tracking/instrumentation.py \u2014 Wrap LLM provider method calls with token counting hooks"
+    ],
+    "assumptions": [
+      {
+        "assumption": "Token counting will be done at the LLM layer only",
+        "impact": "Might miss some cost optimizations like context reuse; could overcount",
+        "confidence": "high"
+      },
+      {
+        "assumption": "Provider-specific tokenizers are accessible",
+        "impact": "Need fallback logic or more complex mapping; otherwise will fail silently",
+        "confidence": "medium"
+      },
+      {
+        "assumption": "Logging system can handle structured data with token fields",
+        "impact": "Risk of breaking if log schema changes too much; possible need to refactor logging usage",
+        "confidence": "high"
+      },
+      {
+        "assumption": "Existing provider abstractions don't require modification",
+        "impact": "May have to modify base protocols or introduce new ones \u2014 risk of broader impact",
+        "confidence": "medium"
+      },
+      {
+        "assumption": "Users want per-request token details, not aggregated stats",
+        "impact": "If users want billing reports we'd need additional layers; MVP would be incomplete",
+        "confidence": "high"
+      }
+    ]
+  },
+  "architecture_design": {
+    "architecture": {
+      "approaches": [
+        {
+          "name": "Direct Instrumentation Hook Injection",
+          "description": "Attempt to inject hooks into provider methods to capture SDK response objects for token extraction.",
+          "pros": [
+            "Provides centralized token tracking mechanism"
+          ],
+          "cons": [
+            "Providers return str instead of SDK responses, so tokens cannot be extracted from intercepted calls"
+          ],
+          "complexity": "high",
+          "best_for": [
+            "System with mutable provider interfaces"
+          ]
+        },
+        {
+          "name": "Protocol Extension",
+          "description": "Extend base provider protocols to include token information in return values.",
+          "pros": [
+            "Clear interface for token-aware providers"
+          ],
+          "cons": [
+            "Violates constraint of not modifying base provider interfaces"
+          ],
+          "complexity": "high",
+          "best_for": [
+            "System where interface modifications are allowed"
+          ]
+        },
+        {
+          "name": "Centralized Token Meter with Shared Context",
+          "description": "Implement a global token meter that tracks usage across all LLM calls via shared context.",
+          "pros": [
+            "Stateless tracking mechanism"
+          ],
+          "cons": [
+            "No existing infrastructure for thread-local or global state management in codebase"
+          ],
+          "complexity": "medium",
+          "best_for": [
+            "System with robust concurrency control mechanisms"
+          ]
+        },
+        {
+          "name": "Engine-Level Wrapper With Token Extraction",
+          "description": "Create a wrapper around the core engine logic that captures raw SDK responses before string conversion.",
+          "pros": [
+            "Preserves all existing interfaces while enabling token tracking",
+            "Minimal impact on current architecture"
+          ],
+          "cons": [
+            "Requires modification of engine layer to intercept at client level"
+          ],
+          "complexity": "medium",
+          "best_for": [
+            "System requiring minimal interface changes but full functionality"
+          ]
+        }
+      ],
+      "recommended": "Engine-Level Wrapper With Token Extraction",
+      "reasoning": "The Engine-Level Wrapper approach is correct because it works within the existing architectural constraints: providers return strings, not SDK objects, so token extraction must happen at a higher level. The direct instrumentation and protocol extension approaches are infeasible due to interface contract violations or missing implementation. The centralized meter approach fails due to lack of shared state mechanisms in the codebase.",
+      "key_tradeoffs": {
+        "provider_interface_modification_vs_engine_wrapper": "Modifying provider interfaces to return SDK objects would break existing contracts and require changing return types from str to Any, while an engine-level wrapper avoids interface changes but requires modifying core logic flow.",
+        "instrumentation_point_selection": "Instrumenting at the provider level is infeasible because providers convert responses to strings before returning them, preventing access to token metadata; instrumentation must occur at a higher level where raw SDK objects are still available."
+      },
+      "technology_considerations": [
+        "OpenAI SDK response objects for token extraction",
+        "Thread-local or global context management for shared state tracking",
+        "InstrumentedProxy and BenchmarkHook from fitz_ai/core/instrumentation.py",
+        "FitzKragEngine.answer() method as the interception point"
+      ],
+      "scope_statement": "Modify FitzKragEngine.answer() to wrap LLM client calls with token extraction hooks that capture raw SDK responses before string conversion, adding structured logging for input/output tokens and duration metrics."
+    },
+    "design": {
+      "adrs": [
+        {
+          "title": "ADR: Token Tracking via Engine-Level Wrapper",
+          "context": "The system needs to track token usage from LLM providers for observability and cost monitoring. Initial architectural reasoning proposed hook-based instrumentation at provider level, but this approach is infeasible because providers return strings instead of SDK response objects.",
+          "decision": "Implement a client-level wrapper within the engine layer that captures raw SDK responses before string conversion to enable token extraction via hooks applied at the correct interception point.",
+          "rationale": "This preserves existing provider interfaces (which must remain unchanged per constraints) while enabling proper access to SDK metadata like usage statistics. The approach avoids modifying base protocols and instead works at a higher abstraction level where SDK objects are available before being converted to strings by providers.",
+          "consequences": [
+            "Requires modification to the engine layer to instrument LLM client calls",
+            "Enables accurate token tracking without breaking existing provider contracts",
+            "Introduces minimal overhead through targeted instrumentation in answer method"
+          ],
+          "alternatives_considered": [
+            "Approach A (Direct Instrumentation Hook Injection) \u2013 rejected because providers return str instead of SDK objects, making it impossible to access .usage metadata from hooks applied at the provider level",
+            "Approach B (Protocol Extension) \u2013 rejected because extending base provider interfaces violates constraint 'cannot modify base provider interfaces'",
+            "Approach C (Centralized Token Meter with Shared Context) \u2013 rejected because no such mechanism exists in codebase and would require significant architectural changes to support stateful tracking"
+          ]
+        },
+        {
+          "title": "ADR: Token Extraction at Engine Level vs. Provider Level",
+          "context": "The architecture extracts tokens from provider responses at the engine level rather than having providers return structured token counts directly, due to interface contract limitations where providers must return strings.",
+          "decision": "Implement token extraction in a centralized wrapper layer that processes raw string responses and extracts usage metadata before passing to downstream consumers.",
+          "rationale": "This approach maintains compatibility with existing provider interfaces while enabling unified token tracking across all provider types. It accepts the tradeoff of increased coupling between the engine layer and specific response formats from each provider.",
+          "consequences": [
+            "Engine layer must be tightly coupled to provider-specific response schemas for accurate token extraction",
+            "Provider implementations cannot independently manage their own usage reporting or metadata",
+            "Token tracking becomes centralized but potentially more brittle due to parsing dependencies"
+          ],
+          "alternatives_considered": [
+            "Modifying all provider interfaces to return structured objects including token counts (would require extensive breaking changes)",
+            "Adding a separate metrics collection layer that instruments each provider call independently with distributed tracing",
+            "Implementing provider-specific middleware that wraps individual calls but requires complex generic programming"
+          ]
+        }
+      ],
+      "components": [
+        {
+          "name": "ChatProvider",
+          "purpose": "Defines the interface for chat LLM providers",
+          "responsibilities": [
+            "Handle chat interactions with LLMs and return string responses"
+          ],
+          "interfaces": [
+            "chat(messages: list[dict[str, Any]], model: str, **kwargs) -> str"
+          ],
+          "dependencies": []
+        },
+        {
+          "name": "StreamingChatProvider",
+          "purpose": "Defines the interface for streaming chat LLM providers",
+          "responsibilities": [
+            "Handle streaming chat interactions with LLMs and return iterators of string responses"
+          ],
+          "interfaces": [
+            "chat_stream(messages: list[dict[str, Any]], model: str, **kwargs) -> Iterator[str]"
+          ],
+          "dependencies": []
+        },
+        {
+          "name": "EmbeddingProvider",
+          "purpose": "Defines the interface for embedding LLM providers",
+          "responsibilities": [
+            "Generate embeddings from text inputs"
+          ],
+          "interfaces": [
+            "embed(text: str) -> list[float]",
+            "embed_batch(texts: list[str]) -> list[list[float]]",
+            "dimensions() -> int"
+          ],
+          "dependencies": []
+        },
+        {
+          "name": "RerankProvider",
+          "purpose": "Defines the interface for reranking LLM providers",
+          "responsibilities": [
+            "Rank documents based on relevance to a query"
+          ],
+          "interfaces": [
+            "rerank(query: str, documents: list[str]) -> list[RerankResult]"
+          ],
+          "dependencies": []
+        },
+        {
+          "name": "VisionProvider",
+          "purpose": "Defines the interface for vision LLM providers",
+          "responsibilities": [
+            "Describe images using visual content"
+          ],
+          "interfaces": [
+            "describe_image(image: str) -> str"
+          ],
+          "dependencies": []
+        },
+        {
+          "name": "InstrumentedProxy",
+          "purpose": "Wraps objects to instrument method calls for benchmarking and caching",
+          "responsibilities": [
+            "Intercept method calls and apply instrumentation hooks before/after execution"
+          ],
+          "interfaces": [
+            "__init__(target: Any)",
+            "__getattr__(name: str) -> Any",
+            "_wrap_method(method: Callable) -> Callable",
+            "__repr__() -> str",
+            "__str__() -> str"
+          ],
+          "dependencies": [
+            "BenchmarkHook",
+            "CachingHook"
+          ]
+        },
+        {
+          "name": "FitzKragEngine",
+          "purpose": "Knowledge Routing Augmented Generation engine",
+          "responsibilities": [
+            "Process queries using a multi-stage retrieval and generation pipeline"
+          ],
+          "interfaces": [
+            "__init__(config: FitzKragConfig)",
+            "load() -> None",
+            "answer(query: str) -> Answer"
+          ],
+          "dependencies": [
+            "ChatProvider",
+            "EmbeddingProvider",
+            "RerankProvider",
+            "VisionProvider"
+          ]
+        }
+      ],
+      "data_model": {
+        "Answer": [
+          "content: str",
+          "provenance: Provenance"
+        ],
+        "Provenance": [
+          "source: str",
+          "confidence: float"
+        ],
+        "RerankResult": [
+          "document: str",
+          "score: float"
+        ]
+      },
+      "integration_points": [
+        "fitz_ai/llm/providers/base.py \u2014 ChatProvider.chat returns str, not SDK response objects",
+        "fitz_ai/core/instrumentation.py \u2014 InstrumentedProxy and BenchmarkHook protocols exist but require SDK objects for token tracking",
+        "fitz_ai/engines/fitz_krag/engine.py \u2014 FitzKragEngine.answer method needs wrapper to capture raw LLM responses before string conversion"
+      ],
+      "artifacts": [
+        {
+          "filename": "fitz_ai/llm/tracking/engine_wrapper.py",
+          "content": "from typing import Any, Callable, Dict, List, Optional, Tuple\nfrom fitz_ai.engines.fitz_krag.engine import FitzKragEngine\nfrom fitz_ai.llm.client import LLMClient\nfrom fitz_ai.logging.logger import get_logger\n\nclass TokenTrackingEngine:\n    def __init__(self, engine: FitzKragEngine):\n        self.engine = engine\n        self.logger = get_logger(__name__)\n\n    def answer(self, query: str, **kwargs) -> Any:\n        # Capture raw SDK response before string conversion\n        client = LLMClient()\n        \n        # This is a conceptual example - actual implementation would\n        # require instrumenting the specific LLM provider calls\n        result = self.engine.answer(query, **kwargs)  # [VERIFY] method not found in signatures\n        \n        # Extract token usage from raw API response if available\n        # This requires SDK-level instrumentation to capture responses\n        return result",
+          "purpose": "Wraps FitzKragEngine to enable token tracking by capturing raw SDK responses before string conversion"
+        },
+        {
+          "filename": "fitz_ai/core/instrumentation.py",
+          "content": "\"\"\"\nInstrumentation system for benchmarking plugin performance.\n\"\"\"\nfrom __future__ import annotations\nfrom typing import Any, Callable, List, Protocol, TYPE_CHECKING\nimport functools\nimport logging\nimport threading\n\nclass BenchmarkHook(Protocol):\n    def on_call_start(self) -> Any: ...\n    def on_call_end(self, result: Any) -> None: ...\n\nclass CachingHook(Protocol):\n    def get_cached_result(self) -> Any: ...\n    def cache_result(self, result: Any) -> None: ...\n\nclass InstrumentedProxy:\n    def __init__(self, target: Any, layer: str, plugin_name: str, methods_to_track: List[str]):\n        self._target = target\n        self._layer = layer\n        self._plugin_name = plugin_name\n        self._methods_to_track = methods_to_track\n\n    def __getattr__(self, name):\n        attr = getattr(self._target, name)\n        if name in self._methods_to_track:\n            return self._wrap_method(attr, name)\n        return attr\n\n    def _wrap_method(self, method: Callable, name: str) -> Callable:\n        @functools.wraps(method)  # [VERIFY] method not found in signatures\n        def wrapper(*args, **kwargs):\n            # Instrumentation logic here\n            return method(*args, **kwargs)\n        return wrapper\n\n    def __repr__(self) -> str:\n        return f\"InstrumentedProxy({self._target!r})\"\n\n    def __str__(self) -> str:\n        return str(self._target)\n\n_hooks: List[BenchmarkHook] = []\n_hooks_lock = threading.Lock()  # [VERIFY] method not found in signatures\n\n\ndef register_hook(hook: BenchmarkHook) -> None:\n    with _hooks_lock:\n        _hooks.append(hook)\n\n\ndef unregister_hook(hook: BenchmarkHook) -> None:\n    with _hooks_lock:\n        if hook in _hooks:\n            _hooks.remove(hook)\n\n\ndef clear_hooks() -> None:\n    with _hooks_lock:\n        _hooks.clear()\n\n\ndef has_hooks() -> bool:\n    with _hooks_lock:\n        return len(_hooks) > 0\n\n\ndef get_hooks() -> List[BenchmarkHook]:\n    with _hooks_lock:\n        return _hooks.copy()\n\n\ndef maybe_wrap(target: Any, layer: str, plugin_name: str, methods_to_track: List[str]) -> Any:\n    if has_hooks():\n        return InstrumentedProxy(target, layer, plugin_name, methods_to_track)\n    return target\n\n\ndef wrap(target: Any, layer: str, plugin_name: str, methods_to_track: List[str]) -> InstrumentedProxy:\n    return InstrumentedProxy(target, layer, plugin_name, methods_to_track)",
+          "purpose": "Core instrumentation system that supports hook-based interception of method calls for performance tracking and metrics collection"
+        }
+      ]
+    }
+  },
+  "architecture": {
+    "approaches": [
+      {
+        "name": "Direct Instrumentation Hook Injection",
+        "description": "Attempt to inject hooks into provider methods to capture SDK response objects for token extraction.",
+        "pros": [
+          "Provides centralized token tracking mechanism"
+        ],
+        "cons": [
+          "Providers return str instead of SDK responses, so tokens cannot be extracted from intercepted calls"
+        ],
+        "complexity": "high",
+        "best_for": [
+          "System with mutable provider interfaces"
+        ]
+      },
+      {
+        "name": "Protocol Extension",
+        "description": "Extend base provider protocols to include token information in return values.",
+        "pros": [
+          "Clear interface for token-aware providers"
+        ],
+        "cons": [
+          "Violates constraint of not modifying base provider interfaces"
+        ],
+        "complexity": "high",
+        "best_for": [
+          "System where interface modifications are allowed"
+        ]
+      },
+      {
+        "name": "Centralized Token Meter with Shared Context",
+        "description": "Implement a global token meter that tracks usage across all LLM calls via shared context.",
+        "pros": [
+          "Stateless tracking mechanism"
+        ],
+        "cons": [
+          "No existing infrastructure for thread-local or global state management in codebase"
+        ],
+        "complexity": "medium",
+        "best_for": [
+          "System with robust concurrency control mechanisms"
+        ]
+      },
+      {
+        "name": "Engine-Level Wrapper With Token Extraction",
+        "description": "Create a wrapper around the core engine logic that captures raw SDK responses before string conversion.",
+        "pros": [
+          "Preserves all existing interfaces while enabling token tracking",
+          "Minimal impact on current architecture"
+        ],
+        "cons": [
+          "Requires modification of engine layer to intercept at client level"
+        ],
+        "complexity": "medium",
+        "best_for": [
+          "System requiring minimal interface changes but full functionality"
+        ]
+      }
+    ],
+    "recommended": "Engine-Level Wrapper With Token Extraction",
+    "reasoning": "The Engine-Level Wrapper approach is correct because it works within the existing architectural constraints: providers return strings, not SDK objects, so token extraction must happen at a higher level. The direct instrumentation and protocol extension approaches are infeasible due to interface contract violations or missing implementation. The centralized meter approach fails due to lack of shared state mechanisms in the codebase.",
+    "key_tradeoffs": {
+      "provider_interface_modification_vs_engine_wrapper": "Modifying provider interfaces to return SDK objects would break existing contracts and require changing return types from str to Any, while an engine-level wrapper avoids interface changes but requires modifying core logic flow.",
+      "instrumentation_point_selection": "Instrumenting at the provider level is infeasible because providers convert responses to strings before returning them, preventing access to token metadata; instrumentation must occur at a higher level where raw SDK objects are still available."
+    },
+    "technology_considerations": [
+      "OpenAI SDK response objects for token extraction",
+      "Thread-local or global context management for shared state tracking",
+      "InstrumentedProxy and BenchmarkHook from fitz_ai/core/instrumentation.py",
+      "FitzKragEngine.answer() method as the interception point"
+    ],
+    "scope_statement": "Modify FitzKragEngine.answer() to wrap LLM client calls with token extraction hooks that capture raw SDK responses before string conversion, adding structured logging for input/output tokens and duration metrics."
+  },
+  "design": {
+    "adrs": [
+      {
+        "title": "ADR: Token Tracking via Engine-Level Wrapper",
+        "context": "The system needs to track token usage from LLM providers for observability and cost monitoring. Initial architectural reasoning proposed hook-based instrumentation at provider level, but this approach is infeasible because providers return strings instead of SDK response objects.",
+        "decision": "Implement a client-level wrapper within the engine layer that captures raw SDK responses before string conversion to enable token extraction via hooks applied at the correct interception point.",
+        "rationale": "This preserves existing provider interfaces (which must remain unchanged per constraints) while enabling proper access to SDK metadata like usage statistics. The approach avoids modifying base protocols and instead works at a higher abstraction level where SDK objects are available before being converted to strings by providers.",
+        "consequences": [
+          "Requires modification to the engine layer to instrument LLM client calls",
+          "Enables accurate token tracking without breaking existing provider contracts",
+          "Introduces minimal overhead through targeted instrumentation in answer method"
+        ],
+        "alternatives_considered": [
+          "Approach A (Direct Instrumentation Hook Injection) \u2013 rejected because providers return str instead of SDK objects, making it impossible to access .usage metadata from hooks applied at the provider level",
+          "Approach B (Protocol Extension) \u2013 rejected because extending base provider interfaces violates constraint 'cannot modify base provider interfaces'",
+          "Approach C (Centralized Token Meter with Shared Context) \u2013 rejected because no such mechanism exists in codebase and would require significant architectural changes to support stateful tracking"
+        ]
+      },
+      {
+        "title": "ADR: Token Extraction at Engine Level vs. Provider Level",
+        "context": "The architecture extracts tokens from provider responses at the engine level rather than having providers return structured token counts directly, due to interface contract limitations where providers must return strings.",
+        "decision": "Implement token extraction in a centralized wrapper layer that processes raw string responses and extracts usage metadata before passing to downstream consumers.",
+        "rationale": "This approach maintains compatibility with existing provider interfaces while enabling unified token tracking across all provider types. It accepts the tradeoff of increased coupling between the engine layer and specific response formats from each provider.",
+        "consequences": [
+          "Engine layer must be tightly coupled to provider-specific response schemas for accurate token extraction",
+          "Provider implementations cannot independently manage their own usage reporting or metadata",
+          "Token tracking becomes centralized but potentially more brittle due to parsing dependencies"
+        ],
+        "alternatives_considered": [
+          "Modifying all provider interfaces to return structured objects including token counts (would require extensive breaking changes)",
+          "Adding a separate metrics collection layer that instruments each provider call independently with distributed tracing",
+          "Implementing provider-specific middleware that wraps individual calls but requires complex generic programming"
+        ]
+      }
+    ],
+    "components": [
+      {
+        "name": "ChatProvider",
+        "purpose": "Defines the interface for chat LLM providers",
+        "responsibilities": [
+          "Handle chat interactions with LLMs and return string responses"
+        ],
+        "interfaces": [
+          "chat(messages: list[dict[str, Any]], model: str, **kwargs) -> str"
+        ],
+        "dependencies": []
+      },
+      {
+        "name": "StreamingChatProvider",
+        "purpose": "Defines the interface for streaming chat LLM providers",
+        "responsibilities": [
+          "Handle streaming chat interactions with LLMs and return iterators of string responses"
+        ],
+        "interfaces": [
+          "chat_stream(messages: list[dict[str, Any]], model: str, **kwargs) -> Iterator[str]"
+        ],
+        "dependencies": []
+      },
+      {
+        "name": "EmbeddingProvider",
+        "purpose": "Defines the interface for embedding LLM providers",
+        "responsibilities": [
+          "Generate embeddings from text inputs"
+        ],
+        "interfaces": [
+          "embed(text: str) -> list[float]",
+          "embed_batch(texts: list[str]) -> list[list[float]]",
+          "dimensions() -> int"
+        ],
+        "dependencies": []
+      },
+      {
+        "name": "RerankProvider",
+        "purpose": "Defines the interface for reranking LLM providers",
+        "responsibilities": [
+          "Rank documents based on relevance to a query"
+        ],
+        "interfaces": [
+          "rerank(query: str, documents: list[str]) -> list[RerankResult]"
+        ],
+        "dependencies": []
+      },
+      {
+        "name": "VisionProvider",
+        "purpose": "Defines the interface for vision LLM providers",
+        "responsibilities": [
+          "Describe images using visual content"
+        ],
+        "interfaces": [
+          "describe_image(image: str) -> str"
+        ],
+        "dependencies": []
+      },
+      {
+        "name": "InstrumentedProxy",
+        "purpose": "Wraps objects to instrument method calls for benchmarking and caching",
+        "responsibilities": [
+          "Intercept method calls and apply instrumentation hooks before/after execution"
+        ],
+        "interfaces": [
+          "__init__(target: Any)",
+          "__getattr__(name: str) -> Any",
+          "_wrap_method(method: Callable) -> Callable",
+          "__repr__() -> str",
+          "__str__() -> str"
+        ],
+        "dependencies": [
+          "BenchmarkHook",
+          "CachingHook"
+        ]
+      },
+      {
+        "name": "FitzKragEngine",
+        "purpose": "Knowledge Routing Augmented Generation engine",
+        "responsibilities": [
+          "Process queries using a multi-stage retrieval and generation pipeline"
+        ],
+        "interfaces": [
+          "__init__(config: FitzKragConfig)",
+          "load() -> None",
+          "answer(query: str) -> Answer"
+        ],
+        "dependencies": [
+          "ChatProvider",
+          "EmbeddingProvider",
+          "RerankProvider",
+          "VisionProvider"
+        ]
+      }
+    ],
+    "data_model": {
+      "Answer": [
+        "content: str",
+        "provenance: Provenance"
+      ],
+      "Provenance": [
+        "source: str",
+        "confidence: float"
+      ],
+      "RerankResult": [
+        "document: str",
+        "score: float"
+      ]
+    },
+    "integration_points": [
+      "fitz_ai/llm/providers/base.py \u2014 ChatProvider.chat returns str, not SDK response objects",
+      "fitz_ai/core/instrumentation.py \u2014 InstrumentedProxy and BenchmarkHook protocols exist but require SDK objects for token tracking",
+      "fitz_ai/engines/fitz_krag/engine.py \u2014 FitzKragEngine.answer method needs wrapper to capture raw LLM responses before string conversion"
+    ],
+    "artifacts": [
+      {
+        "filename": "fitz_ai/llm/tracking/engine_wrapper.py",
+        "content": "from typing import Any, Callable, Dict, List, Optional, Tuple\nfrom fitz_ai.engines.fitz_krag.engine import FitzKragEngine\nfrom fitz_ai.llm.client import LLMClient\nfrom fitz_ai.logging.logger import get_logger\n\nclass TokenTrackingEngine:\n    def __init__(self, engine: FitzKragEngine):\n        self.engine = engine\n        self.logger = get_logger(__name__)\n\n    def answer(self, query: str, **kwargs) -> Any:\n        # Capture raw SDK response before string conversion\n        client = LLMClient()\n        \n        # This is a conceptual example - actual implementation would\n        # require instrumenting the specific LLM provider calls\n        result = self.engine.answer(query, **kwargs)  # [VERIFY] method not found in signatures\n        \n        # Extract token usage from raw API response if available\n        # This requires SDK-level instrumentation to capture responses\n        return result",
+        "purpose": "Wraps FitzKragEngine to enable token tracking by capturing raw SDK responses before string conversion"
+      },
+      {
+        "filename": "fitz_ai/core/instrumentation.py",
+        "content": "\"\"\"\nInstrumentation system for benchmarking plugin performance.\n\"\"\"\nfrom __future__ import annotations\nfrom typing import Any, Callable, List, Protocol, TYPE_CHECKING\nimport functools\nimport logging\nimport threading\n\nclass BenchmarkHook(Protocol):\n    def on_call_start(self) -> Any: ...\n    def on_call_end(self, result: Any) -> None: ...\n\nclass CachingHook(Protocol):\n    def get_cached_result(self) -> Any: ...\n    def cache_result(self, result: Any) -> None: ...\n\nclass InstrumentedProxy:\n    def __init__(self, target: Any, layer: str, plugin_name: str, methods_to_track: List[str]):\n        self._target = target\n        self._layer = layer\n        self._plugin_name = plugin_name\n        self._methods_to_track = methods_to_track\n\n    def __getattr__(self, name):\n        attr = getattr(self._target, name)\n        if name in self._methods_to_track:\n            return self._wrap_method(attr, name)\n        return attr\n\n    def _wrap_method(self, method: Callable, name: str) -> Callable:\n        @functools.wraps(method)  # [VERIFY] method not found in signatures\n        def wrapper(*args, **kwargs):\n            # Instrumentation logic here\n            return method(*args, **kwargs)\n        return wrapper\n\n    def __repr__(self) -> str:\n        return f\"InstrumentedProxy({self._target!r})\"\n\n    def __str__(self) -> str:\n        return str(self._target)\n\n_hooks: List[BenchmarkHook] = []\n_hooks_lock = threading.Lock()  # [VERIFY] method not found in signatures\n\n\ndef register_hook(hook: BenchmarkHook) -> None:\n    with _hooks_lock:\n        _hooks.append(hook)\n\n\ndef unregister_hook(hook: BenchmarkHook) -> None:\n    with _hooks_lock:\n        if hook in _hooks:\n            _hooks.remove(hook)\n\n\ndef clear_hooks() -> None:\n    with _hooks_lock:\n        _hooks.clear()\n\n\ndef has_hooks() -> bool:\n    with _hooks_lock:\n        return len(_hooks) > 0\n\n\ndef get_hooks() -> List[BenchmarkHook]:\n    with _hooks_lock:\n        return _hooks.copy()\n\n\ndef maybe_wrap(target: Any, layer: str, plugin_name: str, methods_to_track: List[str]) -> Any:\n    if has_hooks():\n        return InstrumentedProxy(target, layer, plugin_name, methods_to_track)\n    return target\n\n\ndef wrap(target: Any, layer: str, plugin_name: str, methods_to_track: List[str]) -> InstrumentedProxy:\n    return InstrumentedProxy(target, layer, plugin_name, methods_to_track)",
+        "purpose": "Core instrumentation system that supports hook-based interception of method calls for performance tracking and metrics collection"
+      }
+    ]
+  },
+  "roadmap_risk": {
+    "roadmap": {
+      "phases": [
+        {
+          "number": 0,
+          "name": "Source Verification",
+          "objective": "Verify existing codebase behaviors and identify interception points for token tracking without modifying protocols",
+          "deliverables": [
+            "Confirmed that provider methods return str instead of SDK objects",
+            "Identified InstrumentedProxy as potential wrapping mechanism",
+            "Determined engine-level wrapping is required due to string return types"
+          ],
+          "dependencies": [],
+          "estimated_complexity": "medium",
+          "key_risks": [
+            "LLM client may not expose raw SDK responses for token access",
+            "Provider-specific response formats may cause inconsistent tracking"
+          ],
+          "verification_command": "python -c \"from fitz_ai.llm.tracking.token_counter import extract_tokens_from_response; print(extract_tokens_from_response(None))\"",
+          "estimated_effort": "~0.25 hours"
+        },
+        {
+          "number": 1,
+          "name": "Create Token Tracking Interface + Engine Wrapper",
+          "objective": "Implement core token tracking logic and engine wrapping layer to capture usage metadata",
+          "deliverables": [
+            "New file: fitz_ai/llm/tracking/token_counter.py with generic SDK response extraction",
+            "New file: fitz_ai/llm/tracking/engine_wrapper.py with token tracking decorator"
+          ],
+          "dependencies": [
+            0
+          ],
+          "estimated_complexity": "medium",
+          "key_risks": [
+            "TokenTrackingHook implementation may not be able to access SDK objects from engine wrapper layer"
+          ],
+          "verification_command": "python -c \"from fitz_ai.llm.tracking.token_counter import extract_tokens_from_response; print(extract_tokens_from_response(None))\"",
+          "estimated_effort": "~0.5 hours"
+        },
+        {
+          "number": 2,
+          "name": "Instrument Engine-Level Wrappers Around Providers",
+          "objective": "Modify engine logic to wrap provider calls with instrumentation that captures raw SDK responses for token tracking",
+          "deliverables": [
+            "Extended fitz_ai/llm/tracking/instrumentation.py with enhanced hook system and wrapper logic",
+            "Updated FitzKragEngine.answer() to use instrumented LLM client methods"
+          ],
+          "dependencies": [
+            1
+          ],
+          "estimated_complexity": "high",
+          "key_risks": [
+            "Need access to raw SDK response objects before string conversion in provider delegation layer",
+            "Instrumentation may not properly intercept all provider types due to factory-based instantiation pattern"
+          ],
+          "verification_command": "python -c \"import fitz_ai.llm.tracking.instrumentation as inst; from unittest.mock import MagicMock; mock_func = MagicMock(return_value=MagicMock(usage={'prompt_tokens': 10, 'completion_tokens': 20})); result = inst.instrument_with_tokens(mock_func)(); print(result)\"",
+          "estimated_effort": "~1 hour"
+        },
+        {
+          "number": 3,
+          "name": "Finalize Hook Integration & Logging",
+          "objective": "Integrate token tracking with existing logging infrastructure and ensure proper tracing capability for all provider methods",
+          "deliverables": [
+            "Enhanced InstrumentedProxy or custom wrapper logic that properly captures SDK responses",
+            "Unit tests verifying token log output format"
+          ],
+          "dependencies": [
+            2
+          ],
+          "estimated_complexity": "medium",
+          "key_risks": [
+            "Instrumentation layer may fail to get correct context for capturing token data due to provider abstraction mismatch"
+          ],
+          "verification_command": "python -m pytest tests/unit/test_token_tracking.py -v",
+          "estimated_effort": "~0.75 hours"
+        },
+        {
+          "number": 4,
+          "name": "Validate Across All Providers",
+          "objective": "Confirm token counting works consistently across OpenAI, Anthropic, Cohere, and Ollama providers",
+          "deliverables": [
+            "Integration tests covering all provider types with instrumented wrappers",
+            "Validation that each provider's response format is handled correctly"
+          ],
+          "dependencies": [
+            3
+          ],
+          "estimated_complexity": "medium",
+          "key_risks": [
+            "Provider-specific differences in response structure may cause silent failures for some providers",
+            "Missing usage fields on certain responses could lead to silent skipping of token tracking"
+          ],
+          "verification_command": "python -m pytest tests/integration/test_provider_wrappers.py -v",
+          "estimated_effort": "~0.5 hours"
+        }
+      ],
+      "critical_path": [
+        1,
+        2,
+        4
+      ],
+      "parallel_opportunities": [
+        [
+          3,
+          5
+        ]
+      ],
+      "total_phases": 5
+    },
+    "risk": {
+      "risks": [
+        {
+          "category": "technical",
+          "description": "LLM client does not expose raw SDK objects, preventing token tracking from functioning properly.",
+          "impact": "high",
+          "likelihood": "medium",
+          "mitigation": "Verify that the LLM client provides access to raw SDK response objects before string conversion by running integration tests with mocked provider flows.",
+          "contingency": "Refactor client instantiation logic to support proxy interfaces that expose SDK responses for token tracking, or implement a fallback mechanism that logs estimated token usage based on prompt/completion length if real metadata is unavailable.",
+          "affected_phases": [
+            1,
+            2
+          ],
+          "verification": "assert hasattr(provider.chat(...), 'usage') == True"
+        },
+        {
+          "category": "technical",
+          "description": "Different providers return varying response structures, leading to inconsistent token tracking across model types.",
+          "impact": "medium",
+          "likelihood": "high",
+          "mitigation": "Implement provider-specific extraction logic in token_counter.py that handles each SDK's response format gracefully and logs warnings for unknown or missing fields.",
+          "contingency": "Add unit tests simulating all supported provider response formats to ensure extract_tokens_from_response works correctly with OpenAI, Anthropic, Cohere, and Ollama structures.",
+          "affected_phases": [
+            1,
+            2,
+            4
+          ],
+          "verification": "assert extract_tokens_from_response(mock_openai)['prompt_tokens'] == 10"
+        },
+        {
+          "category": "technical",
+          "description": "Instrumented proxy fails to capture token data due to misalignment in provider layers or incorrect wrapping strategy.",
+          "impact": "high",
+          "likelihood": "medium",
+          "mitigation": "Ensure all LLM method calls within FitzKragEngine go through a consistent wrapping layer where SDK responses are still available before being converted to strings. Use InstrumentedProxy correctly with explicit hook registration.",
+          "contingency": "Implement validation checks after applying instrumentation that confirm wrapped methods return expected response objects containing usage metadata, and add assertions in engine code paths around LLM calls.",
+          "affected_phases": [
+            2,
+            3
+          ],
+          "verification": "proxy = InstrumentedProxy(target=provider); assert callable(proxy.chat)"
+        },
+        {
+          "category": "technical",
+          "description": "Missing usage field in provider responses causes silent skipping of token logging without user notification.",
+          "impact": "medium",
+          "likelihood": "high",
+          "mitigation": "Add warning logs or structured alerts when extract_tokens_from_response encounters a response object with no usable 'usage' metadata, indicating potential tracking gaps to users during runtime.",
+          "contingency": "Implement test case that verifies extraction returns None for responses lacking usage data and confirm appropriate warnings are logged in such cases using mock objects without the expected attributes.",
+          "affected_phases": [
+            1,
+            3
+          ],
+          "verification": "resp = type('resp', (), {})(); result = extract_tokens_from_response(resp); assert result is None"
+        }
+      ],
+      "overall_risk_level": "high",
+      "recommended_contingencies": [
+        "Refactor client instantiation logic to support proxy interfaces that expose SDK responses for token tracking if raw SDK objects are not accessible from existing provider flows.",
+        "Add comprehensive logging and alerting mechanisms within token_counter.py to notify users when token usage metadata is missing or cannot be extracted due to unsupported response formats."
+      ]
+    }
+  },
+  "roadmap": {
+    "phases": [
+      {
+        "number": 0,
+        "name": "Source Verification",
+        "objective": "Verify existing codebase behaviors and identify interception points for token tracking without modifying protocols",
+        "deliverables": [
+          "Confirmed that provider methods return str instead of SDK objects",
+          "Identified InstrumentedProxy as potential wrapping mechanism",
+          "Determined engine-level wrapping is required due to string return types"
+        ],
+        "dependencies": [],
+        "estimated_complexity": "medium",
+        "key_risks": [
+          "LLM client may not expose raw SDK responses for token access",
+          "Provider-specific response formats may cause inconsistent tracking"
+        ],
+        "verification_command": "python -c \"from fitz_ai.llm.tracking.token_counter import extract_tokens_from_response; print(extract_tokens_from_response(None))\"",
+        "estimated_effort": "~0.25 hours"
+      },
+      {
+        "number": 1,
+        "name": "Create Token Tracking Interface + Engine Wrapper",
+        "objective": "Implement core token tracking logic and engine wrapping layer to capture usage metadata",
+        "deliverables": [
+          "New file: fitz_ai/llm/tracking/token_counter.py with generic SDK response extraction",
+          "New file: fitz_ai/llm/tracking/engine_wrapper.py with token tracking decorator"
+        ],
+        "dependencies": [
+          0
+        ],
+        "estimated_complexity": "medium",
+        "key_risks": [
+          "TokenTrackingHook implementation may not be able to access SDK objects from engine wrapper layer"
+        ],
+        "verification_command": "python -c \"from fitz_ai.llm.tracking.token_counter import extract_tokens_from_response; print(extract_tokens_from_response(None))\"",
+        "estimated_effort": "~0.5 hours"
+      },
+      {
+        "number": 2,
+        "name": "Instrument Engine-Level Wrappers Around Providers",
+        "objective": "Modify engine logic to wrap provider calls with instrumentation that captures raw SDK responses for token tracking",
+        "deliverables": [
+          "Extended fitz_ai/llm/tracking/instrumentation.py with enhanced hook system and wrapper logic",
+          "Updated FitzKragEngine.answer() to use instrumented LLM client methods"
+        ],
+        "dependencies": [
+          1
+        ],
+        "estimated_complexity": "high",
+        "key_risks": [
+          "Need access to raw SDK response objects before string conversion in provider delegation layer",
+          "Instrumentation may not properly intercept all provider types due to factory-based instantiation pattern"
+        ],
+        "verification_command": "python -c \"import fitz_ai.llm.tracking.instrumentation as inst; from unittest.mock import MagicMock; mock_func = MagicMock(return_value=MagicMock(usage={'prompt_tokens': 10, 'completion_tokens': 20})); result = inst.instrument_with_tokens(mock_func)(); print(result)\"",
+        "estimated_effort": "~1 hour"
+      },
+      {
+        "number": 3,
+        "name": "Finalize Hook Integration & Logging",
+        "objective": "Integrate token tracking with existing logging infrastructure and ensure proper tracing capability for all provider methods",
+        "deliverables": [
+          "Enhanced InstrumentedProxy or custom wrapper logic that properly captures SDK responses",
+          "Unit tests verifying token log output format"
+        ],
+        "dependencies": [
+          2
+        ],
+        "estimated_complexity": "medium",
+        "key_risks": [
+          "Instrumentation layer may fail to get correct context for capturing token data due to provider abstraction mismatch"
+        ],
+        "verification_command": "python -m pytest tests/unit/test_token_tracking.py -v",
+        "estimated_effort": "~0.75 hours"
+      },
+      {
+        "number": 4,
+        "name": "Validate Across All Providers",
+        "objective": "Confirm token counting works consistently across OpenAI, Anthropic, Cohere, and Ollama providers",
+        "deliverables": [
+          "Integration tests covering all provider types with instrumented wrappers",
+          "Validation that each provider's response format is handled correctly"
+        ],
+        "dependencies": [
+          3
+        ],
+        "estimated_complexity": "medium",
+        "key_risks": [
+          "Provider-specific differences in response structure may cause silent failures for some providers",
+          "Missing usage fields on certain responses could lead to silent skipping of token tracking"
+        ],
+        "verification_command": "python -m pytest tests/integration/test_provider_wrappers.py -v",
+        "estimated_effort": "~0.5 hours"
+      }
+    ],
+    "critical_path": [
+      1,
+      2,
+      4
+    ],
+    "parallel_opportunities": [
+      [
+        3,
+        5
+      ]
+    ],
+    "total_phases": 5
+  },
+  "risk": {
+    "risks": [
+      {
+        "category": "technical",
+        "description": "LLM client does not expose raw SDK objects, preventing token tracking from functioning properly.",
+        "impact": "high",
+        "likelihood": "medium",
+        "mitigation": "Verify that the LLM client provides access to raw SDK response objects before string conversion by running integration tests with mocked provider flows.",
+        "contingency": "Refactor client instantiation logic to support proxy interfaces that expose SDK responses for token tracking, or implement a fallback mechanism that logs estimated token usage based on prompt/completion length if real metadata is unavailable.",
+        "affected_phases": [
+          1,
+          2
+        ],
+        "verification": "assert hasattr(provider.chat(...), 'usage') == True"
+      },
+      {
+        "category": "technical",
+        "description": "Different providers return varying response structures, leading to inconsistent token tracking across model types.",
+        "impact": "medium",
+        "likelihood": "high",
+        "mitigation": "Implement provider-specific extraction logic in token_counter.py that handles each SDK's response format gracefully and logs warnings for unknown or missing fields.",
+        "contingency": "Add unit tests simulating all supported provider response formats to ensure extract_tokens_from_response works correctly with OpenAI, Anthropic, Cohere, and Ollama structures.",
+        "affected_phases": [
+          1,
+          2,
+          4
+        ],
+        "verification": "assert extract_tokens_from_response(mock_openai)['prompt_tokens'] == 10"
+      },
+      {
+        "category": "technical",
+        "description": "Instrumented proxy fails to capture token data due to misalignment in provider layers or incorrect wrapping strategy.",
+        "impact": "high",
+        "likelihood": "medium",
+        "mitigation": "Ensure all LLM method calls within FitzKragEngine go through a consistent wrapping layer where SDK responses are still available before being converted to strings. Use InstrumentedProxy correctly with explicit hook registration.",
+        "contingency": "Implement validation checks after applying instrumentation that confirm wrapped methods return expected response objects containing usage metadata, and add assertions in engine code paths around LLM calls.",
+        "affected_phases": [
+          2,
+          3
+        ],
+        "verification": "proxy = InstrumentedProxy(target=provider); assert callable(proxy.chat)"
+      },
+      {
+        "category": "technical",
+        "description": "Missing usage field in provider responses causes silent skipping of token logging without user notification.",
+        "impact": "medium",
+        "likelihood": "high",
+        "mitigation": "Add warning logs or structured alerts when extract_tokens_from_response encounters a response object with no usable 'usage' metadata, indicating potential tracking gaps to users during runtime.",
+        "contingency": "Implement test case that verifies extraction returns None for responses lacking usage data and confirm appropriate warnings are logged in such cases using mock objects without the expected attributes.",
+        "affected_phases": [
+          1,
+          3
+        ],
+        "verification": "resp = type('resp', (), {})(); result = extract_tokens_from_response(resp); assert result is None"
+      }
+    ],
+    "overall_risk_level": "high",
+    "recommended_contingencies": [
+      "Refactor client instantiation logic to support proxy interfaces that expose SDK responses for token tracking if raw SDK objects are not accessible from existing provider flows.",
+      "Add comprehensive logging and alerting mechanisms within token_counter.py to notify users when token usage metadata is missing or cannot be extracted due to unsupported response formats."
+    ]
+  }
+}

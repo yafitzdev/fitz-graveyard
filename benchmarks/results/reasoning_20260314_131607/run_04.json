@@ -1,0 +1,15 @@
+{
+  "run": 4,
+  "elapsed_s": 1377.1,
+  "success": true,
+  "recommended": "Provider-Level Token Counting with Instrumentation Overlay",
+  "plan_size": 57416,
+  "stage_timings": {
+    "implementation_check": 2.187000000005355,
+    "context": 72.54699999999139,
+    "architecture_design": 1077.8280000000086,
+    "roadmap_risk": 220.60999999998603,
+    "coherence_check": 3.9060000000172295
+  },
+  "error": null
+}

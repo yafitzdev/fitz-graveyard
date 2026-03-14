@@ -31,6 +31,19 @@ logger = logging.getLogger("bench")
 app = typer.Typer(no_args_is_help=True)
 
 
+class _NullCheckpointManager:
+    """No-op checkpoint manager for benchmarks (no persistence needed)."""
+
+    async def save_stage(self, job_id: str, stage_name: str, output: dict) -> None:
+        pass
+
+    async def load_checkpoint(self, job_id: str) -> dict | None:
+        return None
+
+    async def clear_checkpoint(self, job_id: str) -> None:
+        pass
+
+
 def _ts() -> str:
     return time.strftime("%Y%m%d_%H%M%S")
 
@@ -262,26 +275,36 @@ async def _run_reasoning_once(
         if loaded != client.model:
             await client.switch_model(client.model)
 
-    pipeline = PlanningPipeline(stages=DEFAULT_STAGES)
+    pipeline = PlanningPipeline(
+        stages=DEFAULT_STAGES, checkpoint_manager=_NullCheckpointManager(),
+    )
     job_id = f"bench_{run_id:03d}"
 
+    # Use raw_summaries as pre_gathered_context. The orchestrator sets both
+    # _gathered_context and _raw_summaries from this. Stages see:
+    #   - _gathered_context (capped 32K) for critique/extractions
+    #   - _raw_summaries (full ~89K) for reasoning passes
+    # No file_contents → no tool-use, but all code is inline in the prompt.
     t0 = time.monotonic()
     result = await pipeline.execute(
         client=client,
         job_id=job_id,
         job_description=query,
         resume=False,
-        pre_gathered_context=context.get("synthesized", ""),
+        pre_gathered_context=context.get("raw_summaries", context.get("synthesized", "")),
     )
     elapsed = time.monotonic() - t0
 
-    # Render plan if successful
+    # Save plan outputs if successful
     plan_text = ""
     if result.success:
-        from fitz_graveyard.planning.pipeline.output import PlanRenderer
-        renderer = PlanRenderer()
-        plan_text = renderer.render(query, result.outputs)
-        plan_file = out_dir / f"plan_{run_id:02d}.md"
+        # Save raw outputs as JSON (avoids PlanOutput/PlanRenderer coupling)
+        plan_data = {
+            k: v for k, v in result.outputs.items()
+            if not k.startswith("_")
+        }
+        plan_text = json.dumps(plan_data, indent=2, default=str)
+        plan_file = out_dir / f"plan_{run_id:02d}.json"
         plan_file.write_text(plan_text)
 
     # Extract architecture decision

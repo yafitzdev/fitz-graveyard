@@ -111,6 +111,7 @@ class PlanningPipeline:
         progress_callback: Callable[[float, str], None] | Callable[[float, str], Any] | None = None,
         agent: "AgentContextGatherer | None" = None,
         pre_gathered_context: str | None = None,
+        _bench_overrides: dict[str, Any] | None = None,
     ) -> PipelineResult:
         """
         Execute the planning pipeline.
@@ -219,6 +220,14 @@ class PlanningPipeline:
                 prior_outputs["_gathered_context"] = agent_ctx.get("synthesized", "")
                 prior_outputs["_raw_summaries"] = agent_ctx.get("raw_summaries", "")
                 prior_outputs["_file_contents"] = agent_ctx.get("file_contents", {})
+
+        # Benchmark overrides: inject raw_summaries/file_contents/source_dir
+        # when pre_gathered_context only provides synthesized
+        if _bench_overrides:
+            for key, val in _bench_overrides.items():
+                if val:
+                    prior_outputs[key] = val
+                    logger.debug(f"Bench override: {key} ({len(str(val))} chars)")
 
         # Implementation check: does the codebase already solve this task?
         if (

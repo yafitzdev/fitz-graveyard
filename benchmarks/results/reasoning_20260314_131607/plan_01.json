@@ -1,0 +1,958 @@
+{
+  "context": {
+    "project_description": "A system that tracks LLM token usage per query to provide observability into cost consumption across different LLM providers (OpenAI, Anthropic, Cohere, Ollama), integrating with existing benchmarking instrumentation framework for both query and chat endpoints.",
+    "key_requirements": [
+      "Instrument chat methods (chat, chat_stream) in all current LLM providers to collect token counts",
+      "Integrate with the existing InstrumentedProxy infrastructure used for benchmarking",
+      "Support both synchronous and streaming calls across all provider types"
+    ],
+    "constraints": [
+      "Must work within existing abstraction layer via ChatProvider, StreamingChatProvider protocols in base.py",
+      "Must be compatible with InstrumentedProxy infrastructure used for benchmarking"
+    ],
+    "existing_context": "fitz_ai/llm/providers/base.py, fitz_ai/core/instrumentation.py, fitz_ai/logging/logger.py, fitz_ai/llm/providers/openai.py, fitz_ai/llm/providers/anthropic.py, fitz_ai/llm/providers/cohere.py, fitz_ai/llm/providers/ollama.py",
+    "stakeholders": [
+      "SDK Users who want to know how much their queries cost without modifying code",
+      "Platform Engineers who need reliable metric reporting and minimal perf impact",
+      "Product Managers who are interested in cost transparency for AI features"
+    ],
+    "scope_boundaries": {
+      "in_scope": [
+        "Instrument chat methods (chat, chat_stream) in all current LLM providers",
+        "Collect and expose token counts from each call via logging or structured metrics",
+        "Integrate with the benchmark hooks system to avoid duplicating logic",
+        "Support both synchronous and streaming calls"
+      ],
+      "out_of_scope": [
+        "Dashboards or cost projections based on model prices",
+        "Multi-model cost aggregation",
+        "Token caching or deduplication strategies"
+      ]
+    },
+    "existing_files": [
+      "fitz_ai/llm/providers/base.py \u2014 Provider protocols for LLM clients.",
+      "fitz_ai/core/instrumentation.py \u2014 Instrumentation system for benchmarking plugin performance.",
+      "fitz_ai/logging/logger.py \u2014 Unified logging setup for the entire Fitz project."
+    ],
+    "needed_artifacts": [
+      "fitz_ai/llm/instrumentation/token_tracker.py \u2014 Contains logic for wrapping chat methods and collecting token counts using InstrumentedProxy.",
+      "fitz_ai/llm/providers/openai_with_tracking.py \u2014 Wrapper module around existing OpenAI provider to inject tracking logic.",
+      "fitz_ai/llm/providers/anthropic_with_tracking.py \u2014 Wrapper module around existing Anthropic provider to inject tracking logic.",
+      "fitz_ai/llm/providers/cohere_with_tracking.py \u2014 Wrapper module around existing Cohere provider to inject tracking logic.",
+      "fitz_ai/llm/providers/ollama_with_tracking.py \u2014 Wrapper module around existing Ollama provider to inject tracking logic."
+    ],
+    "assumptions": [
+      {
+        "assumption": "Each provider returns a token count or has access to one during call (e.g., from OpenAI SDK)",
+        "impact": "Need manual parsing or custom logic if no built-in support exists",
+        "confidence": "medium-high"
+      },
+      {
+        "assumption": "Token counts are returned directly by providers, e.g., response metadata",
+        "impact": "Must implement custom counting fallbacks if not exposed",
+        "confidence": "high"
+      },
+      {
+        "assumption": "Tokens should be logged in each query context with structured logger (from `logger.py`)",
+        "impact": "May require metric collection layer addition later",
+        "confidence": "medium-high"
+      },
+      {
+        "assumption": "Each token count per call will be tracked independently unless specified otherwise",
+        "impact": "Future expansion may require aggregation logic",
+        "confidence": "high"
+      },
+      {
+        "assumption": "Streaming responses are returned as generators and can be instrumented by wrapping `chat_stream` method",
+        "impact": "Need careful handling of generator state if logging inside iteration",
+        "confidence": "medium"
+      }
+    ]
+  },
+  "architecture_design": {
+    "architecture": {
+      "approaches": [
+        {
+          "name": "Direct Hook Integration with InstrumentedProxy (Recommended)",
+          "description": "Leverages existing `InstrumentedProxy` infrastructure from `fitz_ai/core/instrumentation.py` to wrap chat methods (`chat`, `chat_stream`) in all LLM provider classes. Each wrapped method logs token usage via benchmark hooks, using the same mechanism that powers performance benchmarking today.",
+          "pros": [
+            "Integrates seamlessly with current observability stack (`BenchmarkHook` system)",
+            "Reuses existing patterns (wrapping, hooking) from benchmarking",
+            "Maintains backward compatibility by wrapping rather than modifying base protocols",
+            "Minimal operational burden - relies entirely on existing infrastructure"
+          ],
+          "cons": [
+            "Requires modification to `InstrumentedProxy` internals to capture raw SDK responses for token extraction",
+            "Provider-specific token extraction logic must be implemented per SDK due to varying APIs",
+            "Streaming chat provider token aggregation not supported without changes to current proxy layer",
+            "Failure mode with missing token data requires custom error handling"
+          ],
+          "complexity": "high",
+          "best_for": [
+            "Integrating token tracking into existing LLM provider infrastructure",
+            "Maintaining alignment with current benchmarking patterns"
+          ]
+        },
+        {
+          "name": "Centralized TokenTracker Service",
+          "description": "Introduces a new service layer specifically for token tracking that intercepts all LLM calls and aggregates usage metrics.",
+          "pros": [
+            "Single source of truth for token data across all providers",
+            "Can provide cost calculations if extended with pricing models"
+          ],
+          "cons": [
+            "Requires introducing a new service dependency outside current architectural patterns",
+            "Risks breaking existing code paths due to additional abstraction layer",
+            "More complex implementation than leveraging existing infrastructure"
+          ],
+          "complexity": "high",
+          "best_for": [
+            "Scenarios requiring centralized token management and cost calculations"
+          ]
+        }
+      ],
+      "recommended": "Direct Hook Integration with InstrumentedProxy (Recommended)",
+      "reasoning": "This approach is right because it leverages the existing instrumentation infrastructure that's already used for benchmarking, ensuring consistency and minimal operational burden. It reuses proven patterns from the codebase without introducing new dependencies. The other approach (Centralized TokenTracker Service) is wrong because it introduces an unnecessary service layer that would break existing architectural patterns and require significant changes to integrate properly with the current LLM provider system.",
+      "key_tradeoffs": {
+        "InstrumentedProxy Integration vs New Service Layer": "Using existing InstrumentedProxy avoids introducing new service dependencies but requires modifying core instrumentation logic to capture SDK responses for token extraction",
+        "Provider-Specific Logic vs Generic Approach": "Implementing provider-specific token extraction handles API variations but increases complexity and maintenance burden compared to a generic approach"
+      },
+      "technology_considerations": [
+        "InstrumentedProxy must be modified to store raw SDK responses during method execution so hooks can access them for token extraction",
+        "OpenAI requires extracting tokens from response.usage.prompt_tokens and response.usage.completion_tokens",
+        "Anthropic requires extracting tokens from response.usage.input_tokens and response.usage.output_tokens",
+        "Cohere requires parsing nested structure response.meta.billed_units.input_tokens",
+        "Ollama may not expose token usage in standard SDK responses requiring either workaround or TokenTrackingError handling",
+        "BenchmarkHook system needs access to original SDK response objects during on_call_end for token extraction"
+      ],
+      "scope_statement": "This task produces five new Python files (one core module + four provider-specific wrappers) that integrate token tracking into existing LLM providers via the `InstrumentedProxy` infrastructure, requiring modifications to InstrumentedProxy internals to capture SDK responses for token extraction."
+    },
+    "design": {
+      "adrs": [
+        {
+          "title": "ADR: Direct Hook Integration with InstrumentedProxy for Token Tracking",
+          "context": "Need to instrument LLM providers to track token usage for observability and cost monitoring without introducing new service dependencies or breaking existing patterns.",
+          "decision": "Leverage existing InstrumentedProxy infrastructure from fitz_ai/core/instrumentation.py to wrap chat methods in all LLM provider classes, using the same mechanism that powers performance benchmarking today.",
+          "rationale": "This approach integrates seamlessly with current observability stack (BenchmarkHook system), reuses established patterns from benchmarking codebase, maintains backward compatibility by wrapping rather than modifying base protocols, and requires minimal operational burden since it relies entirely on existing infrastructure.",
+          "consequences": [
+            "Minimal operational overhead as it leverages existing instrumentation framework",
+            "Requires provider-specific token extraction logic due to varying SDK APIs for accessing usage data",
+            "May fail loudly when token metadata is missing from responses (e.g., Ollama) rather than silently masking issues",
+            "Enables tracking of raw token counts only, avoiding complexity of cost calculations or currency conversions"
+          ],
+          "alternatives_considered": [
+            "Centralized TokenTracker Service - rejected because it would introduce new service layer not aligned with current architectural patterns and risks breaking existing code paths",
+            "Decorator Factory Pattern - rejected due to increased complexity around meta-programming, potential conflicts with module loading/testing, and unnecessary abstraction over existing InstrumentedProxy + hook system"
+          ]
+        },
+        {
+          "title": "ADR: Provider-Specific Token Extraction Logic Implementation",
+          "context": "Each LLM SDK (OpenAI, Anthropic, Cohere, Ollama) has different response structures for accessing token usage information.",
+          "decision": "Implement provider-specific extraction functions within each wrapper module rather than trying to create generic extractors that handle all variations.",
+          "rationale": "This approach ensures accurate and reliable token data collection while acknowledging the fundamental differences in how each SDK exposes usage metrics. It allows for proper error handling when specific providers don't expose token information at all (like some Ollama versions).",
+          "consequences": [
+            "Each provider module requires custom logic to parse response structures appropriately",
+            "Error handling must be robust across different SDK versions and behaviors",
+            "Adds complexity in maintaining separate extraction paths but ensures correctness",
+            "Provides clear documentation of which providers support token tracking vs those that don't"
+          ],
+          "alternatives_considered": [
+            "Generic TokenExtractor Protocol - rejected because the variations in response structure make this impractical; would require extensive conditional logic or additional abstraction layers",
+            "Shared Base Extractor with Plugin Architecture - rejected as overkill for this use case and adds unnecessary complexity to an already complex integration point"
+          ]
+        },
+        {
+          "title": "ADR: Streaming Chat Provider Token Aggregation Limitations",
+          "context": "The current InstrumentedProxy + BenchmarkHook infrastructure cannot reliably aggregate token usage from streaming responses in real-time.",
+          "decision": "Track total tokens consumed per chunk streamed and log aggregate totals after the stream ends, rather than attempting to provide intermediate breakdowns during streaming.",
+          "rationale": "This approach maintains observability capabilities without requiring invasive changes to how streaming is handled. It's acceptable for current visibility needs while avoiding complexity in implementing real-time token aggregation that may not be critical for most use cases.",
+          "consequences": [
+            "Loss of granular timing breakdowns during streaming operations",
+            "Only aggregate token counts available post-stream completion",
+            "May miss intermediate telemetry points important for certain monitoring scenarios",
+            "Simplifies implementation while still providing meaningful cost visibility"
+          ],
+          "alternatives_considered": [
+            "Streaming Hook Integration - rejected because the InstrumentedProxy model doesn't support real-time access to streaming chunks in hooks, requiring significant architectural changes",
+            "Custom Streaming Wrapper Layer - rejected due to high complexity and potential for introducing bugs or inconsistencies with existing streaming behavior"
+          ]
+        },
+        {
+          "title": "ADR: Feature Scope Limitations for v1 Implementation",
+          "context": "Initial token tracking implementation should be focused and avoid scope creep into more complex features.",
+          "decision": "Limit token tracking to raw count collection only, excluding cost calculation or aggregation by model type in the initial version.",
+          "rationale": "This simplifies both implementation and maintenance while providing the core observability benefit needed. Cost calculations introduce currency exchange complications and vary across providers, making them better suited for future enhancements rather than immediate requirements.",
+          "consequences": [
+            "Only raw token counts available without monetary cost estimates",
+            "Avoids complexity of handling different currencies or pricing models per provider",
+            "Simplifies testing and reduces risk of errors in billing calculations",
+            "Maintains focus on core observability functionality"
+          ],
+          "alternatives_considered": [
+            "Full Cost Tracking System - rejected because it would add significant complexity including currency conversion, provider-specific pricing tiers, and maintenance overhead that isn't needed for initial implementation",
+            "Model-Aware Aggregation Layer - rejected due to increased architectural complexity without immediate value proposition"
+          ]
+        },
+        {
+          "title": "ADR: Instrumentation Hook Modification Requirements",
+          "context": "Current InstrumentedProxy does not expose raw SDK responses to hooks, which is required for token extraction from provider responses.",
+          "decision": "Modify InstrumentedProxy internals to capture and store raw SDK response objects so that BenchmarkHooks can access them during on_call_end.",
+          "rationale": "This change enables the hook-based approach to work correctly by providing access to the original SDK responses needed to extract token information, which is a fundamental requirement for this implementation to function properly.",
+          "consequences": [
+            "Requires modification of core InstrumentedProxy functionality in fitz_ai/core/instrumentation.py",
+            "May introduce subtle behavioral changes or performance implications if not implemented carefully",
+            "Creates dependency on updated instrumentation layer across entire codebase that uses benchmark hooks",
+            "Necessary prerequisite before token tracking system can function reliably"
+          ],
+          "alternatives_considered": [
+            "Workaround with Thread-Local Storage - rejected because it's fragile, harder to debug, and doesn't integrate well with existing hook patterns",
+            "Refactor All Hooks to Access Context Differently - rejected as excessive refactoring that breaks backward compatibility for other uses of the instrumentation system"
+          ]
+        }
+      ],
+      "components": [
+        {
+          "name": "TokenTrackerModule",
+          "purpose": "Exposes a factory function to wrap LLM providers with token tracking capabilities using InstrumentedProxy infrastructure.",
+          "responsibilities": [
+            "Wrap chat methods (chat, chat_stream) in LLM provider classes with token tracking",
+            "Integrate with existing BenchmarkHook system for logging token usage",
+            "Handle provider-specific token extraction logic"
+          ],
+          "interfaces": [
+            "wrap_with_token_tracking(provider: ChatProvider | StreamingChatProvider, methods_to_track: List[str]) -> InstrumentedProxy"
+          ],
+          "dependencies": [
+            "InstrumentedProxy",
+            "BenchmarkHook",
+            "ChatProvider",
+            "StreamingChatProvider"
+          ]
+        },
+        {
+          "name": "OpenAIWithTracking",
+          "purpose": "Provide a wrapped version of OpenAI chat provider that tracks token usage.",
+          "responsibilities": [
+            "Wrap OpenAIChat with token tracking capabilities",
+            "Extract token counts from OpenAI SDK responses",
+            "Maintain identical behavior to original OpenAIChat"
+          ],
+          "interfaces": [],
+          "dependencies": [
+            "OpenAIChat",
+            "TokenTrackerModule"
+          ]
+        },
+        {
+          "name": "AnthropicWithTracking",
+          "purpose": "Provide a wrapped version of Anthropic chat provider that tracks token usage.",
+          "responsibilities": [
+            "Wrap AnthropicChat with token tracking capabilities",
+            "Extract token counts from Anthropic SDK responses",
+            "Maintain identical behavior to original AnthropicChat"
+          ],
+          "interfaces": [],
+          "dependencies": [
+            "AnthropicChat",
+            "TokenTrackerModule"
+          ]
+        },
+        {
+          "name": "CohereWithTracking",
+          "purpose": "Provide a wrapped version of Cohere chat provider that tracks token usage.",
+          "responsibilities": [
+            "Wrap CohereChat with token tracking capabilities",
+            "Extract token counts from Cohere SDK responses",
+            "Maintain identical behavior to original CohereChat"
+          ],
+          "interfaces": [],
+          "dependencies": [
+            "CohereChat",
+            "TokenTrackerModule"
+          ]
+        },
+        {
+          "name": "OllamaWithTracking",
+          "purpose": "Provide a wrapped version of Ollama chat provider that tracks token usage.",
+          "responsibilities": [
+            "Wrap OllamaChat with token tracking capabilities",
+            "Handle cases where Ollama may not expose token metadata",
+            "Maintain identical behavior to original OllamaChat"
+          ],
+          "interfaces": [],
+          "dependencies": [
+            "OllamaChat",
+            "TokenTrackerModule"
+          ]
+        }
+      ],
+      "data_model": {
+        "TokenUsageLog": [
+          "model: str",
+          "input_tokens: Optional[int]",
+          "output_tokens: Optional[int]",
+          "total_tokens: Optional[int]"
+        ]
+      },
+      "integration_points": [
+        "ExternalSystem \u2014 OpenAI provider via fitz_ai/llm/providers/openai.py",
+        "ExternalSystem \u2014 Anthropic provider via fitz_ai/llm/providers/anthropic.py",
+        "ExternalSystem \u2014 Cohere provider via fitz_ai/llm/providers/cohere.py",
+        "ExternalSystem \u2014 Ollama provider via fitz_ai/llm/providers/ollama.py"
+      ],
+      "artifacts": [
+        {
+          "filename": "fitz_ai/llm/instrumentation/token_tracker.py",
+          "content": "from typing import Any, Callable, Iterator, List, Optional, Tuple\nimport logging\nfrom dataclasses import dataclass\n\nfrom fitz_ai.core.instrumentation import InstrumentedProxy, maybe_wrap, BenchmarkHook\nfrom fitz_ai.llm.providers.base import ChatProvider, StreamingChatProvider\n\n\n@dataclass\nclass TokenUsageLog:\n    model: str\n    input_tokens: Optional[int] = None\n    output_tokens: Optional[int] = None\n    total_tokens: Optional[int] = None\n\nclass TokenTrackingError(Exception):\n    \"\"\"Raised when token usage cannot be extracted from LLM response.\"\"\"\n    pass\n\n\n# Provider-specific extraction functions must exist in this file or imported modules\n\ndef _extract_token_usage_from_response(response, model_name: str) -> TokenUsageLog:\n    # Placeholder - actual implementation varies by provider\n    raise NotImplementedError(\"Must implement per-provider\")\n\n\nclass TokenTrackerHook(BenchmarkHook):\n    def on_call_start(self, method_name: str, args: Tuple, kwargs: dict) -> Any:\n        pass\n\n    def on_call_end(self, method_name: str, result: Any, duration: float) -> None:\n        # Must retrieve original SDK response to extract usage\n        # Current InstrumentedProxy does not capture or expose this by default\n        # This implementation is incomplete without changes to InstrumentedProxy internals\n        pass\n\n\ndef wrap_with_token_tracking(provider: ChatProvider | StreamingChatProvider,\n                            methods_to_track: List[str] = ['chat', 'chat_stream']) \\\n    -> InstrumentedProxy:\n\n    wrapped = maybe_wrap(\n        target=provider,\n        layer='token_tracked',\n        plugin_name='token_tracker',\n        methods_to_track=methods_to_track\n    )\n    \n    # Register hook for token collection after wrapping\n    from fitz_ai.core.instrumentation import register_hook\n    \n    tracker_hook = TokenTrackerHook()\n    register_hook(tracker_hook)\n    \n    return wrapped",
+          "purpose": "Core module that provides the token tracking infrastructure including data models, error handling, and the main wrapping function that integrates with InstrumentedProxy."
+        },
+        {
+          "filename": "fitz_ai/llm/providers/openai_with_tracking.py",
+          "content": "import openai\nfrom typing import Iterator, List, Optional, Any\nfrom dataclasses import dataclass\n\nfrom fitz_ai.llm.providers.base import ChatProvider, StreamingChatProvider\nfrom fitz_ai.llm.providers.openai import OpenAIChat, OpenAIEmbedding, OpenAIVision\nfrom fitz_ai.llm.instrumentation.token_tracker import wrap_with_token_tracking\n\n\n# Wrap base OpenAI chat provider with token tracking\nopenai_chat = OpenAIChat()\nwrapped_openai_chat = wrap_with_token_tracking(openai_chat)",
+          "purpose": "Provider-specific wrapper module for OpenAI that wraps the base OpenAIChat provider with token tracking functionality."
+        },
+        {
+          "filename": "fitz_ai/llm/providers/anthropic_with_tracking.py",
+          "content": "from typing import Iterator, List, Optional, Any\nimport anthropic\n\nfrom fitz_ai.llm.providers.base import ChatProvider, StreamingChatProvider\nfrom fitz_ai.llm.providers.anthropic import AnthropicChat, AnthropicVision\nfrom fitz_ai.llm.instrumentation.token_tracker import wrap_with_token_tracking\n\n\n# Wrap base Anthropic chat provider with token tracking\nanthropic_chat = AnthropicChat()\nwrapped_anthropic_chat = wrap_with_token_tracking(anthropic_chat)",
+          "purpose": "Provider-specific wrapper module for Anthropic that wraps the base AnthropicChat provider with token tracking functionality."
+        },
+        {
+          "filename": "fitz_ai/llm/providers/cohere_with_tracking.py",
+          "content": "from typing import Iterator, List, Optional, Any\nimport cohere\n\nfrom fitz_ai.llm.providers.base import ChatProvider, StreamingChatProvider\nfrom fitz_ai.llm.providers.cohere import CohereChat, CohereEmbedding, CohereRerank\nfrom fitz_ai.llm.instrumentation.token_tracker import wrap_with_token_tracking\n\n\n# Wrap base Cohere chat provider with token tracking\ncohere_chat = CohereChat()\nwrapped_cohere_chat = wrap_with_token_tracking(cohere_chat)",
+          "purpose": "Provider-specific wrapper module for Cohere that wraps the base CohereChat provider with token tracking functionality."
+        },
+        {
+          "filename": "fitz_ai/llm/providers/ollama_with_tracking.py",
+          "content": "from typing import Iterator, List, Optional, Any\n\nfrom fitz_ai.llm.providers.base import ChatProvider, StreamingChatProvider\nfrom fitz_ai.llm.providers.ollama import OllamaChat, OllamaEmbedding, OllamaRerank, OllamaVision\nfrom fitz_ai.llm.instrumentation.token_tracker import wrap_with_token_tracking\n\n\n# Wrap base Ollama chat provider with token tracking\nollama_chat = OllamaChat()\nwrapped_ollama_chat = wrap_with_token_tracking(ollama_chat)",
+          "purpose": "Provider-specific wrapper module for Ollama that wraps the base OllamaChat provider with token tracking functionality."
+        }
+      ]
+    }
+  },
+  "architecture": {
+    "approaches": [
+      {
+        "name": "Direct Hook Integration with InstrumentedProxy (Recommended)",
+        "description": "Leverages existing `InstrumentedProxy` infrastructure from `fitz_ai/core/instrumentation.py` to wrap chat methods (`chat`, `chat_stream`) in all LLM provider classes. Each wrapped method logs token usage via benchmark hooks, using the same mechanism that powers performance benchmarking today.",
+        "pros": [
+          "Integrates seamlessly with current observability stack (`BenchmarkHook` system)",
+          "Reuses existing patterns (wrapping, hooking) from benchmarking",
+          "Maintains backward compatibility by wrapping rather than modifying base protocols",
+          "Minimal operational burden - relies entirely on existing infrastructure"
+        ],
+        "cons": [
+          "Requires modification to `InstrumentedProxy` internals to capture raw SDK responses for token extraction",
+          "Provider-specific token extraction logic must be implemented per SDK due to varying APIs",
+          "Streaming chat provider token aggregation not supported without changes to current proxy layer",
+          "Failure mode with missing token data requires custom error handling"
+        ],
+        "complexity": "high",
+        "best_for": [
+          "Integrating token tracking into existing LLM provider infrastructure",
+          "Maintaining alignment with current benchmarking patterns"
+        ]
+      },
+      {
+        "name": "Centralized TokenTracker Service",
+        "description": "Introduces a new service layer specifically for token tracking that intercepts all LLM calls and aggregates usage metrics.",
+        "pros": [
+          "Single source of truth for token data across all providers",
+          "Can provide cost calculations if extended with pricing models"
+        ],
+        "cons": [
+          "Requires introducing a new service dependency outside current architectural patterns",
+          "Risks breaking existing code paths due to additional abstraction layer",
+          "More complex implementation than leveraging existing infrastructure"
+        ],
+        "complexity": "high",
+        "best_for": [
+          "Scenarios requiring centralized token management and cost calculations"
+        ]
+      }
+    ],
+    "recommended": "Direct Hook Integration with InstrumentedProxy (Recommended)",
+    "reasoning": "This approach is right because it leverages the existing instrumentation infrastructure that's already used for benchmarking, ensuring consistency and minimal operational burden. It reuses proven patterns from the codebase without introducing new dependencies. The other approach (Centralized TokenTracker Service) is wrong because it introduces an unnecessary service layer that would break existing architectural patterns and require significant changes to integrate properly with the current LLM provider system.",
+    "key_tradeoffs": {
+      "InstrumentedProxy Integration vs New Service Layer": "Using existing InstrumentedProxy avoids introducing new service dependencies but requires modifying core instrumentation logic to capture SDK responses for token extraction",
+      "Provider-Specific Logic vs Generic Approach": "Implementing provider-specific token extraction handles API variations but increases complexity and maintenance burden compared to a generic approach"
+    },
+    "technology_considerations": [
+      "InstrumentedProxy must be modified to store raw SDK responses during method execution so hooks can access them for token extraction",
+      "OpenAI requires extracting tokens from response.usage.prompt_tokens and response.usage.completion_tokens",
+      "Anthropic requires extracting tokens from response.usage.input_tokens and response.usage.output_tokens",
+      "Cohere requires parsing nested structure response.meta.billed_units.input_tokens",
+      "Ollama may not expose token usage in standard SDK responses requiring either workaround or TokenTrackingError handling",
+      "BenchmarkHook system needs access to original SDK response objects during on_call_end for token extraction"
+    ],
+    "scope_statement": "This task produces five new Python files (one core module + four provider-specific wrappers) that integrate token tracking into existing LLM providers via the `InstrumentedProxy` infrastructure, requiring modifications to InstrumentedProxy internals to capture SDK responses for token extraction."
+  },
+  "design": {
+    "adrs": [
+      {
+        "title": "ADR: Direct Hook Integration with InstrumentedProxy for Token Tracking",
+        "context": "Need to instrument LLM providers to track token usage for observability and cost monitoring without introducing new service dependencies or breaking existing patterns.",
+        "decision": "Leverage existing InstrumentedProxy infrastructure from fitz_ai/core/instrumentation.py to wrap chat methods in all LLM provider classes, using the same mechanism that powers performance benchmarking today.",
+        "rationale": "This approach integrates seamlessly with current observability stack (BenchmarkHook system), reuses established patterns from benchmarking codebase, maintains backward compatibility by wrapping rather than modifying base protocols, and requires minimal operational burden since it relies entirely on existing infrastructure.",
+        "consequences": [
+          "Minimal operational overhead as it leverages existing instrumentation framework",
+          "Requires provider-specific token extraction logic due to varying SDK APIs for accessing usage data",
+          "May fail loudly when token metadata is missing from responses (e.g., Ollama) rather than silently masking issues",
+          "Enables tracking of raw token counts only, avoiding complexity of cost calculations or currency conversions"
+        ],
+        "alternatives_considered": [
+          "Centralized TokenTracker Service - rejected because it would introduce new service layer not aligned with current architectural patterns and risks breaking existing code paths",
+          "Decorator Factory Pattern - rejected due to increased complexity around meta-programming, potential conflicts with module loading/testing, and unnecessary abstraction over existing InstrumentedProxy + hook system"
+        ]
+      },
+      {
+        "title": "ADR: Provider-Specific Token Extraction Logic Implementation",
+        "context": "Each LLM SDK (OpenAI, Anthropic, Cohere, Ollama) has different response structures for accessing token usage information.",
+        "decision": "Implement provider-specific extraction functions within each wrapper module rather than trying to create generic extractors that handle all variations.",
+        "rationale": "This approach ensures accurate and reliable token data collection while acknowledging the fundamental differences in how each SDK exposes usage metrics. It allows for proper error handling when specific providers don't expose token information at all (like some Ollama versions).",
+        "consequences": [
+          "Each provider module requires custom logic to parse response structures appropriately",
+          "Error handling must be robust across different SDK versions and behaviors",
+          "Adds complexity in maintaining separate extraction paths but ensures correctness",
+          "Provides clear documentation of which providers support token tracking vs those that don't"
+        ],
+        "alternatives_considered": [
+          "Generic TokenExtractor Protocol - rejected because the variations in response structure make this impractical; would require extensive conditional logic or additional abstraction layers",
+          "Shared Base Extractor with Plugin Architecture - rejected as overkill for this use case and adds unnecessary complexity to an already complex integration point"
+        ]
+      },
+      {
+        "title": "ADR: Streaming Chat Provider Token Aggregation Limitations",
+        "context": "The current InstrumentedProxy + BenchmarkHook infrastructure cannot reliably aggregate token usage from streaming responses in real-time.",
+        "decision": "Track total tokens consumed per chunk streamed and log aggregate totals after the stream ends, rather than attempting to provide intermediate breakdowns during streaming.",
+        "rationale": "This approach maintains observability capabilities without requiring invasive changes to how streaming is handled. It's acceptable for current visibility needs while avoiding complexity in implementing real-time token aggregation that may not be critical for most use cases.",
+        "consequences": [
+          "Loss of granular timing breakdowns during streaming operations",
+          "Only aggregate token counts available post-stream completion",
+          "May miss intermediate telemetry points important for certain monitoring scenarios",
+          "Simplifies implementation while still providing meaningful cost visibility"
+        ],
+        "alternatives_considered": [
+          "Streaming Hook Integration - rejected because the InstrumentedProxy model doesn't support real-time access to streaming chunks in hooks, requiring significant architectural changes",
+          "Custom Streaming Wrapper Layer - rejected due to high complexity and potential for introducing bugs or inconsistencies with existing streaming behavior"
+        ]
+      },
+      {
+        "title": "ADR: Feature Scope Limitations for v1 Implementation",
+        "context": "Initial token tracking implementation should be focused and avoid scope creep into more complex features.",
+        "decision": "Limit token tracking to raw count collection only, excluding cost calculation or aggregation by model type in the initial version.",
+        "rationale": "This simplifies both implementation and maintenance while providing the core observability benefit needed. Cost calculations introduce currency exchange complications and vary across providers, making them better suited for future enhancements rather than immediate requirements.",
+        "consequences": [
+          "Only raw token counts available without monetary cost estimates",
+          "Avoids complexity of handling different currencies or pricing models per provider",
+          "Simplifies testing and reduces risk of errors in billing calculations",
+          "Maintains focus on core observability functionality"
+        ],
+        "alternatives_considered": [
+          "Full Cost Tracking System - rejected because it would add significant complexity including currency conversion, provider-specific pricing tiers, and maintenance overhead that isn't needed for initial implementation",
+          "Model-Aware Aggregation Layer - rejected due to increased architectural complexity without immediate value proposition"
+        ]
+      },
+      {
+        "title": "ADR: Instrumentation Hook Modification Requirements",
+        "context": "Current InstrumentedProxy does not expose raw SDK responses to hooks, which is required for token extraction from provider responses.",
+        "decision": "Modify InstrumentedProxy internals to capture and store raw SDK response objects so that BenchmarkHooks can access them during on_call_end.",
+        "rationale": "This change enables the hook-based approach to work correctly by providing access to the original SDK responses needed to extract token information, which is a fundamental requirement for this implementation to function properly.",
+        "consequences": [
+          "Requires modification of core InstrumentedProxy functionality in fitz_ai/core/instrumentation.py",
+          "May introduce subtle behavioral changes or performance implications if not implemented carefully",
+          "Creates dependency on updated instrumentation layer across entire codebase that uses benchmark hooks",
+          "Necessary prerequisite before token tracking system can function reliably"
+        ],
+        "alternatives_considered": [
+          "Workaround with Thread-Local Storage - rejected because it's fragile, harder to debug, and doesn't integrate well with existing hook patterns",
+          "Refactor All Hooks to Access Context Differently - rejected as excessive refactoring that breaks backward compatibility for other uses of the instrumentation system"
+        ]
+      }
+    ],
+    "components": [
+      {
+        "name": "TokenTrackerModule",
+        "purpose": "Exposes a factory function to wrap LLM providers with token tracking capabilities using InstrumentedProxy infrastructure.",
+        "responsibilities": [
+          "Wrap chat methods (chat, chat_stream) in LLM provider classes with token tracking",
+          "Integrate with existing BenchmarkHook system for logging token usage",
+          "Handle provider-specific token extraction logic"
+        ],
+        "interfaces": [
+          "wrap_with_token_tracking(provider: ChatProvider | StreamingChatProvider, methods_to_track: List[str]) -> InstrumentedProxy"
+        ],
+        "dependencies": [
+          "InstrumentedProxy",
+          "BenchmarkHook",
+          "ChatProvider",
+          "StreamingChatProvider"
+        ]
+      },
+      {
+        "name": "OpenAIWithTracking",
+        "purpose": "Provide a wrapped version of OpenAI chat provider that tracks token usage.",
+        "responsibilities": [
+          "Wrap OpenAIChat with token tracking capabilities",
+          "Extract token counts from OpenAI SDK responses",
+          "Maintain identical behavior to original OpenAIChat"
+        ],
+        "interfaces": [],
+        "dependencies": [
+          "OpenAIChat",
+          "TokenTrackerModule"
+        ]
+      },
+      {
+        "name": "AnthropicWithTracking",
+        "purpose": "Provide a wrapped version of Anthropic chat provider that tracks token usage.",
+        "responsibilities": [
+          "Wrap AnthropicChat with token tracking capabilities",
+          "Extract token counts from Anthropic SDK responses",
+          "Maintain identical behavior to original AnthropicChat"
+        ],
+        "interfaces": [],
+        "dependencies": [
+          "AnthropicChat",
+          "TokenTrackerModule"
+        ]
+      },
+      {
+        "name": "CohereWithTracking",
+        "purpose": "Provide a wrapped version of Cohere chat provider that tracks token usage.",
+        "responsibilities": [
+          "Wrap CohereChat with token tracking capabilities",
+          "Extract token counts from Cohere SDK responses",
+          "Maintain identical behavior to original CohereChat"
+        ],
+        "interfaces": [],
+        "dependencies": [
+          "CohereChat",
+          "TokenTrackerModule"
+        ]
+      },
+      {
+        "name": "OllamaWithTracking",
+        "purpose": "Provide a wrapped version of Ollama chat provider that tracks token usage.",
+        "responsibilities": [
+          "Wrap OllamaChat with token tracking capabilities",
+          "Handle cases where Ollama may not expose token metadata",
+          "Maintain identical behavior to original OllamaChat"
+        ],
+        "interfaces": [],
+        "dependencies": [
+          "OllamaChat",
+          "TokenTrackerModule"
+        ]
+      }
+    ],
+    "data_model": {
+      "TokenUsageLog": [
+        "model: str",
+        "input_tokens: Optional[int]",
+        "output_tokens: Optional[int]",
+        "total_tokens: Optional[int]"
+      ]
+    },
+    "integration_points": [
+      "ExternalSystem \u2014 OpenAI provider via fitz_ai/llm/providers/openai.py",
+      "ExternalSystem \u2014 Anthropic provider via fitz_ai/llm/providers/anthropic.py",
+      "ExternalSystem \u2014 Cohere provider via fitz_ai/llm/providers/cohere.py",
+      "ExternalSystem \u2014 Ollama provider via fitz_ai/llm/providers/ollama.py"
+    ],
+    "artifacts": [
+      {
+        "filename": "fitz_ai/llm/instrumentation/token_tracker.py",
+        "content": "from typing import Any, Callable, Iterator, List, Optional, Tuple\nimport logging\nfrom dataclasses import dataclass\n\nfrom fitz_ai.core.instrumentation import InstrumentedProxy, maybe_wrap, BenchmarkHook\nfrom fitz_ai.llm.providers.base import ChatProvider, StreamingChatProvider\n\n\n@dataclass\nclass TokenUsageLog:\n    model: str\n    input_tokens: Optional[int] = None\n    output_tokens: Optional[int] = None\n    total_tokens: Optional[int] = None\n\nclass TokenTrackingError(Exception):\n    \"\"\"Raised when token usage cannot be extracted from LLM response.\"\"\"\n    pass\n\n\n# Provider-specific extraction functions must exist in this file or imported modules\n\ndef _extract_token_usage_from_response(response, model_name: str) -> TokenUsageLog:\n    # Placeholder - actual implementation varies by provider\n    raise NotImplementedError(\"Must implement per-provider\")\n\n\nclass TokenTrackerHook(BenchmarkHook):\n    def on_call_start(self, method_name: str, args: Tuple, kwargs: dict) -> Any:\n        pass\n\n    def on_call_end(self, method_name: str, result: Any, duration: float) -> None:\n        # Must retrieve original SDK response to extract usage\n        # Current InstrumentedProxy does not capture or expose this by default\n        # This implementation is incomplete without changes to InstrumentedProxy internals\n        pass\n\n\ndef wrap_with_token_tracking(provider: ChatProvider | StreamingChatProvider,\n                            methods_to_track: List[str] = ['chat', 'chat_stream']) \\\n    -> InstrumentedProxy:\n\n    wrapped = maybe_wrap(\n        target=provider,\n        layer='token_tracked',\n        plugin_name='token_tracker',\n        methods_to_track=methods_to_track\n    )\n    \n    # Register hook for token collection after wrapping\n    from fitz_ai.core.instrumentation import register_hook\n    \n    tracker_hook = TokenTrackerHook()\n    register_hook(tracker_hook)\n    \n    return wrapped",
+        "purpose": "Core module that provides the token tracking infrastructure including data models, error handling, and the main wrapping function that integrates with InstrumentedProxy."
+      },
+      {
+        "filename": "fitz_ai/llm/providers/openai_with_tracking.py",
+        "content": "import openai\nfrom typing import Iterator, List, Optional, Any\nfrom dataclasses import dataclass\n\nfrom fitz_ai.llm.providers.base import ChatProvider, StreamingChatProvider\nfrom fitz_ai.llm.providers.openai import OpenAIChat, OpenAIEmbedding, OpenAIVision\nfrom fitz_ai.llm.instrumentation.token_tracker import wrap_with_token_tracking\n\n\n# Wrap base OpenAI chat provider with token tracking\nopenai_chat = OpenAIChat()\nwrapped_openai_chat = wrap_with_token_tracking(openai_chat)",
+        "purpose": "Provider-specific wrapper module for OpenAI that wraps the base OpenAIChat provider with token tracking functionality."
+      },
+      {
+        "filename": "fitz_ai/llm/providers/anthropic_with_tracking.py",
+        "content": "from typing import Iterator, List, Optional, Any\nimport anthropic\n\nfrom fitz_ai.llm.providers.base import ChatProvider, StreamingChatProvider\nfrom fitz_ai.llm.providers.anthropic import AnthropicChat, AnthropicVision\nfrom fitz_ai.llm.instrumentation.token_tracker import wrap_with_token_tracking\n\n\n# Wrap base Anthropic chat provider with token tracking\nanthropic_chat = AnthropicChat()\nwrapped_anthropic_chat = wrap_with_token_tracking(anthropic_chat)",
+        "purpose": "Provider-specific wrapper module for Anthropic that wraps the base AnthropicChat provider with token tracking functionality."
+      },
+      {
+        "filename": "fitz_ai/llm/providers/cohere_with_tracking.py",
+        "content": "from typing import Iterator, List, Optional, Any\nimport cohere\n\nfrom fitz_ai.llm.providers.base import ChatProvider, StreamingChatProvider\nfrom fitz_ai.llm.providers.cohere import CohereChat, CohereEmbedding, CohereRerank\nfrom fitz_ai.llm.instrumentation.token_tracker import wrap_with_token_tracking\n\n\n# Wrap base Cohere chat provider with token tracking\ncohere_chat = CohereChat()\nwrapped_cohere_chat = wrap_with_token_tracking(cohere_chat)",
+        "purpose": "Provider-specific wrapper module for Cohere that wraps the base CohereChat provider with token tracking functionality."
+      },
+      {
+        "filename": "fitz_ai/llm/providers/ollama_with_tracking.py",
+        "content": "from typing import Iterator, List, Optional, Any\n\nfrom fitz_ai.llm.providers.base import ChatProvider, StreamingChatProvider\nfrom fitz_ai.llm.providers.ollama import OllamaChat, OllamaEmbedding, OllamaRerank, OllamaVision\nfrom fitz_ai.llm.instrumentation.token_tracker import wrap_with_token_tracking\n\n\n# Wrap base Ollama chat provider with token tracking\nollama_chat = OllamaChat()\nwrapped_ollama_chat = wrap_with_token_tracking(ollama_chat)",
+        "purpose": "Provider-specific wrapper module for Ollama that wraps the base OllamaChat provider with token tracking functionality."
+      }
+    ]
+  },
+  "roadmap_risk": {
+    "roadmap": {
+      "phases": [
+        {
+          "number": 1,
+          "name": "Read Before Writing",
+          "objective": "Verify existing system behavior and confirm compatibility with new logic to ensure correctness before writing any code.",
+          "deliverables": [
+            "Confirmed InstrumentedProxy does not currently expose SDK responses in hooks",
+            "Verified all chat providers implement ChatProvider or StreamingChatProvider protocols returning str/Iterator[str] types instead of raw usage data objects"
+          ],
+          "dependencies": [],
+          "estimated_complexity": "low",
+          "key_risks": [
+            "InstrumentedProxy modification may break existing hooks that don't expect new return types"
+          ],
+          "verification_command": "python -c \"from fitz_ai.core.instrumentation import InstrumentedProxy, BenchmarkHook; class MockHook(BenchmarkHook): def __init__(self): self.last_response = None; def on_call_start(self, *args, **kwargs): pass; def on_call_end(self, method_name: str, result=None, duration_sec: float = 0.0): self.last_response = result; hook = MockHook(); proxy = InstrumentedProxy(object(), 'test_layer', 'plugin'); with proxy as p: original_result = {'choices': [{'message': {'content': 'hello'}}]}; setattr(p, '_wrapped_method__', lambda: original_result); result = p._wrapped_method__(); assert hook.last_response is not None and isinstance(hook.last_response, dict); print('\u2713 InstrumentedProxy can now pass raw response')\"",
+          "estimated_effort": "~30 mins"
+        },
+        {
+          "number": 2,
+          "name": "Create Minimal TokenTrackingHook for Integration",
+          "objective": "Implement a minimal tracking solution that logs token usage in existing hooks or via logging module, without requiring major changes to core instrumentation.",
+          "deliverables": [
+            "Created fitz_ai/llm/instrumentation/token_logger.py with TokenUsage dataclass and extract_tokens_from_response function"
+          ],
+          "dependencies": [
+            1
+          ],
+          "estimated_complexity": "medium",
+          "key_risks": [
+            "Token extraction fails due to SDK API variability or missing fields in provider responses"
+          ],
+          "verification_command": "python -c \"from fitz_ai.llm.instrumentation.token_logger import log_token_usage, TokenUsage; import json; response = {'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}; log_token_usage('openai', 'chat', response); print('\u2713 Can log token usage for OpenAI style responses')\"",
+          "estimated_effort": "~1 hour"
+        },
+        {
+          "number": 3,
+          "name": "Modify Provider Wrappers to Log During Calls",
+          "objective": "Update provider wrappers (OpenAIChat, AnthropicChat) to call the logger after successful chat calls.",
+          "deliverables": [
+            "Modified fitz_ai/llm/providers/openai.py to add token logging in chat() method"
+          ],
+          "dependencies": [
+            2
+          ],
+          "estimated_complexity": "high",
+          "key_risks": [
+            "Thread safety of logging during concurrent calls may be broken if not properly synchronized"
+          ],
+          "verification_command": "python -c \"import fitz_ai.llm.providers.openai as oai; chat = oai.OpenAIChat(); print('\u2713 OpenAI chat provider initialized')\"",
+          "estimated_effort": "~3 hours"
+        },
+        {
+          "number": 4,
+          "name": "Test Integration With Existing Systems",
+          "objective": "Ensure that modified providers now emit logs during query execution without breaking existing functionality.",
+          "deliverables": [
+            "Integration test passes confirming no regression in provider behavior or logging output"
+          ],
+          "dependencies": [
+            3
+          ],
+          "estimated_complexity": "medium",
+          "key_risks": [
+            "Silent failure modes where empty responses result in missing token counts instead of defaults"
+          ],
+          "verification_command": "python -m pytest tests/unit/test_openai_provider.py::test_chat_token_logging -v",
+          "estimated_effort": "~1 hour"
+        },
+        {
+          "number": 5,
+          "name": "Final Validation (End-to-end Functional)",
+          "objective": "Confirm end-to-end flow works and logs token usage properly during actual queries.",
+          "deliverables": [
+            "CLI or API endpoint triggers a query that goes through tracked provider, logging correct token counts"
+          ],
+          "dependencies": [
+            4
+          ],
+          "estimated_complexity": "low",
+          "key_risks": [
+            "No new security attack surface introduced since feature only adds logging/metric collection capabilities via existing instrumentation infrastructure"
+          ],
+          "verification_command": "python -c \"import fitz_ai.llm.providers.openai as oai; chat = oai.OpenAIChat(); print('\u2713 OpenAI chat provider initialized')\"",
+          "estimated_effort": "~30 mins"
+        }
+      ],
+      "critical_path": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "parallel_opportunities": [],
+      "total_phases": 5
+    },
+    "risk": {
+      "risks": [
+        {
+          "category": "technical",
+          "description": "InstrumentedProxy modification will break existing hooks that don't expect new return types from wrapped methods",
+          "impact": "high",
+          "likelihood": "medium",
+          "mitigation": "Create backward-compatible wrapper that stores raw data in thread-local storage instead of modifying core proxy behavior",
+          "contingency": "Revert InstrumentedProxy changes and use alternative approach to capture SDK responses for token extraction",
+          "affected_phases": [
+            1
+          ],
+          "verification": "Run existing instrumentation tests to ensure no regressions"
+        },
+        {
+          "category": "technical",
+          "description": "Token extraction fails due to SDK API variability or missing fields in response objects from different LLM providers",
+          "impact": "medium",
+          "likelihood": "high",
+          "mitigation": "Implement provider-specific parsing logic with fallback mechanisms and comprehensive unit testing for each supported SDK format",
+          "contingency": "Log zero token usage as default when extraction fails silently, ensuring no critical functionality is lost",
+          "affected_phases": [
+            2,
+            3
+          ],
+          "verification": "Write unit tests that mock different provider responses to verify correct parsing behavior"
+        },
+        {
+          "category": "technical",
+          "description": "Thread safety issues with shared hook storage during concurrent LLM calls may cause incorrect token reporting or data corruption",
+          "impact": "medium",
+          "likelihood": "low",
+          "mitigation": "Use thread-local storage to isolate token tracking per call and implement proper synchronization where needed",
+          "contingency": "Add explicit locking around shared state access in hooks during concurrent execution scenarios",
+          "affected_phases": [
+            1,
+            2
+          ],
+          "verification": "Run concurrent threaded tests with multiple calls to tracked chat providers verifying correct token reporting"
+        },
+        {
+          "category": "technical",
+          "description": "Streaming response parsing does not aggregate tokens correctly across chunks without invasive changes to streaming logic",
+          "impact": "medium",
+          "likelihood": "high",
+          "mitigation": "Modify StreamingChatProvider implementations to capture intermediate token counts or log final totals only after stream completion",
+          "contingency": "Log total token usage at end of stream instead of attempting real-time aggregation which may require deeper integration changes",
+          "affected_phases": [
+            3
+          ],
+          "verification": "Test streaming chat method calls and validate that last_usage.total_tokens reflects the complete session"
+        },
+        {
+          "category": "technical",
+          "description": "SDK version incompatibilities with token tracking, especially Ollama where usage tracking isn't always supported without raw HTTP parsing",
+          "impact": "high",
+          "likelihood": "low",
+          "mitigation": "Implement robust error handling that gracefully handles missing or malformed token data fields from any provider",
+          "contingency": "Add fallback to default zero-token logging when SDK-specific usage metadata cannot be parsed reliably",
+          "affected_phases": [
+            3
+          ],
+          "verification": "Run integration test with mocked Ollama server returning known structures and verify no crashes occur"
+        },
+        {
+          "category": "technical",
+          "description": "Token counting skips empty responses or malformed content resulting in silent failures instead of logging zero tokens",
+          "impact": "medium",
+          "likelihood": "high",
+          "mitigation": "Implement defensive programming practices including null checks and default values for token fields",
+          "contingency": "Add explicit fallback to TokenUsage with all zeros when extraction logic encounters missing or invalid data in response objects",
+          "affected_phases": [
+            2,
+            3
+          ],
+          "verification": "Mock provider returning empty dict responses and verify that token logger produces valid zero-count logs instead of exceptions"
+        }
+      ],
+      "overall_risk_level": "high",
+      "recommended_contingencies": [
+        "Revert InstrumentedProxy changes if they break existing instrumentation functionality",
+        "Implement fallback logging to zero tokens when SDK-specific parsing fails silently",
+        "Use thread-local storage for hook state isolation during concurrent execution scenarios",
+        "Add comprehensive error handling around token extraction with graceful degradation"
+      ]
+    }
+  },
+  "roadmap": {
+    "phases": [
+      {
+        "number": 1,
+        "name": "Read Before Writing",
+        "objective": "Verify existing system behavior and confirm compatibility with new logic to ensure correctness before writing any code.",
+        "deliverables": [
+          "Confirmed InstrumentedProxy does not currently expose SDK responses in hooks",
+          "Verified all chat providers implement ChatProvider or StreamingChatProvider protocols returning str/Iterator[str] types instead of raw usage data objects"
+        ],
+        "dependencies": [],
+        "estimated_complexity": "low",
+        "key_risks": [
+          "InstrumentedProxy modification may break existing hooks that don't expect new return types"
+        ],
+        "verification_command": "python -c \"from fitz_ai.core.instrumentation import InstrumentedProxy, BenchmarkHook; class MockHook(BenchmarkHook): def __init__(self): self.last_response = None; def on_call_start(self, *args, **kwargs): pass; def on_call_end(self, method_name: str, result=None, duration_sec: float = 0.0): self.last_response = result; hook = MockHook(); proxy = InstrumentedProxy(object(), 'test_layer', 'plugin'); with proxy as p: original_result = {'choices': [{'message': {'content': 'hello'}}]}; setattr(p, '_wrapped_method__', lambda: original_result); result = p._wrapped_method__(); assert hook.last_response is not None and isinstance(hook.last_response, dict); print('\u2713 InstrumentedProxy can now pass raw response')\"",
+        "estimated_effort": "~30 mins"
+      },
+      {
+        "number": 2,
+        "name": "Create Minimal TokenTrackingHook for Integration",
+        "objective": "Implement a minimal tracking solution that logs token usage in existing hooks or via logging module, without requiring major changes to core instrumentation.",
+        "deliverables": [
+          "Created fitz_ai/llm/instrumentation/token_logger.py with TokenUsage dataclass and extract_tokens_from_response function"
+        ],
+        "dependencies": [
+          1
+        ],
+        "estimated_complexity": "medium",
+        "key_risks": [
+          "Token extraction fails due to SDK API variability or missing fields in provider responses"
+        ],
+        "verification_command": "python -c \"from fitz_ai.llm.instrumentation.token_logger import log_token_usage, TokenUsage; import json; response = {'usage': {'prompt_tokens': 100, 'completion_tokens': 200, 'total_tokens': 300}}; log_token_usage('openai', 'chat', response); print('\u2713 Can log token usage for OpenAI style responses')\"",
+        "estimated_effort": "~1 hour"
+      },
+      {
+        "number": 3,
+        "name": "Modify Provider Wrappers to Log During Calls",
+        "objective": "Update provider wrappers (OpenAIChat, AnthropicChat) to call the logger after successful chat calls.",
+        "deliverables": [
+          "Modified fitz_ai/llm/providers/openai.py to add token logging in chat() method"
+        ],
+        "dependencies": [
+          2
+        ],
+        "estimated_complexity": "high",
+        "key_risks": [
+          "Thread safety of logging during concurrent calls may be broken if not properly synchronized"
+        ],
+        "verification_command": "python -c \"import fitz_ai.llm.providers.openai as oai; chat = oai.OpenAIChat(); print('\u2713 OpenAI chat provider initialized')\"",
+        "estimated_effort": "~3 hours"
+      },
+      {
+        "number": 4,
+        "name": "Test Integration With Existing Systems",
+        "objective": "Ensure that modified providers now emit logs during query execution without breaking existing functionality.",
+        "deliverables": [
+          "Integration test passes confirming no regression in provider behavior or logging output"
+        ],
+        "dependencies": [
+          3
+        ],
+        "estimated_complexity": "medium",
+        "key_risks": [
+          "Silent failure modes where empty responses result in missing token counts instead of defaults"
+        ],
+        "verification_command": "python -m pytest tests/unit/test_openai_provider.py::test_chat_token_logging -v",
+        "estimated_effort": "~1 hour"
+      },
+      {
+        "number": 5,
+        "name": "Final Validation (End-to-end Functional)",
+        "objective": "Confirm end-to-end flow works and logs token usage properly during actual queries.",
+        "deliverables": [
+          "CLI or API endpoint triggers a query that goes through tracked provider, logging correct token counts"
+        ],
+        "dependencies": [
+          4
+        ],
+        "estimated_complexity": "low",
+        "key_risks": [
+          "No new security attack surface introduced since feature only adds logging/metric collection capabilities via existing instrumentation infrastructure"
+        ],
+        "verification_command": "python -c \"import fitz_ai.llm.providers.openai as oai; chat = oai.OpenAIChat(); print('\u2713 OpenAI chat provider initialized')\"",
+        "estimated_effort": "~30 mins"
+      }
+    ],
+    "critical_path": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "parallel_opportunities": [],
+    "total_phases": 5
+  },
+  "risk": {
+    "risks": [
+      {
+        "category": "technical",
+        "description": "InstrumentedProxy modification will break existing hooks that don't expect new return types from wrapped methods",
+        "impact": "high",
+        "likelihood": "medium",
+        "mitigation": "Create backward-compatible wrapper that stores raw data in thread-local storage instead of modifying core proxy behavior",
+        "contingency": "Revert InstrumentedProxy changes and use alternative approach to capture SDK responses for token extraction",
+        "affected_phases": [
+          1
+        ],
+        "verification": "Run existing instrumentation tests to ensure no regressions"
+      },
+      {
+        "category": "technical",
+        "description": "Token extraction fails due to SDK API variability or missing fields in response objects from different LLM providers",
+        "impact": "medium",
+        "likelihood": "high",
+        "mitigation": "Implement provider-specific parsing logic with fallback mechanisms and comprehensive unit testing for each supported SDK format",
+        "contingency": "Log zero token usage as default when extraction fails silently, ensuring no critical functionality is lost",
+        "affected_phases": [
+          2,
+          3
+        ],
+        "verification": "Write unit tests that mock different provider responses to verify correct parsing behavior"
+      },
+      {
+        "category": "technical",
+        "description": "Thread safety issues with shared hook storage during concurrent LLM calls may cause incorrect token reporting or data corruption",
+        "impact": "medium",
+        "likelihood": "low",
+        "mitigation": "Use thread-local storage to isolate token tracking per call and implement proper synchronization where needed",
+        "contingency": "Add explicit locking around shared state access in hooks during concurrent execution scenarios",
+        "affected_phases": [
+          1,
+          2
+        ],
+        "verification": "Run concurrent threaded tests with multiple calls to tracked chat providers verifying correct token reporting"
+      },
+      {
+        "category": "technical",
+        "description": "Streaming response parsing does not aggregate tokens correctly across chunks without invasive changes to streaming logic",
+        "impact": "medium",
+        "likelihood": "high",
+        "mitigation": "Modify StreamingChatProvider implementations to capture intermediate token counts or log final totals only after stream completion",
+        "contingency": "Log total token usage at end of stream instead of attempting real-time aggregation which may require deeper integration changes",
+        "affected_phases": [
+          3
+        ],
+        "verification": "Test streaming chat method calls and validate that last_usage.total_tokens reflects the complete session"
+      },
+      {
+        "category": "technical",
+        "description": "SDK version incompatibilities with token tracking, especially Ollama where usage tracking isn't always supported without raw HTTP parsing",
+        "impact": "high",
+        "likelihood": "low",
+        "mitigation": "Implement robust error handling that gracefully handles missing or malformed token data fields from any provider",
+        "contingency": "Add fallback to default zero-token logging when SDK-specific usage metadata cannot be parsed reliably",
+        "affected_phases": [
+          3
+        ],
+        "verification": "Run integration test with mocked Ollama server returning known structures and verify no crashes occur"
+      },
+      {
+        "category": "technical",
+        "description": "Token counting skips empty responses or malformed content resulting in silent failures instead of logging zero tokens",
+        "impact": "medium",
+        "likelihood": "high",
+        "mitigation": "Implement defensive programming practices including null checks and default values for token fields",
+        "contingency": "Add explicit fallback to TokenUsage with all zeros when extraction logic encounters missing or invalid data in response objects",
+        "affected_phases": [
+          2,
+          3
+        ],
+        "verification": "Mock provider returning empty dict responses and verify that token logger produces valid zero-count logs instead of exceptions"
+      }
+    ],
+    "overall_risk_level": "high",
+    "recommended_contingencies": [
+      "Revert InstrumentedProxy changes if they break existing instrumentation functionality",
+      "Implement fallback logging to zero tokens when SDK-specific parsing fails silently",
+      "Use thread-local storage for hook state isolation during concurrent execution scenarios",
+      "Add comprehensive error handling around token extraction with graceful degradation"
+    ]
+  }
+}

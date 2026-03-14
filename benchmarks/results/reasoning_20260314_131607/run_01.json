@@ -1,0 +1,15 @@
+{
+  "run": 1,
+  "elapsed_s": 564.8,
+  "success": true,
+  "recommended": "Direct Hook Integration with InstrumentedProxy (Recommended)",
+  "plan_size": 66857,
+  "stage_timings": {
+    "implementation_check": 2.547000000020489,
+    "context": 35.796999999991385,
+    "architecture_design": 395.23399999999674,
+    "roadmap_risk": 117.125,
+    "coherence_check": 14.01600000000326
+  },
+  "error": null
+}

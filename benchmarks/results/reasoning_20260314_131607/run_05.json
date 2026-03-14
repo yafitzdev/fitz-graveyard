@@ -1,0 +1,15 @@
+{
+  "run": 5,
+  "elapsed_s": 1663.2,
+  "success": true,
+  "recommended": "Instrumentation-Based Hook Wrapping",
+  "plan_size": 62213,
+  "stage_timings": {
+    "implementation_check": 1.9839999999967404,
+    "context": 55.953000000008615,
+    "architecture_design": 1007.0629999999946,
+    "roadmap_risk": 597.2660000000033,
+    "coherence_check": 0.9370000000053551
+  },
+  "error": null
+}
