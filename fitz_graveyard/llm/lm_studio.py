@@ -239,6 +239,10 @@ class LMStudioClient:
         """Check if any model is currently loaded (not just available)."""
         return await self.get_loaded_model() is not None
 
+    # Context length for smart_model (agent retrieval needs large context
+    # for the structural index, even when planning uses small context).
+    _SMART_CONTEXT_LENGTH = 65536
+
     async def _load_model_via_cli(self, model_name: str | None = None) -> bool:
         """Load a model via ``lms load``.
 
@@ -246,6 +250,11 @@ class LMStudioClient:
             model_name: Model to load. Defaults to self.model.
         """
         model_name = model_name or self.model
+        # Use larger context for smart_model (agent needs full structural index)
+        ctx = self._context_length
+        if self._smart_model and model_name == self._smart_model:
+            ctx = max(ctx, self._SMART_CONTEXT_LENGTH)
+
         lms = shutil.which("lms")
         if not lms:
             logger.warning(
@@ -255,14 +264,14 @@ class LMStudioClient:
             return False
 
         logger.info(
-            f"Running: lms load {model_name} -y -c {self._context_length} --parallel 1"
+            f"Running: lms load {model_name} -y -c {ctx} --parallel 1"
         )
         try:
             result = await asyncio.to_thread(
                 subprocess.run,
                 [
                     lms, "load", model_name, "-y",
-                    "-c", str(self._context_length),
+                    "-c", str(ctx),
                     "--parallel", "1",
                 ],
                 capture_output=True, text=True, timeout=300,

@@ -21,8 +21,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Devil's Advocate Removal** — Benchmarked across 5 runs: removing the devil's advocate pass improved architecture quality from 60% to 100% correct decisions. The pass was over-correcting, pushing the model toward protocol-breaking "cleaner" solutions.
 
+**Split Reasoning** — Arch+design and roadmap+risk stages can each split into two sequential LLM calls (architecture then design, roadmap then risk). Reduces peak context from ~29K to ~8K tokens per call, enabling dense 27B models at 32K context. Auto-enabled when `context_length < 32768`. Benchmarked at 5/5 correct architecture decisions with 5 seed files.
+
 ### 🚀 Added
 
+- Split reasoning mode for arch+design stage: `ArchitectureDesignStage(split_reasoning=True)` (`ae7ecaa7`)
+- Split reasoning mode for roadmap+risk stage: `RoadmapRiskStage(split_reasoning=True)` (`f50dfec3`)
+- `create_stages(split_reasoning=True)` factory function for both splits (`f50dfec3`)
+- Auto-split detection in worker: enabled when `context_length < 32768` (`50526cf5`)
+- Smart model context override: 4B agent loads with 65K context regardless of config (`7014f2b1`)
+- `--split` and `--max-seeds` flags on reasoning benchmark (`d9241eb4`)
 - LM Studio model tier support: `fast_model`, `smart_model` config fields (`ba61ffe9`)
 - Auto model switching in orchestrator between agent (Qwen3.5-4B) and planning (Qwen3-Coder-30B) stages (`ba61ffe9`)
 - `switch_model()` on LMStudioClient with loaded-model check (`b3b6a9c1`)
@@ -40,6 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🔄 Changed
 
+- Minimum context window lowered from 32K to 8K tokens — split reasoning enables small-context models (`50526cf5`)
 - Investigations use `gathered_context` (32K cap) instead of `raw_summaries` (100K+) — 70% input reduction per call (`23ca676a`)
 - Health check loads `smart_model` first when configured, avoiding redundant model switches (`c7ba836e`)
 - Critique length threshold uses absolute floor (2000 chars) for focused critiques (`ba61ffe9`)
