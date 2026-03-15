@@ -540,7 +540,7 @@ class TestArchitectureDesignStage:
             "Feasibility report...",
             "Assumption register...",
             "Reviewed reasoning...",  # critique
-            "Challenged reasoning...",  # devil's advocate
+            # devil's advocate removed (opt4)
             json.dumps({"approaches": [], "recommended": "", "reasoning": "", "scope_statement": ""}),
             json.dumps({"key_tradeoffs": {}, "technology_considerations": []}),
             json.dumps({"adrs": []}),
@@ -554,21 +554,21 @@ class TestArchitectureDesignStage:
 
         # Calls: [0..3]=investigations, [4]=reasoning,
         #        [5..10]=verification agents (contracts, data_flow, patterns, type_boundaries, sketch, assumptions),
-        #        [11]=critique, [12]=DA,
-        #        [13]=approaches, [14]=tradeoffs, [15]=adrs,
-        #        [16]=components, [17]=integrations, [18]=artifacts
+        #        [11]=critique,
+        #        [12]=approaches, [13]=tradeoffs, [14]=adrs,
+        #        [15]=components, [16]=integrations, [17]=artifacts
         calls = mock_client.generate.call_args_list
 
-        # approaches (13), adrs (15), components (16),
-        # integrations (17), artifacts (18) should have krag
-        assert "Codebase Summary" in calls[13].kwargs["messages"][1]["content"]
+        # approaches (12), adrs (14), components (15),
+        # integrations (16), artifacts (17) should have krag
+        assert "Codebase Summary" in calls[12].kwargs["messages"][1]["content"]
+        assert "Codebase Summary" in calls[14].kwargs["messages"][1]["content"]
         assert "Codebase Summary" in calls[15].kwargs["messages"][1]["content"]
         assert "Codebase Summary" in calls[16].kwargs["messages"][1]["content"]
         assert "Codebase Summary" in calls[17].kwargs["messages"][1]["content"]
-        assert "Codebase Summary" in calls[18].kwargs["messages"][1]["content"]
 
-        # tradeoffs (14) should NOT
-        assert "Codebase Summary" not in calls[14].kwargs["messages"][1]["content"]
+        # tradeoffs (13) should NOT
+        assert "Codebase Summary" not in calls[13].kwargs["messages"][1]["content"]
 
     @pytest.mark.asyncio
     async def test_execute_partial_failure(self, stage):
@@ -1396,13 +1396,13 @@ class TestInvestigate:
         mock_client = AsyncMock()
         mock_client.generate.return_value = "Interface X returns str."
 
-        prior = {"_raw_summaries": "## api.py\ndef chat() -> str: ..."}
+        prior = {"_gathered_context": "## api.py\ndef chat() -> str: ..."}
         result = await stage._investigate(mock_client, "Build API", prior)
         assert "INVESTIGATION FINDINGS" in result
         assert "Interface X returns str." in result
 
     @pytest.mark.asyncio
-    async def test_skips_without_raw_summaries(self):
+    async def test_skips_without_context(self):
         stage = ContextStage()
         mock_client = AsyncMock()
 
@@ -1416,7 +1416,7 @@ class TestInvestigate:
         mock_client = AsyncMock()
         mock_client.generate.return_value = "Answer."
 
-        prior = {"_raw_summaries": "some code context"}
+        prior = {"_gathered_context": "some code context"}
         await stage._investigate(mock_client, "Build API", prior)
         # Should have at least 4 calls (generic questions)
         assert mock_client.generate.call_count >= 4
@@ -1428,7 +1428,7 @@ class TestInvestigate:
         mock_client.generate.return_value = "Answer."
 
         prior = {
-            "_raw_summaries": (
+            "_gathered_context": (
                 "--- INTERFACE SIGNATURES (auto-extracted) ---\n"
                 "class ImplA(Base):\nclass ImplB(Base):\n\n"
                 "### src/mod.py\n```\ncode\n```"
@@ -1450,7 +1450,7 @@ class TestInvestigate:
         mock_client = AsyncMock()
         mock_client.generate.side_effect = RuntimeError("LLM crashed")
 
-        prior = {"_raw_summaries": "some code"}
+        prior = {"_gathered_context": "some code"}
         result = await stage._investigate(mock_client, "Build API", prior)
         # All calls fail, should return empty
         assert result == ""
@@ -1467,7 +1467,7 @@ class TestInvestigate:
             RuntimeError("fail"),
         ]
 
-        prior = {"_raw_summaries": "some code"}
+        prior = {"_gathered_context": "some code"}
         result = await stage._investigate(mock_client, "Build API", prior)
         assert "INVESTIGATION FINDINGS" in result
         assert "Good answer." in result
@@ -1484,7 +1484,7 @@ class TestInvestigate:
         mock_client = AsyncMock()
         mock_client.generate.return_value = "Answer."
 
-        prior = {"_raw_summaries": "code"}
+        prior = {"_gathered_context": "code"}
         await stage._investigate(mock_client, "Build API", prior)
         assert "context:investigating" in reported
 

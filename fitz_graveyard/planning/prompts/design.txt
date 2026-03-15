@@ -1,16 +1,36 @@
-You are making concrete design decisions for this project.
+You are making concrete design decisions for this project, given the architecture chosen below.
 
 {krag_context}
+
+## Binding Constraints (from context stage)
+
+The following were established in the context stage. Do NOT contradict or ignore them:
+{binding_constraints}
 
 Project context:
 {context}
 
-Architecture decision:
+## Chosen Architecture
+
 {architecture}
 
-Think through the design carefully:
+## Design Decisions
 
-1. Critical decisions: What are the 3-5 decisions where choosing wrong would require significant rework? For each: what is the wrong choice that looks reasonable, what is the right choice, and specifically why?
+Given the architecture above, make concrete design decisions:
+
+1. Critical decisions (ADRs): 3-5 decisions where choosing wrong requires significant rework. IMPORTANT: Do NOT re-record the architecture choice — that's already decided above. ADRs are for remaining undecided questions.
+
+   Good ADRs look like:
+   - "Feature X is out of scope for v1" (scope exclusion — someone might want it, but you're cutting it and explaining why)
+   - "Protocol Y not supported via this path" (capability boundary — names the technical reason it can't work)
+   - "Edge case Z handled by failing loudly, not silently" (explicit tradeoff someone could disagree with)
+
+   Bad ADRs look like:
+   - "Use environment variables for auth" (obvious, no one would disagree)
+   - "Follow best practices for error handling" (vague, not a real decision)
+   - "Use the recommended approach" (repeats the architecture choice)
+
+   Each ADR should name a specific scope exclusion, capability boundary, or edge case that someone might reasonably disagree with.
 
 2. Component boundaries: Where exactly do the system boundaries go? What is the strict interface contract between components? What must not cross a boundary?
 
@@ -20,4 +40,9 @@ Think through the design carefully:
 
 Be concrete. Interfaces should look like real function or method signatures. Data model should have actual field names and types. Avoid "TBD" — make a decision and defend it.
 
-If the deliverable is a config file, YAML schema, or small artifact (under ~50 lines), write the complete file content inline as part of the design. Do not describe it — produce it.
+5. Artifacts: If the deliverable includes config files, YAML schemas, SQL schemas, Dockerfiles, or any small artifact (under ~100 lines), write the complete file content in the "artifacts" array. Each artifact needs a filename, the full content, and a purpose. Do not describe artifacts — produce them. If the project doesn't need standalone artifacts, return an empty array.
+
+ACCURACY RULE: Every time you write an API field name, response path, parameter name, or endpoint URL, you MUST do one of:
+  (a) Cite where in the codebase context above you found it — e.g. "per config.py line 42"
+  (b) Mark it [VERIFY] if you cannot point to codebase evidence
+Never write a bare field name from memory.

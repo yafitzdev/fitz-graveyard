@@ -126,11 +126,21 @@ class ArchitectureDesignStage(PipelineStage):
 
     Uses reasoning + per-field-group extraction for reliability with small models.
     Returns split output: {"architecture": {...}, "design": {...}}.
+
+    Supports two modes:
+    - Combined (default): single reasoning call with architecture_design.txt
+    - Split (split_reasoning=True): two sequential calls — architecture.txt
+      then design.txt with the architecture decision injected. Each call
+      uses ~8K tokens instead of ~29K, enabling smaller context windows.
     """
 
     # Budget for codebase context in the reasoning prompt (~50K tokens).
     # Leaves room for template text, response generation, and tool-use overhead.
     _REASONING_KRAG_BUDGET_CHARS = 200_000
+
+    def __init__(self, *, split_reasoning: bool = False) -> None:
+        super().__init__()
+        self._split_reasoning = split_reasoning
 
     @property
     def name(self) -> str:
@@ -144,74 +154,9 @@ class ArchitectureDesignStage(PipelineStage):
         self, job_description: str, prior_outputs: dict[str, Any], *, findings: str = "",
     ) -> list[dict]:
         prompt_template = load_prompt("architecture_design")
-
-        context_str = job_description
-        if "context" in prior_outputs:
-            context = prior_outputs["context"]
-            if isinstance(context, str):
-                try:
-                    context = json.loads(context)
-                except (json.JSONDecodeError, TypeError):
-                    context = {}
-            parts = [
-                f"Project: {job_description}",
-                f"Description: {context.get('project_description', '')}",
-                f"Requirements: {', '.join(context.get('key_requirements', []))}",
-                f"Constraints: {', '.join(context.get('constraints', []))}",
-            ]
-            if context.get("existing_files"):
-                parts.append(f"Existing files: {', '.join(context['existing_files'])}")
-            if context.get("needed_artifacts"):
-                parts.append(f"Expected deliverable files: {', '.join(context['needed_artifacts'])}")
-            context_str = "\n".join(parts)
-
-        # Build binding constraints from context stage (reuse parsed 'context' from above)
-        binding = ""
-        if "context" in prior_outputs:
-            ctx = context
-            files = ctx.get("existing_files", [])
-            artifacts = ctx.get("needed_artifacts", [])
-            scope = ctx.get("scope_boundaries", {})
-            parts = []
-            if files:
-                parts.append("Existing files to integrate with:\n" + "\n".join(f"  - {f}" for f in files))
-            if artifacts:
-                parts.append("Expected deliverables:\n" + "\n".join(f"  - {a}" for a in artifacts))
-            if scope:
-                in_scope = scope.get("in_scope", [])
-                out_of_scope = scope.get("out_of_scope", [])
-                if in_scope:
-                    parts.append(f"In scope: {', '.join(in_scope)}")
-                if out_of_scope:
-                    parts.append(f"Out of scope: {', '.join(out_of_scope)}")
-            binding = "\n".join(parts) if parts else "No specific constraints from context stage."
-
-        # Adaptive context delivery: maximize signal to the reasoning LLM.
-        #
-        # Full signal:    findings + raw_summaries (pre-digested facts + full source code)
-        # Degraded signal: findings + gathered_context (pre-digested facts + AST structural overview)
-        #
-        # raw_summaries already contains the structural overview, so gathered_context
-        # is redundant when raw_summaries fits. We degrade only when the combined
-        # context exceeds the budget (large codebases with many retrieved files).
-        raw_summaries = self._get_raw_summaries(prior_outputs)
-        gathered_context = self._get_gathered_context(prior_outputs)
-
-        full_krag = (findings + "\n\n" + raw_summaries) if findings else raw_summaries
-        if len(full_krag) <= self._REASONING_KRAG_BUDGET_CHARS:
-            krag_context = full_krag
-            logger.info(
-                f"Stage '{self.name}': full signal delivery ({len(full_krag)} chars: "
-                f"findings={len(findings)}, raw_summaries={len(raw_summaries)})"
-            )
-        else:
-            krag_context = (findings + "\n\n" + gathered_context) if findings else gathered_context
-            logger.info(
-                f"Stage '{self.name}': degraded signal delivery ({len(krag_context)} chars: "
-                f"findings={len(findings)}, gathered_context={len(gathered_context)}). "
-                f"Full would be {len(full_krag)} chars"
-            )
-
+        context_str, binding, krag_context = self._build_prompt_parts(
+            job_description, prior_outputs, findings,
+        )
         impl_check = self._get_implementation_check(prior_outputs)
         prompt = prompt_template.format(
             context=context_str.strip(),
@@ -475,38 +420,190 @@ class ArchitectureDesignStage(PipelineStage):
         logger.warning(f"Stage '{self.name}': all 6 verification agents failed ({elapsed:.1f}s)")
         return ""
 
+    def _build_split_architecture_prompt(
+        self, job_description: str, prior_outputs: dict[str, Any], findings: str = "",
+    ) -> list[dict]:
+        """Build prompt for architecture-only reasoning (split mode)."""
+        prompt_template = load_prompt("architecture")
+        context_str, binding, krag_context = self._build_prompt_parts(
+            job_description, prior_outputs, findings,
+        )
+        impl_check = self._get_implementation_check(prior_outputs)
+        prompt = prompt_template.format(
+            context=context_str.strip(),
+            krag_context=krag_context,
+            binding_constraints=binding,
+        )
+        if impl_check:
+            prompt = f"{impl_check}\n\n{prompt}"
+        return self._make_messages(prompt)
+
+    def _build_split_design_prompt(
+        self,
+        job_description: str,
+        prior_outputs: dict[str, Any],
+        architecture_reasoning: str,
+        findings: str = "",
+    ) -> list[dict]:
+        """Build prompt for design-only reasoning (split mode)."""
+        prompt_template = load_prompt("design")
+        context_str, binding, krag_context = self._build_prompt_parts(
+            job_description, prior_outputs, findings,
+        )
+        prompt = prompt_template.format(
+            context=context_str.strip(),
+            krag_context=krag_context,
+            binding_constraints=binding,
+            architecture=architecture_reasoning,
+        )
+        return self._make_messages(prompt)
+
+    def _build_prompt_parts(
+        self, job_description: str, prior_outputs: dict[str, Any], findings: str = "",
+    ) -> tuple[str, str, str]:
+        """Extract shared prompt components (context, binding, krag_context)."""
+        context_str = job_description
+        if "context" in prior_outputs:
+            context = prior_outputs["context"]
+            if isinstance(context, str):
+                try:
+                    context = json.loads(context)
+                except (json.JSONDecodeError, TypeError):
+                    context = {}
+            parts = [
+                f"Project: {job_description}",
+                f"Description: {context.get('project_description', '')}",
+                f"Requirements: {', '.join(context.get('key_requirements', []))}",
+                f"Constraints: {', '.join(context.get('constraints', []))}",
+            ]
+            if context.get("existing_files"):
+                parts.append(f"Existing files: {', '.join(context['existing_files'])}")
+            if context.get("needed_artifacts"):
+                parts.append(f"Expected deliverable files: {', '.join(context['needed_artifacts'])}")
+            context_str = "\n".join(parts)
+
+        binding = ""
+        if "context" in prior_outputs:
+            ctx = context
+            files = ctx.get("existing_files", [])
+            artifacts = ctx.get("needed_artifacts", [])
+            scope = ctx.get("scope_boundaries", {})
+            bp = []
+            if files:
+                bp.append("Existing files to integrate with:\n" + "\n".join(f"  - {f}" for f in files))
+            if artifacts:
+                bp.append("Expected deliverables:\n" + "\n".join(f"  - {a}" for a in artifacts))
+            if scope:
+                in_scope = scope.get("in_scope", [])
+                out_of_scope = scope.get("out_of_scope", [])
+                if in_scope:
+                    bp.append(f"In scope: {', '.join(in_scope)}")
+                if out_of_scope:
+                    bp.append(f"Out of scope: {', '.join(out_of_scope)}")
+            binding = "\n".join(bp) if bp else "No specific constraints from context stage."
+
+        raw_summaries = self._get_raw_summaries(prior_outputs)
+        gathered_context = self._get_gathered_context(prior_outputs)
+        full_krag = (findings + "\n\n" + raw_summaries) if findings else raw_summaries
+        if len(full_krag) <= self._REASONING_KRAG_BUDGET_CHARS:
+            krag_context = full_krag
+        else:
+            krag_context = (findings + "\n\n" + gathered_context) if findings else gathered_context
+
+        return context_str, binding, krag_context
+
+    async def _execute_combined(
+        self, client: Any, job_description: str,
+        prior_outputs: dict[str, Any], findings: str,
+    ) -> str:
+        """Single combined reasoning call (original behavior)."""
+        messages = self.build_prompt(job_description, prior_outputs, findings=findings)
+        await self._report_substep("reasoning")
+        t0 = time.monotonic()
+        reasoning = await self._reason_with_tools(client, messages, prior_outputs)
+        t1 = time.monotonic()
+        logger.info(f"Stage '{self.name}': reasoning took {t1 - t0:.1f}s ({len(reasoning)} chars)")
+
+        verification = await self._run_verification_agents(
+            client, reasoning, prior_outputs, job_description,
+        )
+        if verification:
+            reasoning = reasoning + "\n\n--- POST-REASONING VERIFICATION ---\n\n" + verification
+
+        krag_context = self._get_gathered_context(prior_outputs)
+        reasoning = await self._self_critique(
+            client, reasoning, job_description, krag_context=krag_context,
+        )
+        return reasoning
+
+    async def _execute_split(
+        self, client: Any, job_description: str,
+        prior_outputs: dict[str, Any], findings: str,
+    ) -> str:
+        """Two sequential reasoning calls: architecture then design.
+
+        Each call has its own tool-use session. The architecture decision
+        is injected into the design prompt. Reduces peak context from
+        ~29K to ~8K tokens per call.
+        """
+        # Architecture reasoning
+        arch_messages = self._build_split_architecture_prompt(
+            job_description, prior_outputs, findings,
+        )
+        await self._report_substep("reasoning:architecture")
+        t0 = time.monotonic()
+        arch_reasoning = await self._reason_with_tools(client, arch_messages, prior_outputs)
+        t1 = time.monotonic()
+        logger.info(
+            f"Stage '{self.name}': architecture reasoning took "
+            f"{t1 - t0:.1f}s ({len(arch_reasoning)} chars)"
+        )
+
+        # Design reasoning (with architecture decision injected)
+        design_messages = self._build_split_design_prompt(
+            job_description, prior_outputs, arch_reasoning, findings,
+        )
+        await self._report_substep("reasoning:design")
+        t2 = time.monotonic()
+        design_reasoning = await self._reason_with_tools(client, design_messages, prior_outputs)
+        t3 = time.monotonic()
+        logger.info(
+            f"Stage '{self.name}': design reasoning took "
+            f"{t3 - t2:.1f}s ({len(design_reasoning)} chars)"
+        )
+
+        # Combine for downstream extraction
+        reasoning = (
+            "## Architecture Analysis\n\n" + arch_reasoning
+            + "\n\n## Design Decisions\n\n" + design_reasoning
+        )
+
+        # Verification + critique on combined reasoning
+        verification = await self._run_verification_agents(
+            client, reasoning, prior_outputs, job_description,
+        )
+        if verification:
+            reasoning = reasoning + "\n\n--- POST-REASONING VERIFICATION ---\n\n" + verification
+
+        krag_context = self._get_gathered_context(prior_outputs)
+        reasoning = await self._self_critique(
+            client, reasoning, job_description, krag_context=krag_context,
+        )
+        return reasoning
+
     async def execute(self, client: Any, job_description: str, prior_outputs: dict[str, Any]) -> StageResult:
         try:
             # 1. Focused investigations (parallel) — pre-digest the source code
             findings = await self._investigate(client, job_description, prior_outputs)
 
-            # 2. Reasoning pass — adaptive context delivers maximum signal that fits.
-            #    Full signal: findings + raw_summaries (pre-digested + full source).
-            #    Degrades to findings + gathered_context for large codebases.
-            messages = self.build_prompt(job_description, prior_outputs, findings=findings)
-            await self._report_substep("reasoning")
-            t0 = time.monotonic()
-            reasoning = await self._reason_with_tools(
-                client, messages, prior_outputs,
-            )
-            t1 = time.monotonic()
-            logger.info(f"Stage '{self.name}': reasoning took {t1 - t0:.1f}s ({len(reasoning)} chars)")
-
-            # 3. Post-reasoning verification agents
-            verification = await self._run_verification_agents(
-                client, reasoning, prior_outputs, job_description,
-            )
-            if verification:
-                reasoning = reasoning + "\n\n--- POST-REASONING VERIFICATION ---\n\n" + verification
-
-            # 4. Self-critique pass — uses compact structural overview (AST-extracted).
-            #    Findings are in the reasoning prompt (step 2), NOT repeated here.
-            #    Including findings in critique makes it over-aggressive, treating
-            #    new proposals as "hallucinations" because they don't exist yet.
-            krag_context = self._get_gathered_context(prior_outputs)
-            reasoning = await self._self_critique(
-                client, reasoning, job_description, krag_context=krag_context,
-            )
+            if self._split_reasoning:
+                reasoning = await self._execute_split(
+                    client, job_description, prior_outputs, findings,
+                )
+            else:
+                reasoning = await self._execute_combined(
+                    client, job_description, prior_outputs, findings,
+                )
 
             # 5. Per-field-group extraction — compact structural overview for grounding
             _CONTEXT_GROUPS = {"approaches", "adrs", "artifacts", "components", "integrations"}
