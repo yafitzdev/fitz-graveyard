@@ -192,14 +192,24 @@ class LMStudioClient:
             logger.error(f"LM Studio health check failed: {e}")
             return False
 
-        # Config is the single source of truth.  If model is already loaded,
-        # accept it (lms load errors when re-loading).  If not, load via CLI
-        # with the config's model + context_length.
-        if await self.is_model_loaded():
+        # Load the first model needed.  If smart_model differs from model,
+        # the agent runs first on smart_model, so load that.  Otherwise
+        # load the planning model.  The orchestrator handles switching
+        # between agent and planning stages.
+        loaded = await self.get_loaded_model()
+        first_model = (
+            self.smart_model
+            if self._smart_model and self._smart_model != self.model
+            else self.model
+        )
+        if loaded == first_model:
             return True
-
-        logger.info(f"No model loaded, auto-loading {self.model} (ctx={self._context_length})")
-        return await self._load_model_via_cli()
+        if loaded:
+            # Wrong model loaded — switch
+            logger.info(f"Health check: switching {loaded} -> {first_model}")
+            return await self.switch_model(first_model)
+        logger.info(f"No model loaded, auto-loading {first_model} (ctx={self._context_length})")
+        return await self._load_model_via_cli(first_model)
 
     async def get_loaded_model(self) -> str | None:
         """Return the identifier of the currently loaded model, or None."""
