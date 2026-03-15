@@ -1,0 +1,16 @@
+{
+  "run": 2,
+  "elapsed_s": 599.4,
+  "success": true,
+  "recommended": "Extend Base Provider Protocols",
+  "plan_size": 59887,
+  "stage_timings": {
+    "agent_gathering": 8.98399999999674,
+    "implementation_check": 2.562999999994645,
+    "context": 75.82800000000861,
+    "architecture_design": 416.34399999998277,
+    "roadmap_risk": 93.04700000002049,
+    "coherence_check": 2.514999999984866
+  },
+  "error": null
+}

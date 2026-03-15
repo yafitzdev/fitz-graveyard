@@ -1,0 +1,16 @@
+{
+  "run": 5,
+  "elapsed_s": 522.9,
+  "success": true,
+  "recommended": "Structured Response Types with Optional Usage Fields",
+  "plan_size": 101315,
+  "stage_timings": {
+    "agent_gathering": 5.859000000025844,
+    "implementation_check": 2.515999999974156,
+    "context": 48.5,
+    "architecture_design": 380.43700000000536,
+    "roadmap_risk": 82.81299999999464,
+    "coherence_check": 2.734000000025844
+  },
+  "error": null
+}

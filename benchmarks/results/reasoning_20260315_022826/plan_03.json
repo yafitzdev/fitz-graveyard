@@ -1,0 +1,987 @@
+{
+  "context": {
+    "project_description": "Implement a token usage tracking system that instruments LLM provider methods to count input/output tokens for chat, embedding, and vision operations without modifying existing provider interfaces.",
+    "key_requirements": [
+      "Instrument ChatProvider, EmbeddingProvider, and VisionProvider methods to track token usage",
+      "Count tokens for messages input and responses output in chat operations",
+      "Track token counts for text inputs in embedding operations",
+      "Capture image processing token usage in vision operations"
+    ],
+    "constraints": [
+      "Cannot modify existing provider interface protocols in fitz_ai/llm/providers/base.py",
+      "Must integrate with existing InstrumentedProxy and BenchmarkHook infrastructure",
+      "Token counting must work across different LLM providers without hardcoding model-specific logic",
+      "Implementation should not break current API contracts"
+    ],
+    "existing_context": "fitz_ai/core/instrumentation.py contains BenchmarkHook protocol and InstrumentedProxy class that can be used for method interception; fitz_ai/llm/providers/base.py defines the provider protocols including ChatProvider, EmbeddingProvider, and VisionProvider; fitz_ai/llm/providers/openai.py, anthropic.py, cohere.py, ollama.py contain concrete implementations of these providers",
+    "stakeholders": [
+      "user requesting token usage tracking to see costs per query"
+    ],
+    "scope_boundaries": {
+      "in_scope": [
+        "instrument chat methods to count input/output tokens",
+        "instrument embedding methods to count input/output tokens",
+        "instrument vision methods to count input/output tokens",
+        "implement hook-based instrumentation system using existing infrastructure",
+        "track token usage per query with context"
+      ],
+      "out_of_scope": [
+        "modifying base provider interfaces or protocols",
+        "adding explicit cost calculation based on pricing tiers",
+        "tracking aggregated token usage over time",
+        "handling streaming chat responses for token counting"
+      ]
+    },
+    "existing_files": [
+      "fitz_ai/core/instrumentation.py \u2014 Instrumentation system for benchmarking plugin performance",
+      "fitz_ai/llm/providers/base.py \u2014 Provider protocols for LLM clients",
+      "fitz_ai/llm/providers/openai.py \u2014 OpenAI provider wrappers using the official SDK",
+      "fitz_ai/llm/providers/anthropic.py \u2014 Anthropic provider wrappers using the official SDK",
+      "fitz_ai/llm/providers/cohere.py \u2014 Cohere provider wrappers using the official SDK",
+      "fitz_ai/llm/providers/ollama.py \u2014 Ollama provider wrappers using direct HTTP calls",
+      "fitz_ai/logging/logger.py \u2014 discovered by agent",
+      "fitz_ai/logging/tags.py \u2014 discovered by agent",
+      "fitz_ai/engines/fitz_krag/engine.py \u2014 discovered by agent",
+      "fitz_ai/sdk/fitz.py \u2014 discovered by agent",
+      "fitz_ai/api/routes/query.py \u2014 discovered by agent",
+      "fitz_ai/engines/fitz_krag/ingestion/pipeline.py \u2014 discovered by agent",
+      "fitz_ai/ingestion/diff/executor.py \u2014 discovered by agent",
+      "fitz_ai/ingestion/enrichment/pipeline.py \u2014 discovered by agent",
+      "tests/integration/cloud_fixtures.py \u2014 discovered by agent",
+      "tools/governance/eval_pipeline.py \u2014 discovered by agent",
+      "tools/governance/extract_features.py \u2014 discovered by agent",
+      "fitz_ai/cli/commands/eval.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/token_provider.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/base.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/certificates.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/m2m.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/api_key.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/composite.py \u2014 discovered by agent",
+      "fitz_ai/core/paths/workspace.py \u2014 discovered by agent"
+    ],
+    "needed_artifacts": [
+      "fitz_ai/llm/instrumentation/token_counter.py \u2014 Implements TokenCounterBenchmark hook to track LLM token usage for chat, embed, and vision methods",
+      "fitz_ai/llm/instrumentation/__init__.py \u2014 Exports the token counter functionality"
+    ],
+    "assumptions": [
+      {
+        "assumption": "The existing provider interfaces can be instrumented without modification to avoid breaking changes",
+        "impact": "If we cannot properly wrap the methods, token tracking will fail or be incomplete",
+        "confidence": "high"
+      },
+      {
+        "assumption": "The tiktoken library will provide accurate token counting for all supported LLMs",
+        "impact": "Inaccurate token counts would lead to incorrect cost calculations and usage tracking",
+        "confidence": "medium"
+      },
+      {
+        "assumption": "Model information (name, tier) is not exposed through current provider interfaces but can be accessed via configuration or context",
+        "impact": "Without model details, we cannot provide accurate pricing insights, only raw token usage",
+        "confidence": "high"
+      },
+      {
+        "assumption": "The InstrumentedProxy and BenchmarkHook infrastructure in fitz_ai/core/instrumentation.py is sufficient for implementing the tracking system",
+        "impact": "If this infrastructure is inadequate, we'll need to build custom instrumentation logic which increases complexity and risk",
+        "confidence": "high"
+      },
+      {
+        "assumption": "Per-query token tracking is sufficient for the use case based on 'how many LLM tokens each query costs'",
+        "impact": "If aggregated metrics are needed instead, we'll need to modify the approach significantly to accumulate data over time",
+        "confidence": "medium"
+      },
+      {
+        "assumption": "The current provider implementations return strings or lists of floats as defined in base interfaces",
+        "impact": "If streaming responses or other return types exist that aren't accounted for, token counting logic may break",
+        "confidence": "high"
+      }
+    ]
+  },
+  "architecture_design": {
+    "architecture": {
+      "approaches": [
+        {
+          "name": "InstrumentedProxy Hook Approach",
+          "description": "Leverage existing InstrumentedProxy system with custom BenchmarkHook to track token usage via request/response payload sizes",
+          "pros": [
+            "Uses existing infrastructure without modifying base protocols",
+            "Minimal code changes required",
+            "Follows established patterns in core/instrumentation.py"
+          ],
+          "cons": [
+            "Requires careful hook implementation to accurately count tokens",
+            "May need additional logic to distinguish between input/output tokens"
+          ],
+          "complexity": "medium",
+          "best_for": [
+            "Production systems with existing instrumentation infrastructure",
+            "Teams wanting minimal architectural changes"
+          ]
+        },
+        {
+          "name": "Answer Extension Approach",
+          "description": "Extend Answer dataclass to include token usage fields and modify wrapping logic to populate them",
+          "pros": [
+            "Clear separation of concerns for token tracking data",
+            "Easy to access token metrics from answers",
+            "Backwards compatible with existing code"
+          ],
+          "cons": [
+            "Requires updating answer creation logic throughout the system",
+            "May need changes in serialization/deserialization paths"
+          ],
+          "complexity": "medium",
+          "best_for": [
+            "Systems where token usage data is frequently accessed from Answer objects",
+            "Projects prioritizing explicit data modeling over infrastructure reuse"
+          ]
+        }
+      ],
+      "recommended": "InstrumentedProxy Hook Approach",
+      "reasoning": "The InstrumentedProxy Hook Approach is correct because it directly leverages the existing instrumentation system already present in core/instrumentation.py which provides the exact mechanism needed for token tracking through on_call_start/on_call_end hooks. The other approach of extending Answer is wrong because: 1) It unnecessarily modifies an existing data structure when the infrastructure already exists to capture metrics, and 2) It creates tight coupling between token counting logic and answer representation rather than using the established hook pattern.",
+      "key_tradeoffs": {
+        "instrumentation_vs_modification": "Using existing InstrumentedProxy system avoids modifying core interfaces and LLM client structure, but requires implementing custom hook logic for token counting",
+        "minimal_extension_vs_full_rearchitecture": "Extending Answer class with token fields is a minimal change compared to redefining entire provider interfaces"
+      },
+      "technology_considerations": [
+        "InstrumentedProxy system in fitz_ai/core/instrumentation.py for hook-based instrumentation",
+        "BenchmarkHook implementation for capturing request/response sizes during LLM calls",
+        "Dataclass extension approach for Answer class to add token usage fields without breaking existing contracts",
+        "Direct provider instantiation via factory functions instead of LLM client modification"
+      ],
+      "scope_statement": "Implement a custom BenchmarkHook for tracking LLM request/response payload sizes to estimate token usage, wrap LLM providers with InstrumentedProxy, and optionally extend Answer class minimally to store token counts when needed."
+    },
+    "design": {
+      "adrs": [
+        {
+          "title": "ADR: Token Usage Tracking via Instrumentation System",
+          "context": "The need to track token usage for LLM calls without modifying existing provider interfaces or core architecture components.",
+          "decision": "Leverage the existing InstrumentedProxy system and BenchmarkHook protocol to instrument LLM providers and track request/response sizes as a proxy for token counts.",
+          "rationale": "This approach avoids modifying existing base protocols (ChatProvider, EmbeddingProvider) that are already well-defined and stable. It uses the extant instrumentation infrastructure which is designed specifically for this kind of observability. The solution maintains backward compatibility while enabling token tracking through hook-based metrics collection.",
+          "consequences": [
+            "Minimal code changes required - only new BenchmarkHook implementation and wrapping logic",
+            "No breaking changes to existing LLM provider interfaces or Answer class structure",
+            "Token tracking becomes opt-in via hook registration rather than mandatory architectural change",
+            "Maintains separation of concerns with instrumentation being a cross-cutting concern"
+          ],
+          "alternatives_considered": [
+            "Alternative 1 \u2014 Modify base provider protocols to add token tracking parameters \u2013 rejected because it would break existing implementations and require extensive refactoring of all provider classes.",
+            "Alternative 2 \u2014 Create new token-aware interfaces \u2013 rejected because current protocols are sufficient; the concern can be addressed via composition through InstrumentedProxy.",
+            "Alternative 3 \u2014 Add explicit token fields to Answer class \u2013 rejected because this introduces unnecessary complexity when metrics can be collected externally and only needed for display or analytics purposes."
+          ]
+        },
+        {
+          "title": "ADR: InstrumentedProxy Hook Approach vs Direct Answer Extension",
+          "context": "Choosing between instrumenting through existing hooks in core/instrumentation.py versus extending the Answer data structure for token tracking",
+          "decision": "Use InstrumentedProxy Hook Approach with on_call_start/on_call_end hooks",
+          "rationale": "The hook approach directly leverages existing infrastructure and provides clean separation of concerns. The alternative of modifying Answer creates tight coupling between metrics collection and core data structures, making the system less flexible for future instrumentation needs.",
+          "consequences": [
+            "Token counting logic becomes decoupled from answer structure - this reduces cohesion but increases modularity",
+            "Instrumentation infrastructure must be robust enough to handle all call types (OpenAIChat, OpenAIEmbedding, AnthropicChat) without modification",
+            "The v1 implementation excludes direct integration with Answer data structures that might provide more detailed token breakdowns"
+          ],
+          "alternatives_considered": [
+            "Extending Answer class with token_count fields - this would tightly couple metrics collection to core data models and make the system less extensible",
+            "Creating a separate token tracking service - this would add complexity without leveraging existing infrastructure that already handles hooks appropriately"
+          ]
+        }
+      ],
+      "components": [
+        {
+          "name": "FitzKragEngine",
+          "purpose": "Knowledge Routing Augmented Generation engine",
+          "responsibilities": [
+            "Load and initialize components for query processing",
+            "Route queries through appropriate retrieval strategies",
+            "Generate answers using LLMs and contextual information"
+          ],
+          "interfaces": [
+            "answer(query: Query) -> Answer",
+            "ask(question: str, top_k: Optional[int], conversation_context: Optional[ConversationContext]) -> Answer",
+            "query(question: str, conversation_context: Optional[ConversationContext]) -> Answer"
+          ],
+          "dependencies": [
+            "ChatProvider",
+            "EmbeddingProvider",
+            "RerankProvider",
+            "VisionProvider"
+          ]
+        },
+        {
+          "name": "InstrumentedProxy",
+          "purpose": "Wraps objects to instrument method calls for benchmarking and caching",
+          "responsibilities": [
+            "Track performance metrics of LLM provider methods",
+            "Enable hook-based instrumentation for observability"
+          ],
+          "interfaces": [
+            "__init__(target: Any, layer: str, plugin_name: str, methods_to_track: set[str] | None)",
+            "_wrap_method(method: Callable, method_name: str) -> Callable"
+          ],
+          "dependencies": [
+            "BenchmarkHook",
+            "CachingHook"
+          ]
+        },
+        {
+          "name": "OpenAIChat",
+          "purpose": "Wrapper for OpenAI chat completion API",
+          "responsibilities": [
+            "Handle chat requests using OpenAI's models",
+            "Stream responses from the LLM"
+          ],
+          "interfaces": [
+            "__init__(auth: AuthProvider, model: str | None, tier: ModelTier, base_url: str | None, models: dict[ModelTier, str] | None) -> None",
+            "chat(messages: list[dict[str, Any]]) -> str",
+            "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+          ],
+          "dependencies": [
+            "AuthProvider"
+          ]
+        },
+        {
+          "name": "OpenAIEmbedding",
+          "purpose": "Wrapper for OpenAI embedding API",
+          "responsibilities": [
+            "Generate embeddings for text using OpenAI models",
+            "Support batch operations and dimension specification"
+          ],
+          "interfaces": [
+            "__init__(auth: AuthProvider, model: str | None, dimensions: int | None, base_url: str | None) -> None",
+            "embed(text: str) -> list[float]",
+            "embed_batch(texts: list[str]) -> list[list[float]]",
+            "dimensions() -> int"
+          ],
+          "dependencies": [
+            "AuthProvider"
+          ]
+        },
+        {
+          "name": "AnthropicChat",
+          "purpose": "Wrapper for Anthropic Claude API",
+          "responsibilities": [
+            "Handle chat requests using Anthropic's models",
+            "Stream responses from the LLM"
+          ],
+          "interfaces": [
+            "__init__(auth: AuthProvider, model: str | None, tier: ModelTier, models: dict[ModelTier, str] | None) -> None",
+            "chat(messages: list[dict[str, Any]]) -> str",
+            "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+          ],
+          "dependencies": [
+            "AuthProvider"
+          ]
+        },
+        {
+          "name": "CohereChat",
+          "purpose": "Wrapper for Cohere API chat completion",
+          "responsibilities": [
+            "Handle chat requests using Cohere models",
+            "Stream responses from the LLM"
+          ],
+          "interfaces": [
+            "__init__(auth: AuthProvider, model: str | None, tier: ModelTier, models: dict[ModelTier, str] | None) -> None",
+            "chat(messages: list[dict[str, Any]]) -> str",
+            "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+          ],
+          "dependencies": [
+            "AuthProvider"
+          ]
+        },
+        {
+          "name": "OllamaChat",
+          "purpose": "Wrapper for Ollama local LLM API",
+          "responsibilities": [
+            "Handle chat requests using locally running models via HTTP",
+            "Stream responses from the LLM"
+          ],
+          "interfaces": [
+            "__init__(model: str | None, tier: ModelTier, base_url: str | None, models: dict[ModelTier, str] | None) -> None",
+            "chat(messages: list[dict[str, Any]]) -> str",
+            "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+          ],
+          "dependencies": []
+        },
+        {
+          "name": "BenchmarkHook",
+          "purpose": "Protocol for instrumenting method calls with performance tracking",
+          "responsibilities": [
+            "Capture start and end events of LLM provider calls",
+            "Record metrics like request/response sizes"
+          ],
+          "interfaces": [
+            "on_call_start(layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any",
+            "on_call_end(context: Any, result: Any, error: Exception | None) -> None"
+          ],
+          "dependencies": []
+        }
+      ],
+      "data_model": {
+        "Answer": [
+          "content: str",
+          "provenance: Provenance"
+        ],
+        "Provenance": [
+          "sources: list[str]",
+          "confidence_score: float"
+        ],
+        "RerankResult": [
+          "document: str",
+          "score: float"
+        ]
+      },
+      "integration_points": [
+        "ExternalSystem \u2014 InstrumentedProxy system in fitz_ai/core/instrumentation.py can be used to wrap LLM providers for token counting",
+        "ExternalSystem \u2014 BenchmarkHook protocol in fitz_ai/core/instrumentation.py can be implemented to capture request/response sizes for token tracking",
+        "ExternalSystem \u2014 Existing provider protocols (ChatProvider, EmbeddingProvider) in fitz_ai/llm/providers/base.py don't need modification and can be instrumented directly"
+      ],
+      "artifacts": [
+        {
+          "filename": "fitz_ai/core/instrumentation.py",
+          "content": "from __future__ import annotations\nfrom functools import wraps\nfrom logging import getLogger\nfrom threading import Lock\nfrom typing import Any, Callable, Iterator, Protocol, Set, Type, TYPE_CHECKING\n\nclass BenchmarkHook(Protocol):\n  def on_call_start(self, layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any: ...\n  def on_call_end(self, context: Any, result: Any, error: Exception | None) -> None: ...\n\nclass CachingHook(Protocol):\n  def get_cached_result(self, layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any: ...\n  def cache_result(self, layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict, result: Any) -> None: ...\n\ndef register_hook(hook: BenchmarkHook) -> None:\n  pass\n\ndef unregister_hook(hook: BenchmarkHook) -> None:\n  pass\n\ndef clear_hooks() -> None:\n  pass\n\ndef has_hooks() -> bool:\n  return False\n\ndef get_hooks() -> list[BenchmarkHook]:\n  return []\n\nclass InstrumentedProxy:\n  def __init__(self, target: Any, layer: str, plugin_name: str, methods_to_track: Set[str] | None = None):\n    self._target = target\n    self._layer = layer\n    self._plugin_name = plugin_name\n    self._methods_to_track = methods_to_track or set()\n\n  def __getattr__(self, name: str) -> Any:\n    attr = getattr(self._target, name)\n    if name in self._methods_to_track and callable(attr):\n      return self._wrap_method(attr, name)\n    return attr\n\n  def _wrap_method(self, method: Callable, method_name: str) -> Callable:\n    @wraps(method)\n    def wrapper(*args, **kwargs):\n      # Simplified for demo purposes - real implementation would include hooks etc.\n      return method(*args, **kwargs)\n    return wrapper\n\n  def __repr__(self) -> str:\n    return repr(self._target)\n\n  def __str__(self) -> str:\n    return str(self._target)\n\ndef maybe_wrap(target: Any, layer: str, plugin_name: str, methods_to_track: Set[str] | None = None) -> Any:\n  if hasattr(target, \"__class__\"):\n    return InstrumentedProxy(target, layer, plugin_name, methods_to_track)\n  return target\n\ndef wrap(target: Any, layer: str, plugin_name: str, methods_to_track: Set[str] | None = None) -> InstrumentedProxy:\n  return InstrumentedProxy(target, layer, plugin_name, methods_to_track)\n",
+          "purpose": "Provides the instrumentation system for benchmarking plugin performance, including hook registration and proxy wrapping mechanisms used for token counting."
+        },
+        {
+          "filename": "fitz_ai/core/answer.py",
+          "content": "from dataclasses import dataclass\nfrom typing import Any\n\ndataclass\nclass Answer:\n  content: str\n  provenance: list[Any]\n  constraints: Any | None = None\n  \n  def __post_init__(self):\n    if self.constraints is None:\n      self.constraints = {}\n",
+          "purpose": "Defines the Answer dataclass that represents structured responses from the knowledge engine, which may need minimal extension for token tracking."
+        },
+        {
+          "filename": "fitz_ai/llm/providers/base.py",
+          "content": "from __future__ import annotations\nfrom dataclasses import dataclass\nfrom typing import Any, Protocol, Iterator\n\nclass RerankResult:\n  document: str\n  relevance_score: float\n\n\nclass ChatProvider(Protocol):\n  def chat(self, messages: list[dict[str, Any]]) -> str: ...\n\nclass StreamingChatProvider(Protocol):\n  def chat_stream(self, messages: list[dict[str, Any]]) -> Iterator[str]: ...\n\nclass EmbeddingProvider(Protocol):\n  def embed(self, text: str) -> list[float]: ...\n  def embed_batch(self, texts: list[str]) -> list[list[float]]: ...\n  def dimensions(self) -> int: ...\n\nclass RerankProvider(Protocol):\n  def rerank(self, query: str, documents: list[str], top_n: int | None) -> list[RerankResult]: ...\n\nclass VisionProvider(Protocol):\n  def describe_image(self, image_base64: str, prompt: str | None) -> str: ...",
+          "purpose": "Defines the base protocol interfaces for LLM providers including ChatProvider which returns strings rather than structured objects."
+        }
+      ]
+    }
+  },
+  "architecture": {
+    "approaches": [
+      {
+        "name": "InstrumentedProxy Hook Approach",
+        "description": "Leverage existing InstrumentedProxy system with custom BenchmarkHook to track token usage via request/response payload sizes",
+        "pros": [
+          "Uses existing infrastructure without modifying base protocols",
+          "Minimal code changes required",
+          "Follows established patterns in core/instrumentation.py"
+        ],
+        "cons": [
+          "Requires careful hook implementation to accurately count tokens",
+          "May need additional logic to distinguish between input/output tokens"
+        ],
+        "complexity": "medium",
+        "best_for": [
+          "Production systems with existing instrumentation infrastructure",
+          "Teams wanting minimal architectural changes"
+        ]
+      },
+      {
+        "name": "Answer Extension Approach",
+        "description": "Extend Answer dataclass to include token usage fields and modify wrapping logic to populate them",
+        "pros": [
+          "Clear separation of concerns for token tracking data",
+          "Easy to access token metrics from answers",
+          "Backwards compatible with existing code"
+        ],
+        "cons": [
+          "Requires updating answer creation logic throughout the system",
+          "May need changes in serialization/deserialization paths"
+        ],
+        "complexity": "medium",
+        "best_for": [
+          "Systems where token usage data is frequently accessed from Answer objects",
+          "Projects prioritizing explicit data modeling over infrastructure reuse"
+        ]
+      }
+    ],
+    "recommended": "InstrumentedProxy Hook Approach",
+    "reasoning": "The InstrumentedProxy Hook Approach is correct because it directly leverages the existing instrumentation system already present in core/instrumentation.py which provides the exact mechanism needed for token tracking through on_call_start/on_call_end hooks. The other approach of extending Answer is wrong because: 1) It unnecessarily modifies an existing data structure when the infrastructure already exists to capture metrics, and 2) It creates tight coupling between token counting logic and answer representation rather than using the established hook pattern.",
+    "key_tradeoffs": {
+      "instrumentation_vs_modification": "Using existing InstrumentedProxy system avoids modifying core interfaces and LLM client structure, but requires implementing custom hook logic for token counting",
+      "minimal_extension_vs_full_rearchitecture": "Extending Answer class with token fields is a minimal change compared to redefining entire provider interfaces"
+    },
+    "technology_considerations": [
+      "InstrumentedProxy system in fitz_ai/core/instrumentation.py for hook-based instrumentation",
+      "BenchmarkHook implementation for capturing request/response sizes during LLM calls",
+      "Dataclass extension approach for Answer class to add token usage fields without breaking existing contracts",
+      "Direct provider instantiation via factory functions instead of LLM client modification"
+    ],
+    "scope_statement": "Implement a custom BenchmarkHook for tracking LLM request/response payload sizes to estimate token usage, wrap LLM providers with InstrumentedProxy, and optionally extend Answer class minimally to store token counts when needed."
+  },
+  "design": {
+    "adrs": [
+      {
+        "title": "ADR: Token Usage Tracking via Instrumentation System",
+        "context": "The need to track token usage for LLM calls without modifying existing provider interfaces or core architecture components.",
+        "decision": "Leverage the existing InstrumentedProxy system and BenchmarkHook protocol to instrument LLM providers and track request/response sizes as a proxy for token counts.",
+        "rationale": "This approach avoids modifying existing base protocols (ChatProvider, EmbeddingProvider) that are already well-defined and stable. It uses the extant instrumentation infrastructure which is designed specifically for this kind of observability. The solution maintains backward compatibility while enabling token tracking through hook-based metrics collection.",
+        "consequences": [
+          "Minimal code changes required - only new BenchmarkHook implementation and wrapping logic",
+          "No breaking changes to existing LLM provider interfaces or Answer class structure",
+          "Token tracking becomes opt-in via hook registration rather than mandatory architectural change",
+          "Maintains separation of concerns with instrumentation being a cross-cutting concern"
+        ],
+        "alternatives_considered": [
+          "Alternative 1 \u2014 Modify base provider protocols to add token tracking parameters \u2013 rejected because it would break existing implementations and require extensive refactoring of all provider classes.",
+          "Alternative 2 \u2014 Create new token-aware interfaces \u2013 rejected because current protocols are sufficient; the concern can be addressed via composition through InstrumentedProxy.",
+          "Alternative 3 \u2014 Add explicit token fields to Answer class \u2013 rejected because this introduces unnecessary complexity when metrics can be collected externally and only needed for display or analytics purposes."
+        ]
+      },
+      {
+        "title": "ADR: InstrumentedProxy Hook Approach vs Direct Answer Extension",
+        "context": "Choosing between instrumenting through existing hooks in core/instrumentation.py versus extending the Answer data structure for token tracking",
+        "decision": "Use InstrumentedProxy Hook Approach with on_call_start/on_call_end hooks",
+        "rationale": "The hook approach directly leverages existing infrastructure and provides clean separation of concerns. The alternative of modifying Answer creates tight coupling between metrics collection and core data structures, making the system less flexible for future instrumentation needs.",
+        "consequences": [
+          "Token counting logic becomes decoupled from answer structure - this reduces cohesion but increases modularity",
+          "Instrumentation infrastructure must be robust enough to handle all call types (OpenAIChat, OpenAIEmbedding, AnthropicChat) without modification",
+          "The v1 implementation excludes direct integration with Answer data structures that might provide more detailed token breakdowns"
+        ],
+        "alternatives_considered": [
+          "Extending Answer class with token_count fields - this would tightly couple metrics collection to core data models and make the system less extensible",
+          "Creating a separate token tracking service - this would add complexity without leveraging existing infrastructure that already handles hooks appropriately"
+        ]
+      }
+    ],
+    "components": [
+      {
+        "name": "FitzKragEngine",
+        "purpose": "Knowledge Routing Augmented Generation engine",
+        "responsibilities": [
+          "Load and initialize components for query processing",
+          "Route queries through appropriate retrieval strategies",
+          "Generate answers using LLMs and contextual information"
+        ],
+        "interfaces": [
+          "answer(query: Query) -> Answer",
+          "ask(question: str, top_k: Optional[int], conversation_context: Optional[ConversationContext]) -> Answer",
+          "query(question: str, conversation_context: Optional[ConversationContext]) -> Answer"
+        ],
+        "dependencies": [
+          "ChatProvider",
+          "EmbeddingProvider",
+          "RerankProvider",
+          "VisionProvider"
+        ]
+      },
+      {
+        "name": "InstrumentedProxy",
+        "purpose": "Wraps objects to instrument method calls for benchmarking and caching",
+        "responsibilities": [
+          "Track performance metrics of LLM provider methods",
+          "Enable hook-based instrumentation for observability"
+        ],
+        "interfaces": [
+          "__init__(target: Any, layer: str, plugin_name: str, methods_to_track: set[str] | None)",
+          "_wrap_method(method: Callable, method_name: str) -> Callable"
+        ],
+        "dependencies": [
+          "BenchmarkHook",
+          "CachingHook"
+        ]
+      },
+      {
+        "name": "OpenAIChat",
+        "purpose": "Wrapper for OpenAI chat completion API",
+        "responsibilities": [
+          "Handle chat requests using OpenAI's models",
+          "Stream responses from the LLM"
+        ],
+        "interfaces": [
+          "__init__(auth: AuthProvider, model: str | None, tier: ModelTier, base_url: str | None, models: dict[ModelTier, str] | None) -> None",
+          "chat(messages: list[dict[str, Any]]) -> str",
+          "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+        ],
+        "dependencies": [
+          "AuthProvider"
+        ]
+      },
+      {
+        "name": "OpenAIEmbedding",
+        "purpose": "Wrapper for OpenAI embedding API",
+        "responsibilities": [
+          "Generate embeddings for text using OpenAI models",
+          "Support batch operations and dimension specification"
+        ],
+        "interfaces": [
+          "__init__(auth: AuthProvider, model: str | None, dimensions: int | None, base_url: str | None) -> None",
+          "embed(text: str) -> list[float]",
+          "embed_batch(texts: list[str]) -> list[list[float]]",
+          "dimensions() -> int"
+        ],
+        "dependencies": [
+          "AuthProvider"
+        ]
+      },
+      {
+        "name": "AnthropicChat",
+        "purpose": "Wrapper for Anthropic Claude API",
+        "responsibilities": [
+          "Handle chat requests using Anthropic's models",
+          "Stream responses from the LLM"
+        ],
+        "interfaces": [
+          "__init__(auth: AuthProvider, model: str | None, tier: ModelTier, models: dict[ModelTier, str] | None) -> None",
+          "chat(messages: list[dict[str, Any]]) -> str",
+          "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+        ],
+        "dependencies": [
+          "AuthProvider"
+        ]
+      },
+      {
+        "name": "CohereChat",
+        "purpose": "Wrapper for Cohere API chat completion",
+        "responsibilities": [
+          "Handle chat requests using Cohere models",
+          "Stream responses from the LLM"
+        ],
+        "interfaces": [
+          "__init__(auth: AuthProvider, model: str | None, tier: ModelTier, models: dict[ModelTier, str] | None) -> None",
+          "chat(messages: list[dict[str, Any]]) -> str",
+          "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+        ],
+        "dependencies": [
+          "AuthProvider"
+        ]
+      },
+      {
+        "name": "OllamaChat",
+        "purpose": "Wrapper for Ollama local LLM API",
+        "responsibilities": [
+          "Handle chat requests using locally running models via HTTP",
+          "Stream responses from the LLM"
+        ],
+        "interfaces": [
+          "__init__(model: str | None, tier: ModelTier, base_url: str | None, models: dict[ModelTier, str] | None) -> None",
+          "chat(messages: list[dict[str, Any]]) -> str",
+          "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+        ],
+        "dependencies": []
+      },
+      {
+        "name": "BenchmarkHook",
+        "purpose": "Protocol for instrumenting method calls with performance tracking",
+        "responsibilities": [
+          "Capture start and end events of LLM provider calls",
+          "Record metrics like request/response sizes"
+        ],
+        "interfaces": [
+          "on_call_start(layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any",
+          "on_call_end(context: Any, result: Any, error: Exception | None) -> None"
+        ],
+        "dependencies": []
+      }
+    ],
+    "data_model": {
+      "Answer": [
+        "content: str",
+        "provenance: Provenance"
+      ],
+      "Provenance": [
+        "sources: list[str]",
+        "confidence_score: float"
+      ],
+      "RerankResult": [
+        "document: str",
+        "score: float"
+      ]
+    },
+    "integration_points": [
+      "ExternalSystem \u2014 InstrumentedProxy system in fitz_ai/core/instrumentation.py can be used to wrap LLM providers for token counting",
+      "ExternalSystem \u2014 BenchmarkHook protocol in fitz_ai/core/instrumentation.py can be implemented to capture request/response sizes for token tracking",
+      "ExternalSystem \u2014 Existing provider protocols (ChatProvider, EmbeddingProvider) in fitz_ai/llm/providers/base.py don't need modification and can be instrumented directly"
+    ],
+    "artifacts": [
+      {
+        "filename": "fitz_ai/core/instrumentation.py",
+        "content": "from __future__ import annotations\nfrom functools import wraps\nfrom logging import getLogger\nfrom threading import Lock\nfrom typing import Any, Callable, Iterator, Protocol, Set, Type, TYPE_CHECKING\n\nclass BenchmarkHook(Protocol):\n  def on_call_start(self, layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any: ...\n  def on_call_end(self, context: Any, result: Any, error: Exception | None) -> None: ...\n\nclass CachingHook(Protocol):\n  def get_cached_result(self, layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any: ...\n  def cache_result(self, layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict, result: Any) -> None: ...\n\ndef register_hook(hook: BenchmarkHook) -> None:\n  pass\n\ndef unregister_hook(hook: BenchmarkHook) -> None:\n  pass\n\ndef clear_hooks() -> None:\n  pass\n\ndef has_hooks() -> bool:\n  return False\n\ndef get_hooks() -> list[BenchmarkHook]:\n  return []\n\nclass InstrumentedProxy:\n  def __init__(self, target: Any, layer: str, plugin_name: str, methods_to_track: Set[str] | None = None):\n    self._target = target\n    self._layer = layer\n    self._plugin_name = plugin_name\n    self._methods_to_track = methods_to_track or set()\n\n  def __getattr__(self, name: str) -> Any:\n    attr = getattr(self._target, name)\n    if name in self._methods_to_track and callable(attr):\n      return self._wrap_method(attr, name)\n    return attr\n\n  def _wrap_method(self, method: Callable, method_name: str) -> Callable:\n    @wraps(method)\n    def wrapper(*args, **kwargs):\n      # Simplified for demo purposes - real implementation would include hooks etc.\n      return method(*args, **kwargs)\n    return wrapper\n\n  def __repr__(self) -> str:\n    return repr(self._target)\n\n  def __str__(self) -> str:\n    return str(self._target)\n\ndef maybe_wrap(target: Any, layer: str, plugin_name: str, methods_to_track: Set[str] | None = None) -> Any:\n  if hasattr(target, \"__class__\"):\n    return InstrumentedProxy(target, layer, plugin_name, methods_to_track)\n  return target\n\ndef wrap(target: Any, layer: str, plugin_name: str, methods_to_track: Set[str] | None = None) -> InstrumentedProxy:\n  return InstrumentedProxy(target, layer, plugin_name, methods_to_track)\n",
+        "purpose": "Provides the instrumentation system for benchmarking plugin performance, including hook registration and proxy wrapping mechanisms used for token counting."
+      },
+      {
+        "filename": "fitz_ai/core/answer.py",
+        "content": "from dataclasses import dataclass\nfrom typing import Any\n\ndataclass\nclass Answer:\n  content: str\n  provenance: list[Any]\n  constraints: Any | None = None\n  \n  def __post_init__(self):\n    if self.constraints is None:\n      self.constraints = {}\n",
+        "purpose": "Defines the Answer dataclass that represents structured responses from the knowledge engine, which may need minimal extension for token tracking."
+      },
+      {
+        "filename": "fitz_ai/llm/providers/base.py",
+        "content": "from __future__ import annotations\nfrom dataclasses import dataclass\nfrom typing import Any, Protocol, Iterator\n\nclass RerankResult:\n  document: str\n  relevance_score: float\n\n\nclass ChatProvider(Protocol):\n  def chat(self, messages: list[dict[str, Any]]) -> str: ...\n\nclass StreamingChatProvider(Protocol):\n  def chat_stream(self, messages: list[dict[str, Any]]) -> Iterator[str]: ...\n\nclass EmbeddingProvider(Protocol):\n  def embed(self, text: str) -> list[float]: ...\n  def embed_batch(self, texts: list[str]) -> list[list[float]]: ...\n  def dimensions(self) -> int: ...\n\nclass RerankProvider(Protocol):\n  def rerank(self, query: str, documents: list[str], top_n: int | None) -> list[RerankResult]: ...\n\nclass VisionProvider(Protocol):\n  def describe_image(self, image_base64: str, prompt: str | None) -> str: ...",
+        "purpose": "Defines the base protocol interfaces for LLM providers including ChatProvider which returns strings rather than structured objects."
+      }
+    ]
+  },
+  "roadmap_risk": {
+    "roadmap": {
+      "phases": [
+        {
+          "number": 0,
+          "name": "Read Before Writing",
+          "objective": "Verify integration points by reading source",
+          "deliverables": [
+            "Verified: fitz_ai/llm/providers/base.py",
+            "Verified: fitz_ai/llm/providers/openai.py",
+            "Verified: fitz_ai/llm/providers/anthropic.py",
+            "Verified: fitz_ai/llm/providers/cohere.py",
+            "Verified: fitz_ai/llm/providers/ollama.py"
+          ],
+          "dependencies": [],
+          "estimated_complexity": "low",
+          "key_risks": [],
+          "verification_command": "pytest fitz_ai/llm/providers/test_base.py fitz_ai/llm/providers/test_openai.py fitz_ai/llm/providers/test_anthropic.py fitz_ai/llm/providers/test_cohere.py fitz_ai/llm/providers/test_ollama.py",
+          "estimated_effort": "~15 min"
+        },
+        {
+          "number": 2,
+          "name": "Identify Relevant Providers",
+          "objective": "Determine which LLM providers support token counting in their chat responses",
+          "deliverables": [
+            "List of supported providers (OpenAI, Anthropic, Cohere, Ollama) that return token usage data"
+          ],
+          "dependencies": [],
+          "estimated_complexity": "low",
+          "key_risks": [
+            "Providers may not support token counting or have inconsistent response formats"
+          ],
+          "verification_command": "pytest tests/test_token_tracking.py -v",
+          "estimated_effort": "~1 hour"
+        },
+        {
+          "number": 3,
+          "name": "Define Token Usage Interface",
+          "objective": "Create a standardized data structure for token usage information",
+          "deliverables": [
+            "TokenUsage dataclass in fitz_ai/core/token_usage.py with prompt_tokens, completion_tokens, total_tokens fields"
+          ],
+          "dependencies": [
+            2
+          ],
+          "estimated_complexity": "low",
+          "key_risks": [
+            "Data structure may not be compatible with existing response handling patterns"
+          ],
+          "verification_command": "pytest tests/test_token_usage.py -v",
+          "estimated_effort": "~2 hours"
+        },
+        {
+          "number": 4,
+          "name": "Augment Provider Responses",
+          "objective": "Modify chat methods in supported providers to include token usage information in responses",
+          "deliverables": [
+            "Updated OpenAIChat.chat() with token parsing and wrapping",
+            "Updated AnthropicChat.chat() with token parsing and wrapping",
+            "Updated CohereChat.chat() with token parsing and wrapping",
+            "Updated OllamaChat.chat() with token parsing and wrapping"
+          ],
+          "dependencies": [
+            2,
+            3
+          ],
+          "estimated_complexity": "high",
+          "key_risks": [
+            "Different providers may have different response structures for token usage data"
+          ],
+          "verification_command": "pytest tests/test_provider_token_tracking.py -v",
+          "estimated_effort": "~6 hours"
+        },
+        {
+          "number": 5,
+          "name": "Integrate with Logging System",
+          "objective": "Add logging of token usage metrics to existing logging infrastructure",
+          "deliverables": [
+            "Modified FitzKragEngine.answer() method that logs prompt/completion tokens using structured logging",
+            "Enhanced fitz.py SDK to log token usage per query"
+          ],
+          "dependencies": [
+            3,
+            4
+          ],
+          "estimated_complexity": "medium",
+          "key_risks": [
+            "Logging may interfere with performance or produce excessive output"
+          ],
+          "verification_command": "pytest tests/test_logging_integration.py -v",
+          "estimated_effort": "~3 hours"
+        },
+        {
+          "number": 6,
+          "name": "Instrumentation Integration (Optional)",
+          "objective": "Leverage existing instrumentation hooks to automatically track token usage across all supported providers",
+          "deliverables": [
+            "TokenTrackingHook implementation that intercepts chat method calls and extracts token data",
+            "Registration of hook in core instrumentation system"
+          ],
+          "dependencies": [
+            3,
+            4
+          ],
+          "estimated_complexity": "medium",
+          "key_risks": [
+            "Instrumentation may add overhead or conflict with other hooks"
+          ],
+          "verification_command": "pytest tests/test_instrumentation_integration.py -v",
+          "estimated_effort": "~4 hours"
+        }
+      ],
+      "critical_path": [
+        0,
+        2,
+        3,
+        5
+      ],
+      "parallel_opportunities": [
+        [
+          4,
+          6
+        ]
+      ],
+      "total_phases": 6
+    },
+    "risk": {
+      "risks": [
+        {
+          "category": "technical",
+          "description": "Token usage data may not be available or consistently formatted across all LLM providers, leading to incomplete tracking.",
+          "impact": "high",
+          "likelihood": "medium",
+          "mitigation": "Implement provider-specific parsing logic for each supported LLM client and add fallback handling when token counts are missing.",
+          "contingency": "Log a warning with the query ID and provider name if token usage cannot be extracted, but continue processing without interruption.",
+          "affected_phases": [
+            1,
+            3
+          ],
+          "verification": "Assert that all supported ChatProvider implementations return structured token data or gracefully handle missing fields"
+        },
+        {
+          "category": "technical",
+          "description": "Integrating with the existing instrumentation framework may introduce performance overhead due to additional hook execution.",
+          "impact": "medium",
+          "likelihood": "low",
+          "mitigation": "Make hook registration configurable and ensure minimal processing in on_call_end method by using lightweight data extraction only when enabled.",
+          "contingency": "Provide a flag to disable token tracking hooks at runtime so performance-sensitive deployments can skip this feature entirely.",
+          "affected_phases": [
+            1,
+            3
+          ],
+          "verification": "Assert that enabling/disabling instrumentation hook does not impact query latency beyond acceptable thresholds"
+        },
+        {
+          "category": "quality",
+          "description": "The new TokenUsage dataclass may introduce breaking changes if used in APIs expecting raw response types from LLM providers.",
+          "impact": "high",
+          "likelihood": "medium",
+          "mitigation": "Ensure backward compatibility by returning wrapped responses that include both token usage and original content, or provide opt-in conversion methods.",
+          "contingency": "Use versioned interfaces or optional fields to preserve existing behavior while introducing new functionality.",
+          "affected_phases": [
+            1,
+            3
+          ],
+          "verification": "Assert that all ChatProvider implementations maintain compatibility with existing API consumers after token usage addition"
+        },
+        {
+          "category": "external",
+          "description": "Some LLM providers like Ollama may not expose token counts via their standard APIs, requiring custom middleware or proxy solutions.",
+          "impact": "medium",
+          "likelihood": "high",
+          "mitigation": "Document limitations for unsupported providers and provide clear guidance on implementing token counting through third-party integrations if necessary.",
+          "contingency": "Implement provider-specific configuration options that allow users to specify how token counts are collected or disabled for non-compliant providers.",
+          "affected_phases": [
+            1,
+            3
+          ],
+          "verification": "Assert that unsupported providers gracefully fall back to logging a message indicating lack of support rather than failing"
+        }
+      ],
+      "overall_risk_level": "high",
+      "recommended_contingencies": [
+        "Implement a configurable toggle for enabling/disabling token tracking hooks at runtime to allow performance-sensitive deployments to disable them without code changes",
+        "Add comprehensive unit tests covering all supported providers' response parsing logic, including edge cases where token usage data is missing or malformed",
+        "Create detailed documentation outlining which LLM providers support token counting and how to enable it for each one"
+      ]
+    }
+  },
+  "roadmap": {
+    "phases": [
+      {
+        "number": 0,
+        "name": "Read Before Writing",
+        "objective": "Verify integration points by reading source",
+        "deliverables": [
+          "Verified: fitz_ai/llm/providers/base.py",
+          "Verified: fitz_ai/llm/providers/openai.py",
+          "Verified: fitz_ai/llm/providers/anthropic.py",
+          "Verified: fitz_ai/llm/providers/cohere.py",
+          "Verified: fitz_ai/llm/providers/ollama.py"
+        ],
+        "dependencies": [],
+        "estimated_complexity": "low",
+        "key_risks": [],
+        "verification_command": "pytest fitz_ai/llm/providers/test_base.py fitz_ai/llm/providers/test_openai.py fitz_ai/llm/providers/test_anthropic.py fitz_ai/llm/providers/test_cohere.py fitz_ai/llm/providers/test_ollama.py",
+        "estimated_effort": "~15 min"
+      },
+      {
+        "number": 2,
+        "name": "Identify Relevant Providers",
+        "objective": "Determine which LLM providers support token counting in their chat responses",
+        "deliverables": [
+          "List of supported providers (OpenAI, Anthropic, Cohere, Ollama) that return token usage data"
+        ],
+        "dependencies": [],
+        "estimated_complexity": "low",
+        "key_risks": [
+          "Providers may not support token counting or have inconsistent response formats"
+        ],
+        "verification_command": "pytest tests/test_token_tracking.py -v",
+        "estimated_effort": "~1 hour"
+      },
+      {
+        "number": 3,
+        "name": "Define Token Usage Interface",
+        "objective": "Create a standardized data structure for token usage information",
+        "deliverables": [
+          "TokenUsage dataclass in fitz_ai/core/token_usage.py with prompt_tokens, completion_tokens, total_tokens fields"
+        ],
+        "dependencies": [
+          2
+        ],
+        "estimated_complexity": "low",
+        "key_risks": [
+          "Data structure may not be compatible with existing response handling patterns"
+        ],
+        "verification_command": "pytest tests/test_token_usage.py -v",
+        "estimated_effort": "~2 hours"
+      },
+      {
+        "number": 4,
+        "name": "Augment Provider Responses",
+        "objective": "Modify chat methods in supported providers to include token usage information in responses",
+        "deliverables": [
+          "Updated OpenAIChat.chat() with token parsing and wrapping",
+          "Updated AnthropicChat.chat() with token parsing and wrapping",
+          "Updated CohereChat.chat() with token parsing and wrapping",
+          "Updated OllamaChat.chat() with token parsing and wrapping"
+        ],
+        "dependencies": [
+          2,
+          3
+        ],
+        "estimated_complexity": "high",
+        "key_risks": [
+          "Different providers may have different response structures for token usage data"
+        ],
+        "verification_command": "pytest tests/test_provider_token_tracking.py -v",
+        "estimated_effort": "~6 hours"
+      },
+      {
+        "number": 5,
+        "name": "Integrate with Logging System",
+        "objective": "Add logging of token usage metrics to existing logging infrastructure",
+        "deliverables": [
+          "Modified FitzKragEngine.answer() method that logs prompt/completion tokens using structured logging",
+          "Enhanced fitz.py SDK to log token usage per query"
+        ],
+        "dependencies": [
+          3,
+          4
+        ],
+        "estimated_complexity": "medium",
+        "key_risks": [
+          "Logging may interfere with performance or produce excessive output"
+        ],
+        "verification_command": "pytest tests/test_logging_integration.py -v",
+        "estimated_effort": "~3 hours"
+      },
+      {
+        "number": 6,
+        "name": "Instrumentation Integration (Optional)",
+        "objective": "Leverage existing instrumentation hooks to automatically track token usage across all supported providers",
+        "deliverables": [
+          "TokenTrackingHook implementation that intercepts chat method calls and extracts token data",
+          "Registration of hook in core instrumentation system"
+        ],
+        "dependencies": [
+          3,
+          4
+        ],
+        "estimated_complexity": "medium",
+        "key_risks": [
+          "Instrumentation may add overhead or conflict with other hooks"
+        ],
+        "verification_command": "pytest tests/test_instrumentation_integration.py -v",
+        "estimated_effort": "~4 hours"
+      }
+    ],
+    "critical_path": [
+      0,
+      2,
+      3,
+      5
+    ],
+    "parallel_opportunities": [
+      [
+        4,
+        6
+      ]
+    ],
+    "total_phases": 6
+  },
+  "risk": {
+    "risks": [
+      {
+        "category": "technical",
+        "description": "Token usage data may not be available or consistently formatted across all LLM providers, leading to incomplete tracking.",
+        "impact": "high",
+        "likelihood": "medium",
+        "mitigation": "Implement provider-specific parsing logic for each supported LLM client and add fallback handling when token counts are missing.",
+        "contingency": "Log a warning with the query ID and provider name if token usage cannot be extracted, but continue processing without interruption.",
+        "affected_phases": [
+          1,
+          3
+        ],
+        "verification": "Assert that all supported ChatProvider implementations return structured token data or gracefully handle missing fields"
+      },
+      {
+        "category": "technical",
+        "description": "Integrating with the existing instrumentation framework may introduce performance overhead due to additional hook execution.",
+        "impact": "medium",
+        "likelihood": "low",
+        "mitigation": "Make hook registration configurable and ensure minimal processing in on_call_end method by using lightweight data extraction only when enabled.",
+        "contingency": "Provide a flag to disable token tracking hooks at runtime so performance-sensitive deployments can skip this feature entirely.",
+        "affected_phases": [
+          1,
+          3
+        ],
+        "verification": "Assert that enabling/disabling instrumentation hook does not impact query latency beyond acceptable thresholds"
+      },
+      {
+        "category": "quality",
+        "description": "The new TokenUsage dataclass may introduce breaking changes if used in APIs expecting raw response types from LLM providers.",
+        "impact": "high",
+        "likelihood": "medium",
+        "mitigation": "Ensure backward compatibility by returning wrapped responses that include both token usage and original content, or provide opt-in conversion methods.",
+        "contingency": "Use versioned interfaces or optional fields to preserve existing behavior while introducing new functionality.",
+        "affected_phases": [
+          1,
+          3
+        ],
+        "verification": "Assert that all ChatProvider implementations maintain compatibility with existing API consumers after token usage addition"
+      },
+      {
+        "category": "external",
+        "description": "Some LLM providers like Ollama may not expose token counts via their standard APIs, requiring custom middleware or proxy solutions.",
+        "impact": "medium",
+        "likelihood": "high",
+        "mitigation": "Document limitations for unsupported providers and provide clear guidance on implementing token counting through third-party integrations if necessary.",
+        "contingency": "Implement provider-specific configuration options that allow users to specify how token counts are collected or disabled for non-compliant providers.",
+        "affected_phases": [
+          1,
+          3
+        ],
+        "verification": "Assert that unsupported providers gracefully fall back to logging a message indicating lack of support rather than failing"
+      }
+    ],
+    "overall_risk_level": "high",
+    "recommended_contingencies": [
+      "Implement a configurable toggle for enabling/disabling token tracking hooks at runtime to allow performance-sensitive deployments to disable them without code changes",
+      "Add comprehensive unit tests covering all supported providers' response parsing logic, including edge cases where token usage data is missing or malformed",
+      "Create detailed documentation outlining which LLM providers support token counting and how to enable it for each one"
+    ]
+  }
+}

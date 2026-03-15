@@ -1,0 +1,16 @@
+{
+  "run": 5,
+  "elapsed_s": 839.7,
+  "success": true,
+  "recommended": "Approach A: Provider-Level Token Tracking",
+  "plan_size": 60445,
+  "stage_timings": {
+    "agent_gathering": 6.89000000001397,
+    "implementation_check": 2.625,
+    "context": 54.171999999991385,
+    "architecture_design": 709.1089999999967,
+    "roadmap_risk": 63.625,
+    "coherence_check": 3.23499999998603
+  },
+  "error": null
+}

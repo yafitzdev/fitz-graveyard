@@ -1,0 +1,890 @@
+{
+  "context": {
+    "project_description": "A multi-provider LLM client system that supports various AI services including chat, embedding, reranking, and vision capabilities with authentication and instrumentation features.",
+    "key_requirements": [
+      "Support multiple LLM providers (OpenAI, Anthropic, Cohere, Ollama) through standardized protocols",
+      "Provide unified interfaces for chat, streaming chat, embeddings, reranking, and vision capabilities",
+      "Implement proper authentication handling via AuthProvider protocol with support for API keys, M2M tokens, and composite auth",
+      "Enable instrumentation and benchmarking of LLM calls through BenchmarkHook protocol"
+    ],
+    "constraints": [
+      "Must maintain backward compatibility with existing provider implementations",
+      "All provider interfaces must conform to the base protocols defined in fitz_ai/llm/providers/base.py",
+      "Authentication providers must implement the AuthProvider protocol with get_headers and get_request_kwargs methods",
+      "Instrumentation hooks must be pluggable and support benchmarking of LLM operations"
+    ],
+    "existing_context": "fitz_ai/llm/providers/base.py, fitz_ai/llm/providers/openai.py, fitz_ai/llm/providers/anthropic.py, fitz_ai/llm/providers/cohere.py, fitz_ai/llm/providers/ollama.py, fitz_ai/core/instrumentation.py, fitz_ai/llm/auth/base.py, fitz_ai/llm/auth/api_key.py, fitz_ai/llm/auth/m2m.py, fitz_ai/llm/auth/composite.py",
+    "stakeholders": [],
+    "scope_boundaries": {
+      "in_scope": [],
+      "out_of_scope": []
+    },
+    "existing_files": [
+      "fitz_ai/llm/client.py \u2014 LLM client that orchestrates provider selection and instantiation",
+      "fitz_ai/llm/providers/base.py \u2014 discovered by agent",
+      "fitz_ai/llm/providers/openai.py \u2014 discovered by agent",
+      "fitz_ai/llm/providers/anthropic.py \u2014 discovered by agent",
+      "fitz_ai/llm/providers/cohere.py \u2014 discovered by agent",
+      "fitz_ai/llm/providers/ollama.py \u2014 discovered by agent",
+      "fitz_ai/core/instrumentation.py \u2014 discovered by agent",
+      "fitz_ai/logging/logger.py \u2014 discovered by agent",
+      "fitz_ai/logging/tags.py \u2014 discovered by agent",
+      "fitz_ai/engines/fitz_krag/engine.py \u2014 discovered by agent",
+      "fitz_ai/sdk/fitz.py \u2014 discovered by agent",
+      "fitz_ai/api/routes/query.py \u2014 discovered by agent",
+      "fitz_ai/engines/fitz_krag/ingestion/pipeline.py \u2014 discovered by agent",
+      "fitz_ai/ingestion/diff/executor.py \u2014 discovered by agent",
+      "fitz_ai/ingestion/enrichment/pipeline.py \u2014 discovered by agent",
+      "tests/integration/cloud_fixtures.py \u2014 discovered by agent",
+      "tools/governance/eval_pipeline.py \u2014 discovered by agent",
+      "tools/governance/extract_features.py \u2014 discovered by agent",
+      "fitz_ai/cli/commands/eval.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/token_provider.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/base.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/certificates.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/m2m.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/api_key.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/composite.py \u2014 discovered by agent"
+    ],
+    "needed_artifacts": [],
+    "assumptions": [
+      {
+        "assumption": "The analysis is focused on extracting specific fields from a provided text snippet that contains a function call to read a file",
+        "impact": "If this assumption is wrong and the actual analysis requires understanding of the fitz_ai/llm/client.py file contents, then no meaningful extraction would occur. If correct, the analysis can proceed with field extraction as requested.",
+        "confidence": "high"
+      },
+      {
+        "assumption": "The provided text snippet represents a complete and accurate example of how to extract fields from an analysis",
+        "impact": "If this assumption is wrong and additional context or formatting is needed for proper parsing, then the extracted JSON may not be valid or complete. If correct, the extraction process will work as intended.",
+        "confidence": "high"
+      },
+      {
+        "assumption": "The text snippet includes an instruction to extract 'assumptions' specifically from a given analysis",
+        "impact": "If this assumption is wrong and the instruction was different (e.g., for extracting other fields like 'requirements', 'constraints', etc.), then incorrect data would be extracted. If correct, only assumptions will be extracted.",
+        "confidence": "high"
+      }
+    ]
+  },
+  "architecture_design": {
+    "architecture": {
+      "approaches": [
+        {
+          "name": "Approach A: Provider-Level Token Tracking",
+          "description": "Modifies each LLM provider to capture token usage from their respective API responses and exposes it through the existing instrumentation system.",
+          "pros": [
+            "Leverages existing architecture and instrumentation system",
+            "Minimal code changes required",
+            "Uses existing patterns like InstrumentedProxy for wrapping"
+          ],
+          "cons": [
+            "Most common failure is inconsistent token data extraction across providers",
+            "Providers must return structured responses with usage fields (Ollama doesn't support this)",
+            "Requires careful implementation to handle provider-specific response formats"
+          ],
+          "complexity": "medium",
+          "best_for": [
+            "Systems where existing instrumentation framework can be extended",
+            "When minimal disruption to current architecture is required"
+          ]
+        },
+        {
+          "name": "Approach B: Centralized Token Aggregation Service",
+          "description": "A standalone service that intercepts all LLM calls and tracks tokens centrally through extensive refactoring.",
+          "pros": [
+            "One place for all token data collection",
+            "Centralized control over metrics"
+          ],
+          "cons": [
+            "High complexity leads to brittle integrations",
+            "Performance overhead from centralization",
+            "Complex integration points across multiple components",
+            "Requires significant refactoring of client creation logic"
+          ],
+          "complexity": "high",
+          "best_for": [
+            "Systems where a dedicated metrics collection layer is desired",
+            "When complete architectural control over token tracking is needed"
+          ]
+        }
+      ],
+      "recommended": "Approach A: Provider-Level Token Tracking",
+      "reasoning": "Approach A is recommended because it's the most straightforward and least disruptive to existing architecture. All provider types already have access to API responses containing token data, and the instrumentation system is designed exactly for this type of observability. The existing InstrumentedProxy pattern shows how wrapping can be cleanly done without breaking changes. Approach B and C are over-engineered - they add unnecessary complexity when the existing instrumentation framework already supports what's needed for basic token tracking.",
+      "key_tradeoffs": {
+        "provider_level_tracking_vs_centralized_service": "Approach A (Provider-Level) offers minimal disruption and leverages existing infrastructure with very low operational burden, while Approach B (Centralized Service) provides single-source tracking but introduces high complexity and maintenance overhead",
+        "instrumentation_hooks_vs_direct_provider_modification": "Using instrumentation hooks for token tracking misuses the framework's intended purpose of benchmarking rather than business data collection, creating confusion and potential performance issues",
+        "uniform_api_handling_vs_provider_specific_logic": "Approach A assumes all providers return structured responses with usage fields, but Ollama lacks native token reporting making this assumption invalid"
+      },
+      "technology_considerations": [
+        "OpenAI API response parsing using response.usage.total_tokens field for consistent token extraction",
+        "Anthropic API response parsing requiring extraction of response.usage.input_tokens and response.usage.output_tokens fields",
+        "Cohere API response parsing with response.meta.billed_units.input_tokens access pattern",
+        "Ollama provider handling needs special consideration as it does not provide native token reporting capability",
+        "InstrumentedProxy system modification required to support token usage metadata passing through hooks",
+        "TokenUsage dataclass implementation needed since it's marked as 'NOT FOUND IN CODEBASE' in contract sheet",
+        "Answer.metadata field extension for storing token usage information with add_token_usage/get_token_usage methods"
+      ],
+      "scope_statement": "This task involves minimal changes to existing provider implementations (OpenAI, Anthropic, Cohere, Ollama) to extract token usage from API responses and integrate with the existing instrumentation system. It requires careful attention to provider-specific API response formats but doesn't involve re-architecting any systems."
+    },
+    "design": {
+      "adrs": [
+        {
+          "title": "ADR: Provider-Level Token Tracking Integration",
+          "context": "The need to track token usage across different LLM providers while maintaining backward compatibility and leveraging existing observability infrastructure.",
+          "decision": "Implement provider-level token extraction within each concrete provider (OpenAI, Anthropic, Cohere, Ollama) that parses API responses for token data and communicates this through the existing InstrumentedProxy instrumentation system via context passing mechanisms in hooks.",
+          "rationale": "This approach leverages the established architecture patterns including InstrumentedProxy for observability and follows existing codebase conventions. It minimizes disruption to provider interfaces while enabling consistent tracking across all supported LLM backends. The design uses existing hook infrastructure (on_call_start/on_call_end) to capture and aggregate token data from API responses.",
+          "consequences": [
+            "Minimal changes required to core provider implementations",
+            "Maintains backward compatibility with existing method signatures returning str",
+            "Leverages existing instrumentation system which is already designed for cross-call context passing",
+            "Provides consistent tracking mechanism across all LLM providers that support token reporting",
+            "Requires careful handling of providers without native token reporting (like Ollama) through graceful degradation"
+          ],
+          "alternatives_considered": [
+            "Alternative B: Centralized Token Aggregation Service - rejected because it would require extensive refactoring of client creation logic and introduce architectural overhead with complex integration points",
+            "Alternative C: Decorator-Based Instrumentation Layer - rejected because it requires significant changes to existing provider interfaces and instantiation patterns, potentially breaking backward compatibility"
+          ]
+        },
+        {
+          "title": "ADR: TokenUsage Data Model Implementation",
+          "context": "Need for a structured way to represent token usage data (input/output/total tokens) that can be stored in Answer metadata and aggregated across multiple LLM calls.",
+          "decision": "Create a new TokenUsage dataclass that encapsulates input_tokens, output_tokens, and total_tokens fields to provide consistent representation of token consumption metrics.",
+          "rationale": "The existing Answer class already supports extensible metadata through dict storage. A dedicated TokenUsage dataclass provides type safety for token tracking operations while maintaining compatibility with the answer's metadata system. This approach follows established patterns in the codebase where structured data is used to enhance core objects without modifying their interfaces.",
+          "consequences": [
+            "Adds new data model that must be implemented before token tracking can work",
+            "Provides consistent interface for handling different LLM provider response formats",
+            "Enables aggregation of tokens across multiple calls within a single Answer object",
+            "Supports future expansion with additional token-related metrics if needed"
+          ],
+          "alternatives_considered": [
+            "Alternative: Use raw dict instead of dataclass - rejected because it lacks type safety and clear field definitions for token usage tracking",
+            "Alternative: Extend Answer metadata format in-place - rejected because it would require changes to answer construction logic and might break existing consumers expecting specific metadata structures"
+          ]
+        },
+        {
+          "title": "ADR: Provider-Specific Token Extraction Logic Implementation",
+          "context": "Different LLM providers return token data in different formats within their API responses, requiring provider-specific parsing logic while maintaining consistency.",
+          "decision": "Implement provider-specific token extraction methods within each concrete provider class that parse their respective API response objects for usage information and convert to standardized TokenUsage format.",
+          "rationale": "Each provider has its own unique API response structure with token data in different locations (e.g., OpenAI uses response.usage.total_tokens, Cohere uses response.meta.billed_units.input_tokens). Implementing provider-specific parsing logic ensures accurate extraction while keeping the core logic encapsulated within each provider's responsibility. This follows existing patterns in the codebase where providers implement their own custom parsing for API responses.",
+          "consequences": [
+            "Each provider requires its own token parsing implementation",
+            "Ensures correct handling of different response formats from various LLM services",
+            "Maintains separation of concerns by keeping parsing logic within respective provider classes",
+            "Provides clear error handling and graceful degradation when tokens are not available"
+          ],
+          "alternatives_considered": [
+            "Alternative: Shared utility function for all providers - rejected because it would require significant refactoring to make API responses accessible to a common parser, violating existing architectural boundaries",
+            "Alternative: Centralized response parsing layer - rejected because it would introduce complexity with new integration points and break the encapsulation of each provider's implementation"
+          ]
+        },
+        {
+          "title": "ADR: Graceful Handling of Providers Without Native Token Reporting",
+          "context": "The Ollama provider does not natively report token usage in its API responses, but other providers like OpenAI, Anthropic, and Cohere do.",
+          "decision": "Implement graceful degradation for LLM providers that don't support native token reporting by logging a warning when attempting to extract tokens and defaulting to zero or skipped tracking rather than failing the entire operation.",
+          "rationale": "This approach maintains system reliability while providing clear feedback about which providers cannot contribute token data. It prevents breaking downstream functionality (like Answer construction) when encountering providers without token reporting capabilities, following established error handling patterns in the codebase where errors are logged and operations continue with defaults rather than crashing.",
+          "consequences": [
+            "Provides reliable operation even with providers that lack native token support",
+            "Logs clear warnings about providers unable to contribute token data for debugging purposes",
+            "Maintains consistent API behavior across all LLM backends regardless of their capabilities",
+            "Enables future enhancement when Ollama or other providers add token reporting capability"
+          ],
+          "alternatives_considered": [
+            "Alternative: Fail loudly on missing tokens - rejected because it would break functionality for users relying on Ollama and similar providers that don't provide native token reporting",
+            "Alternative: Skip tracking entirely for unsupported providers - rejected because this makes debugging more difficult and provides no visibility into which providers are limiting observability capabilities"
+          ]
+        }
+      ],
+      "components": [
+        {
+          "name": "OpenAIChat",
+          "purpose": "Synchronous chat completion for OpenAI models",
+          "responsibilities": [
+            "Make HTTP calls to OpenAI API using openai SDK",
+            "Parse response objects to extract token usage data (total_tokens)",
+            "Return string responses while capturing token metadata"
+          ],
+          "interfaces": [
+            "chat(messages: list[dict[str, Any]]) -> str",
+            "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+          ],
+          "dependencies": [
+            "AuthProvider",
+            "InstrumentedProxy"
+          ]
+        },
+        {
+          "name": "AnthropicChat",
+          "purpose": "Synchronous chat completion for Anthropic models",
+          "responsibilities": [
+            "Make HTTP calls to Anthropic API using anthropic SDK",
+            "Parse response objects to extract token usage data (input_tokens, output_tokens)",
+            "Return string responses while capturing token metadata"
+          ],
+          "interfaces": [
+            "chat(messages: list[dict[str, Any]]) -> str",
+            "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+          ],
+          "dependencies": [
+            "AuthProvider",
+            "InstrumentedProxy"
+          ]
+        },
+        {
+          "name": "CohereChat",
+          "purpose": "Synchronous chat completion for Cohere models",
+          "responsibilities": [
+            "Make HTTP calls to Cohere API using cohere SDK",
+            "Parse response objects to extract token usage data (meta.billed_units.input_tokens)",
+            "Return string responses while capturing token metadata"
+          ],
+          "interfaces": [
+            "chat(messages: list[dict[str, Any]]) -> str",
+            "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+          ],
+          "dependencies": [
+            "AuthProvider",
+            "InstrumentedProxy"
+          ]
+        },
+        {
+          "name": "OllamaChat",
+          "purpose": "Synchronous chat completion for Ollama models",
+          "responsibilities": [
+            "Make HTTP calls to Ollama API using httpx",
+            "Handle lack of native token reporting by logging errors or defaulting",
+            "Return string responses while attempting token metadata capture"
+          ],
+          "interfaces": [
+            "chat(messages: list[dict[str, Any]]) -> str",
+            "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+          ],
+          "dependencies": [
+            "InstrumentedProxy"
+          ]
+        },
+        {
+          "name": "Answer",
+          "purpose": "Paradigm-agnostic answer representation with metadata support",
+          "responsibilities": [
+            "Store text responses and optional metadata including token usage",
+            "Provide methods to add and retrieve token usage information"
+          ],
+          "interfaces": [
+            "add_token_usage(token_usage: TokenUsage) -> None",
+            "get_token_usage() -> TokenUsage"
+          ],
+          "dependencies": [
+            "TokenUsage"
+          ]
+        },
+        {
+          "name": "InstrumentedProxy",
+          "purpose": "Wrapper that intercepts method calls to inject instrumentation logic for benchmarking and observability",
+          "responsibilities": [
+            "Wrap target objects and intercept method calls",
+            "Pass call context through registered hooks (on_call_start, on_call_end)",
+            "Support enhanced metadata passing for token tracking"
+          ],
+          "interfaces": [
+            "_wrap_method(method: Callable, method_name: str) -> Callable",
+            "__getattr__(name: str) -> Any"
+          ],
+          "dependencies": [
+            "BenchmarkHook",
+            "CachingHook"
+          ]
+        }
+      ],
+      "data_model": {
+        "TokenUsage": [
+          "input_tokens: int",
+          "output_tokens: int",
+          "total_tokens: int"
+        ],
+        "Answer": [
+          "text: str",
+          "metadata: dict[str, Any]"
+        ]
+      },
+      "integration_points": [
+        "InstrumentedProxy \u2014 wraps LLM provider methods to capture token usage through on_call_end hooks",
+        "Answer \u2014 receives token usage data via add_token_usage() method and stores it in metadata field"
+      ],
+      "artifacts": [
+        {
+          "filename": "fitz_ai/core/answer.py",
+          "content": "from dataclasses import dataclass, field\nfrom typing import Any, Dict\n\ntoken_usage: type[\"TokenUsage\"] = None  # Will be defined below\n\nclass TokenUsage:\n    def __init__(self, input_tokens: int, output_tokens: int, total_tokens: int):\n        self.input_tokens = input_tokens\n        self.output_tokens = output_tokens\n        self.total_tokens = total_tokens\n\n@dataclass\nclass Answer:\n    text: str | None = None\n    metadata: Dict[str, Any] = field(default_factory=dict)\n    \n    def __post_init__(self) -> None:\n        if self.text is None:\n            raise ValueError(\"Answer text cannot be None\")\n    \n    def add_token_usage(self, token_usage: \"TokenUsage\") -> None:\n        if 'token_usage' not in self.metadata:\n            self.metadata['token_usage'] = {\n                'input': 0,\n                'output': 0,\n                'total': 0\n            }\n        \n        existing = self.metadata['token_usage']\n        self.metadata['token_usage'] = {\n            'input': existing['input'] + token_usage.input_tokens,\n            'output': existing['output'] + token_usage.output_tokens,\n            'total': existing['total'] + token_usage.total_tokens\n        }\n    \n    def get_token_usage(self) -> \"TokenUsage\":\n        if 'token_usage' not in self.metadata:\n            return TokenUsage(0, 0, 0)\n        \n        usage = self.metadata['token_usage']\n        return TokenUsage(\n            usage['input'],\n            usage['output'],\n            usage['total']\n        )",
+          "purpose": "Core Answer dataclass with token usage tracking capabilities - extends existing answer structure to include metadata for tracking LLM token consumption"
+        },
+        {
+          "filename": "fitz_ai/core/answer.py",
+          "content": "from dataclasses import dataclass, field\nfrom typing import Any, Dict\n\ntoken_usage: type[\"TokenUsage\"] = None  # Will be defined below\n\nclass TokenUsage:\n    def __init__(self, input_tokens: int, output_tokens: int, total_tokens: int):\n        self.input_tokens = input_tokens\n        self.output_tokens = output_tokens\n        self.total_tokens = total_tokens\n\n@dataclass\nclass Answer:\n    text: str | None = None\n    metadata: Dict[str, Any] = field(default_factory=dict)\n    \n    def __post_init__(self) -> None:\n        if self.text is None:\n            raise ValueError(\"Answer text cannot be None\")\n    \n    def add_token_usage(self, token_usage: \"TokenUsage\") -> None:\n        if 'token_usage' not in self.metadata:\n            self.metadata['token_usage'] = {\n                'input': 0,\n                'output': 0,\n                'total': 0\n            }\n        \n        existing = self.metadata['token_usage']\n        self.metadata['token_usage'] = {\n            'input': existing['input'] + token_usage.input_tokens,\n            'output': existing['output'] + token_usage.output_tokens,\n            'total': existing['total'] + token_usage.total_tokens\n        }\n    \n    def get_token_usage(self) -> \"TokenUsage\":\n        if 'token_usage' not in self.metadata:\n            return TokenUsage(0, 0, 0)\n        \n        usage = self.metadata['token_usage']\n        return TokenUsage(\n            usage['input'],\n            usage['output'],\n            usage['total']\n        )",
+          "purpose": "Core Answer dataclass with token usage tracking capabilities - extends existing answer structure to include metadata for tracking LLM token consumption"
+        }
+      ]
+    }
+  },
+  "architecture": {
+    "approaches": [
+      {
+        "name": "Approach A: Provider-Level Token Tracking",
+        "description": "Modifies each LLM provider to capture token usage from their respective API responses and exposes it through the existing instrumentation system.",
+        "pros": [
+          "Leverages existing architecture and instrumentation system",
+          "Minimal code changes required",
+          "Uses existing patterns like InstrumentedProxy for wrapping"
+        ],
+        "cons": [
+          "Most common failure is inconsistent token data extraction across providers",
+          "Providers must return structured responses with usage fields (Ollama doesn't support this)",
+          "Requires careful implementation to handle provider-specific response formats"
+        ],
+        "complexity": "medium",
+        "best_for": [
+          "Systems where existing instrumentation framework can be extended",
+          "When minimal disruption to current architecture is required"
+        ]
+      },
+      {
+        "name": "Approach B: Centralized Token Aggregation Service",
+        "description": "A standalone service that intercepts all LLM calls and tracks tokens centrally through extensive refactoring.",
+        "pros": [
+          "One place for all token data collection",
+          "Centralized control over metrics"
+        ],
+        "cons": [
+          "High complexity leads to brittle integrations",
+          "Performance overhead from centralization",
+          "Complex integration points across multiple components",
+          "Requires significant refactoring of client creation logic"
+        ],
+        "complexity": "high",
+        "best_for": [
+          "Systems where a dedicated metrics collection layer is desired",
+          "When complete architectural control over token tracking is needed"
+        ]
+      }
+    ],
+    "recommended": "Approach A: Provider-Level Token Tracking",
+    "reasoning": "Approach A is recommended because it's the most straightforward and least disruptive to existing architecture. All provider types already have access to API responses containing token data, and the instrumentation system is designed exactly for this type of observability. The existing InstrumentedProxy pattern shows how wrapping can be cleanly done without breaking changes. Approach B and C are over-engineered - they add unnecessary complexity when the existing instrumentation framework already supports what's needed for basic token tracking.",
+    "key_tradeoffs": {
+      "provider_level_tracking_vs_centralized_service": "Approach A (Provider-Level) offers minimal disruption and leverages existing infrastructure with very low operational burden, while Approach B (Centralized Service) provides single-source tracking but introduces high complexity and maintenance overhead",
+      "instrumentation_hooks_vs_direct_provider_modification": "Using instrumentation hooks for token tracking misuses the framework's intended purpose of benchmarking rather than business data collection, creating confusion and potential performance issues",
+      "uniform_api_handling_vs_provider_specific_logic": "Approach A assumes all providers return structured responses with usage fields, but Ollama lacks native token reporting making this assumption invalid"
+    },
+    "technology_considerations": [
+      "OpenAI API response parsing using response.usage.total_tokens field for consistent token extraction",
+      "Anthropic API response parsing requiring extraction of response.usage.input_tokens and response.usage.output_tokens fields",
+      "Cohere API response parsing with response.meta.billed_units.input_tokens access pattern",
+      "Ollama provider handling needs special consideration as it does not provide native token reporting capability",
+      "InstrumentedProxy system modification required to support token usage metadata passing through hooks",
+      "TokenUsage dataclass implementation needed since it's marked as 'NOT FOUND IN CODEBASE' in contract sheet",
+      "Answer.metadata field extension for storing token usage information with add_token_usage/get_token_usage methods"
+    ],
+    "scope_statement": "This task involves minimal changes to existing provider implementations (OpenAI, Anthropic, Cohere, Ollama) to extract token usage from API responses and integrate with the existing instrumentation system. It requires careful attention to provider-specific API response formats but doesn't involve re-architecting any systems."
+  },
+  "design": {
+    "adrs": [
+      {
+        "title": "ADR: Provider-Level Token Tracking Integration",
+        "context": "The need to track token usage across different LLM providers while maintaining backward compatibility and leveraging existing observability infrastructure.",
+        "decision": "Implement provider-level token extraction within each concrete provider (OpenAI, Anthropic, Cohere, Ollama) that parses API responses for token data and communicates this through the existing InstrumentedProxy instrumentation system via context passing mechanisms in hooks.",
+        "rationale": "This approach leverages the established architecture patterns including InstrumentedProxy for observability and follows existing codebase conventions. It minimizes disruption to provider interfaces while enabling consistent tracking across all supported LLM backends. The design uses existing hook infrastructure (on_call_start/on_call_end) to capture and aggregate token data from API responses.",
+        "consequences": [
+          "Minimal changes required to core provider implementations",
+          "Maintains backward compatibility with existing method signatures returning str",
+          "Leverages existing instrumentation system which is already designed for cross-call context passing",
+          "Provides consistent tracking mechanism across all LLM providers that support token reporting",
+          "Requires careful handling of providers without native token reporting (like Ollama) through graceful degradation"
+        ],
+        "alternatives_considered": [
+          "Alternative B: Centralized Token Aggregation Service - rejected because it would require extensive refactoring of client creation logic and introduce architectural overhead with complex integration points",
+          "Alternative C: Decorator-Based Instrumentation Layer - rejected because it requires significant changes to existing provider interfaces and instantiation patterns, potentially breaking backward compatibility"
+        ]
+      },
+      {
+        "title": "ADR: TokenUsage Data Model Implementation",
+        "context": "Need for a structured way to represent token usage data (input/output/total tokens) that can be stored in Answer metadata and aggregated across multiple LLM calls.",
+        "decision": "Create a new TokenUsage dataclass that encapsulates input_tokens, output_tokens, and total_tokens fields to provide consistent representation of token consumption metrics.",
+        "rationale": "The existing Answer class already supports extensible metadata through dict storage. A dedicated TokenUsage dataclass provides type safety for token tracking operations while maintaining compatibility with the answer's metadata system. This approach follows established patterns in the codebase where structured data is used to enhance core objects without modifying their interfaces.",
+        "consequences": [
+          "Adds new data model that must be implemented before token tracking can work",
+          "Provides consistent interface for handling different LLM provider response formats",
+          "Enables aggregation of tokens across multiple calls within a single Answer object",
+          "Supports future expansion with additional token-related metrics if needed"
+        ],
+        "alternatives_considered": [
+          "Alternative: Use raw dict instead of dataclass - rejected because it lacks type safety and clear field definitions for token usage tracking",
+          "Alternative: Extend Answer metadata format in-place - rejected because it would require changes to answer construction logic and might break existing consumers expecting specific metadata structures"
+        ]
+      },
+      {
+        "title": "ADR: Provider-Specific Token Extraction Logic Implementation",
+        "context": "Different LLM providers return token data in different formats within their API responses, requiring provider-specific parsing logic while maintaining consistency.",
+        "decision": "Implement provider-specific token extraction methods within each concrete provider class that parse their respective API response objects for usage information and convert to standardized TokenUsage format.",
+        "rationale": "Each provider has its own unique API response structure with token data in different locations (e.g., OpenAI uses response.usage.total_tokens, Cohere uses response.meta.billed_units.input_tokens). Implementing provider-specific parsing logic ensures accurate extraction while keeping the core logic encapsulated within each provider's responsibility. This follows existing patterns in the codebase where providers implement their own custom parsing for API responses.",
+        "consequences": [
+          "Each provider requires its own token parsing implementation",
+          "Ensures correct handling of different response formats from various LLM services",
+          "Maintains separation of concerns by keeping parsing logic within respective provider classes",
+          "Provides clear error handling and graceful degradation when tokens are not available"
+        ],
+        "alternatives_considered": [
+          "Alternative: Shared utility function for all providers - rejected because it would require significant refactoring to make API responses accessible to a common parser, violating existing architectural boundaries",
+          "Alternative: Centralized response parsing layer - rejected because it would introduce complexity with new integration points and break the encapsulation of each provider's implementation"
+        ]
+      },
+      {
+        "title": "ADR: Graceful Handling of Providers Without Native Token Reporting",
+        "context": "The Ollama provider does not natively report token usage in its API responses, but other providers like OpenAI, Anthropic, and Cohere do.",
+        "decision": "Implement graceful degradation for LLM providers that don't support native token reporting by logging a warning when attempting to extract tokens and defaulting to zero or skipped tracking rather than failing the entire operation.",
+        "rationale": "This approach maintains system reliability while providing clear feedback about which providers cannot contribute token data. It prevents breaking downstream functionality (like Answer construction) when encountering providers without token reporting capabilities, following established error handling patterns in the codebase where errors are logged and operations continue with defaults rather than crashing.",
+        "consequences": [
+          "Provides reliable operation even with providers that lack native token support",
+          "Logs clear warnings about providers unable to contribute token data for debugging purposes",
+          "Maintains consistent API behavior across all LLM backends regardless of their capabilities",
+          "Enables future enhancement when Ollama or other providers add token reporting capability"
+        ],
+        "alternatives_considered": [
+          "Alternative: Fail loudly on missing tokens - rejected because it would break functionality for users relying on Ollama and similar providers that don't provide native token reporting",
+          "Alternative: Skip tracking entirely for unsupported providers - rejected because this makes debugging more difficult and provides no visibility into which providers are limiting observability capabilities"
+        ]
+      }
+    ],
+    "components": [
+      {
+        "name": "OpenAIChat",
+        "purpose": "Synchronous chat completion for OpenAI models",
+        "responsibilities": [
+          "Make HTTP calls to OpenAI API using openai SDK",
+          "Parse response objects to extract token usage data (total_tokens)",
+          "Return string responses while capturing token metadata"
+        ],
+        "interfaces": [
+          "chat(messages: list[dict[str, Any]]) -> str",
+          "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+        ],
+        "dependencies": [
+          "AuthProvider",
+          "InstrumentedProxy"
+        ]
+      },
+      {
+        "name": "AnthropicChat",
+        "purpose": "Synchronous chat completion for Anthropic models",
+        "responsibilities": [
+          "Make HTTP calls to Anthropic API using anthropic SDK",
+          "Parse response objects to extract token usage data (input_tokens, output_tokens)",
+          "Return string responses while capturing token metadata"
+        ],
+        "interfaces": [
+          "chat(messages: list[dict[str, Any]]) -> str",
+          "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+        ],
+        "dependencies": [
+          "AuthProvider",
+          "InstrumentedProxy"
+        ]
+      },
+      {
+        "name": "CohereChat",
+        "purpose": "Synchronous chat completion for Cohere models",
+        "responsibilities": [
+          "Make HTTP calls to Cohere API using cohere SDK",
+          "Parse response objects to extract token usage data (meta.billed_units.input_tokens)",
+          "Return string responses while capturing token metadata"
+        ],
+        "interfaces": [
+          "chat(messages: list[dict[str, Any]]) -> str",
+          "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+        ],
+        "dependencies": [
+          "AuthProvider",
+          "InstrumentedProxy"
+        ]
+      },
+      {
+        "name": "OllamaChat",
+        "purpose": "Synchronous chat completion for Ollama models",
+        "responsibilities": [
+          "Make HTTP calls to Ollama API using httpx",
+          "Handle lack of native token reporting by logging errors or defaulting",
+          "Return string responses while attempting token metadata capture"
+        ],
+        "interfaces": [
+          "chat(messages: list[dict[str, Any]]) -> str",
+          "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+        ],
+        "dependencies": [
+          "InstrumentedProxy"
+        ]
+      },
+      {
+        "name": "Answer",
+        "purpose": "Paradigm-agnostic answer representation with metadata support",
+        "responsibilities": [
+          "Store text responses and optional metadata including token usage",
+          "Provide methods to add and retrieve token usage information"
+        ],
+        "interfaces": [
+          "add_token_usage(token_usage: TokenUsage) -> None",
+          "get_token_usage() -> TokenUsage"
+        ],
+        "dependencies": [
+          "TokenUsage"
+        ]
+      },
+      {
+        "name": "InstrumentedProxy",
+        "purpose": "Wrapper that intercepts method calls to inject instrumentation logic for benchmarking and observability",
+        "responsibilities": [
+          "Wrap target objects and intercept method calls",
+          "Pass call context through registered hooks (on_call_start, on_call_end)",
+          "Support enhanced metadata passing for token tracking"
+        ],
+        "interfaces": [
+          "_wrap_method(method: Callable, method_name: str) -> Callable",
+          "__getattr__(name: str) -> Any"
+        ],
+        "dependencies": [
+          "BenchmarkHook",
+          "CachingHook"
+        ]
+      }
+    ],
+    "data_model": {
+      "TokenUsage": [
+        "input_tokens: int",
+        "output_tokens: int",
+        "total_tokens: int"
+      ],
+      "Answer": [
+        "text: str",
+        "metadata: dict[str, Any]"
+      ]
+    },
+    "integration_points": [
+      "InstrumentedProxy \u2014 wraps LLM provider methods to capture token usage through on_call_end hooks",
+      "Answer \u2014 receives token usage data via add_token_usage() method and stores it in metadata field"
+    ],
+    "artifacts": [
+      {
+        "filename": "fitz_ai/core/answer.py",
+        "content": "from dataclasses import dataclass, field\nfrom typing import Any, Dict\n\ntoken_usage: type[\"TokenUsage\"] = None  # Will be defined below\n\nclass TokenUsage:\n    def __init__(self, input_tokens: int, output_tokens: int, total_tokens: int):\n        self.input_tokens = input_tokens\n        self.output_tokens = output_tokens\n        self.total_tokens = total_tokens\n\n@dataclass\nclass Answer:\n    text: str | None = None\n    metadata: Dict[str, Any] = field(default_factory=dict)\n    \n    def __post_init__(self) -> None:\n        if self.text is None:\n            raise ValueError(\"Answer text cannot be None\")\n    \n    def add_token_usage(self, token_usage: \"TokenUsage\") -> None:\n        if 'token_usage' not in self.metadata:\n            self.metadata['token_usage'] = {\n                'input': 0,\n                'output': 0,\n                'total': 0\n            }\n        \n        existing = self.metadata['token_usage']\n        self.metadata['token_usage'] = {\n            'input': existing['input'] + token_usage.input_tokens,\n            'output': existing['output'] + token_usage.output_tokens,\n            'total': existing['total'] + token_usage.total_tokens\n        }\n    \n    def get_token_usage(self) -> \"TokenUsage\":\n        if 'token_usage' not in self.metadata:\n            return TokenUsage(0, 0, 0)\n        \n        usage = self.metadata['token_usage']\n        return TokenUsage(\n            usage['input'],\n            usage['output'],\n            usage['total']\n        )",
+        "purpose": "Core Answer dataclass with token usage tracking capabilities - extends existing answer structure to include metadata for tracking LLM token consumption"
+      },
+      {
+        "filename": "fitz_ai/core/answer.py",
+        "content": "from dataclasses import dataclass, field\nfrom typing import Any, Dict\n\ntoken_usage: type[\"TokenUsage\"] = None  # Will be defined below\n\nclass TokenUsage:\n    def __init__(self, input_tokens: int, output_tokens: int, total_tokens: int):\n        self.input_tokens = input_tokens\n        self.output_tokens = output_tokens\n        self.total_tokens = total_tokens\n\n@dataclass\nclass Answer:\n    text: str | None = None\n    metadata: Dict[str, Any] = field(default_factory=dict)\n    \n    def __post_init__(self) -> None:\n        if self.text is None:\n            raise ValueError(\"Answer text cannot be None\")\n    \n    def add_token_usage(self, token_usage: \"TokenUsage\") -> None:\n        if 'token_usage' not in self.metadata:\n            self.metadata['token_usage'] = {\n                'input': 0,\n                'output': 0,\n                'total': 0\n            }\n        \n        existing = self.metadata['token_usage']\n        self.metadata['token_usage'] = {\n            'input': existing['input'] + token_usage.input_tokens,\n            'output': existing['output'] + token_usage.output_tokens,\n            'total': existing['total'] + token_usage.total_tokens\n        }\n    \n    def get_token_usage(self) -> \"TokenUsage\":\n        if 'token_usage' not in self.metadata:\n            return TokenUsage(0, 0, 0)\n        \n        usage = self.metadata['token_usage']\n        return TokenUsage(\n            usage['input'],\n            usage['output'],\n            usage['total']\n        )",
+        "purpose": "Core Answer dataclass with token usage tracking capabilities - extends existing answer structure to include metadata for tracking LLM token consumption"
+      }
+    ]
+  },
+  "roadmap_risk": {
+    "roadmap": {
+      "phases": [
+        {
+          "number": 0,
+          "name": "Read Before Writing",
+          "objective": "Verify integration points by reading source",
+          "deliverables": [
+            "Verified: fitz_ai/llm/providers/base.py",
+            "Verified: fitz_ai/llm/providers/openai.py",
+            "Verified: fitz_ai/llm/providers/anthropic.py",
+            "Verified: fitz_ai/llm/providers/cohere.py",
+            "Verified: fitz_ai/llm/providers/ollama.py"
+          ],
+          "dependencies": [],
+          "estimated_complexity": "low",
+          "key_risks": [],
+          "verification_command": "pytest fitz_ai/llm/providers/test_base.py fitz_ai/llm/providers/test_openai.py fitz_ai/llm/providers/test_anthropic.py fitz_ai/llm/providers/test_cohere.py fitz_ai/llm/providers/test_ollama.py -v",
+          "estimated_effort": "~15 min"
+        },
+        {
+          "number": 2,
+          "name": "Token Counter Module Implementation",
+          "objective": "Implement a lightweight token counter utility to estimate tokens from input/output messages without modifying provider classes directly",
+          "deliverables": [
+            "New file fitz_ai/llm/token_counter.py with TokenCounter utility",
+            "estimate_tokens function that computes approximate token counts from message content",
+            "estimate_output_tokens function that estimates output token usage"
+          ],
+          "dependencies": [],
+          "estimated_complexity": "low",
+          "key_risks": [
+            "Inaccurate token estimation due to model-specific differences in tokenization",
+            "Failure to handle complex message structures like multimodal content correctly"
+          ],
+          "verification_command": "pytest tests/test_token_counter.py -v",
+          "estimated_effort": "~1 hour"
+        },
+        {
+          "number": 3,
+          "name": "Instrumentation Hook Integration",
+          "objective": "Utilize existing instrumentation framework to track token usage without invasive changes to provider implementations",
+          "deliverables": [
+            "TokenTrackingHook class in fitz_ai/core/instrumentation.py that records token consumption",
+            "Integration of TokenTrackingHook with the hook system for tracking LLM calls"
+          ],
+          "dependencies": [
+            2
+          ],
+          "estimated_complexity": "medium",
+          "key_risks": [
+            "Performance overhead from wrapping methods in instrumentation layer",
+            "Incompatibility between different provider implementations and hook system"
+          ],
+          "verification_command": "pytest tests/test_instrumentation.py -v",
+          "estimated_effort": "~2 hours"
+        },
+        {
+          "number": 4,
+          "name": "Provider Wrapping and Factory Updates",
+          "objective": "Modify LLM factory initialization to wrap chat providers with instrumentation while maintaining existing behavior",
+          "deliverables": [
+            "Updated provider instantiation logic in fitz_ai/llm/factory.py to use InstrumentedProxy for tracking",
+            "Proper registration of TokenTrackingHook during provider creation"
+          ],
+          "dependencies": [
+            2,
+            3
+          ],
+          "estimated_complexity": "medium",
+          "key_risks": [
+            "Breaking changes in existing API behavior if hooks aren't properly implemented",
+            "Missing or incorrect tracking of required methods (chat, chat_stream)"
+          ],
+          "verification_command": "pytest tests/test_llm_factory.py -v",
+          "estimated_effort": "~1.5 hours"
+        }
+      ],
+      "critical_path": [
+        0,
+        2,
+        3,
+        5
+      ],
+      "parallel_opportunities": [
+        [
+          4,
+          6
+        ]
+      ],
+      "total_phases": 4
+    },
+    "risk": {
+      "risks": [
+        {
+          "category": "technical",
+          "description": "The proposed token counting implementation relies on heuristics (average tokens per character) which may not accurately reflect actual token usage, especially for models with different tokenization schemes.",
+          "impact": "high",
+          "likelihood": "medium",
+          "mitigation": "Implement model-specific token estimation tables or integrate with actual tokenizers from LLM SDKs where possible.",
+          "contingency": "Monitor token estimates against actual billing data and adjust heuristic formulas accordingly. Implement fallback to exact counting when available via SDK APIs.",
+          "affected_phases": [
+            1,
+            3
+          ],
+          "verification": "Compare estimated tokens vs real usage in a controlled test environment before production rollout"
+        },
+        {
+          "category": "technical",
+          "description": "Using InstrumentedProxy and hooks for tracking may introduce performance overhead during high-volume LLM calls.",
+          "impact": "medium",
+          "likelihood": "low",
+          "mitigation": "Implement asynchronous processing or batch recording of token counts to minimize impact on latency.",
+          "contingency": "Add configurable sampling rate (e.g., 10%) for token tracking in production environments and enable opt-in flag for detailed logging.",
+          "affected_phases": [
+            1,
+            3
+          ],
+          "verification": "Measure end-to-end query time with/without instrumentation at scale using load testing"
+        },
+        {
+          "category": "security",
+          "description": "Token tracking might inadvertently expose sensitive information contained in chat messages if not properly sanitized before logging.",
+          "impact": "high",
+          "likelihood": "low",
+          "mitigation": "Implement automatic sanitization of input/output data prior to token counting and logging, excluding PII or confidential content from logs.",
+          "contingency": "Use a redaction filter that removes sensitive fields (like user IDs) before passing messages into the TokenCounter. Log only metadata about tokens consumed rather than full conversation history.",
+          "affected_phases": [
+            1,
+            3
+          ],
+          "verification": "Review log outputs for compliance with data protection standards and run penetration testing on logging components"
+        },
+        {
+          "category": "resource",
+          "description": "Introducing a new TokenCounter module and modifying the hook system increases code complexity without clear performance gains in simple token counting.",
+          "impact": "medium",
+          "likelihood": "high",
+          "mitigation": "Keep implementation minimal by reusing existing hooks instead of duplicating functionality. Avoid unnecessary abstraction layers beyond what's required for tracking.",
+          "contingency": "Re-evaluate design if token estimation becomes more complex and consider simplifying to direct integration with LLM SDKs that already expose token usage metrics.",
+          "affected_phases": [
+            1,
+            3
+          ],
+          "verification": "Code review should confirm no redundant or overly abstracted logic is introduced into the core tracking mechanism"
+        }
+      ],
+      "overall_risk_level": "medium",
+      "recommended_contingencies": [
+        "Monitor token estimates against actual billing data and adjust heuristic formulas accordingly. Implement fallback to exact counting when available via SDK APIs.",
+        "Add configurable sampling rate (e.g., 10%) for token tracking in production environments and enable opt-in flag for detailed logging.",
+        "Use a redaction filter that removes sensitive fields (like user IDs) before passing messages into the TokenCounter. Log only metadata about tokens consumed rather than full conversation history."
+      ]
+    }
+  },
+  "roadmap": {
+    "phases": [
+      {
+        "number": 0,
+        "name": "Read Before Writing",
+        "objective": "Verify integration points by reading source",
+        "deliverables": [
+          "Verified: fitz_ai/llm/providers/base.py",
+          "Verified: fitz_ai/llm/providers/openai.py",
+          "Verified: fitz_ai/llm/providers/anthropic.py",
+          "Verified: fitz_ai/llm/providers/cohere.py",
+          "Verified: fitz_ai/llm/providers/ollama.py"
+        ],
+        "dependencies": [],
+        "estimated_complexity": "low",
+        "key_risks": [],
+        "verification_command": "pytest fitz_ai/llm/providers/test_base.py fitz_ai/llm/providers/test_openai.py fitz_ai/llm/providers/test_anthropic.py fitz_ai/llm/providers/test_cohere.py fitz_ai/llm/providers/test_ollama.py -v",
+        "estimated_effort": "~15 min"
+      },
+      {
+        "number": 2,
+        "name": "Token Counter Module Implementation",
+        "objective": "Implement a lightweight token counter utility to estimate tokens from input/output messages without modifying provider classes directly",
+        "deliverables": [
+          "New file fitz_ai/llm/token_counter.py with TokenCounter utility",
+          "estimate_tokens function that computes approximate token counts from message content",
+          "estimate_output_tokens function that estimates output token usage"
+        ],
+        "dependencies": [],
+        "estimated_complexity": "low",
+        "key_risks": [
+          "Inaccurate token estimation due to model-specific differences in tokenization",
+          "Failure to handle complex message structures like multimodal content correctly"
+        ],
+        "verification_command": "pytest tests/test_token_counter.py -v",
+        "estimated_effort": "~1 hour"
+      },
+      {
+        "number": 3,
+        "name": "Instrumentation Hook Integration",
+        "objective": "Utilize existing instrumentation framework to track token usage without invasive changes to provider implementations",
+        "deliverables": [
+          "TokenTrackingHook class in fitz_ai/core/instrumentation.py that records token consumption",
+          "Integration of TokenTrackingHook with the hook system for tracking LLM calls"
+        ],
+        "dependencies": [
+          2
+        ],
+        "estimated_complexity": "medium",
+        "key_risks": [
+          "Performance overhead from wrapping methods in instrumentation layer",
+          "Incompatibility between different provider implementations and hook system"
+        ],
+        "verification_command": "pytest tests/test_instrumentation.py -v",
+        "estimated_effort": "~2 hours"
+      },
+      {
+        "number": 4,
+        "name": "Provider Wrapping and Factory Updates",
+        "objective": "Modify LLM factory initialization to wrap chat providers with instrumentation while maintaining existing behavior",
+        "deliverables": [
+          "Updated provider instantiation logic in fitz_ai/llm/factory.py to use InstrumentedProxy for tracking",
+          "Proper registration of TokenTrackingHook during provider creation"
+        ],
+        "dependencies": [
+          2,
+          3
+        ],
+        "estimated_complexity": "medium",
+        "key_risks": [
+          "Breaking changes in existing API behavior if hooks aren't properly implemented",
+          "Missing or incorrect tracking of required methods (chat, chat_stream)"
+        ],
+        "verification_command": "pytest tests/test_llm_factory.py -v",
+        "estimated_effort": "~1.5 hours"
+      }
+    ],
+    "critical_path": [
+      0,
+      2,
+      3,
+      5
+    ],
+    "parallel_opportunities": [
+      [
+        4,
+        6
+      ]
+    ],
+    "total_phases": 4
+  },
+  "risk": {
+    "risks": [
+      {
+        "category": "technical",
+        "description": "The proposed token counting implementation relies on heuristics (average tokens per character) which may not accurately reflect actual token usage, especially for models with different tokenization schemes.",
+        "impact": "high",
+        "likelihood": "medium",
+        "mitigation": "Implement model-specific token estimation tables or integrate with actual tokenizers from LLM SDKs where possible.",
+        "contingency": "Monitor token estimates against actual billing data and adjust heuristic formulas accordingly. Implement fallback to exact counting when available via SDK APIs.",
+        "affected_phases": [
+          1,
+          3
+        ],
+        "verification": "Compare estimated tokens vs real usage in a controlled test environment before production rollout"
+      },
+      {
+        "category": "technical",
+        "description": "Using InstrumentedProxy and hooks for tracking may introduce performance overhead during high-volume LLM calls.",
+        "impact": "medium",
+        "likelihood": "low",
+        "mitigation": "Implement asynchronous processing or batch recording of token counts to minimize impact on latency.",
+        "contingency": "Add configurable sampling rate (e.g., 10%) for token tracking in production environments and enable opt-in flag for detailed logging.",
+        "affected_phases": [
+          1,
+          3
+        ],
+        "verification": "Measure end-to-end query time with/without instrumentation at scale using load testing"
+      },
+      {
+        "category": "security",
+        "description": "Token tracking might inadvertently expose sensitive information contained in chat messages if not properly sanitized before logging.",
+        "impact": "high",
+        "likelihood": "low",
+        "mitigation": "Implement automatic sanitization of input/output data prior to token counting and logging, excluding PII or confidential content from logs.",
+        "contingency": "Use a redaction filter that removes sensitive fields (like user IDs) before passing messages into the TokenCounter. Log only metadata about tokens consumed rather than full conversation history.",
+        "affected_phases": [
+          1,
+          3
+        ],
+        "verification": "Review log outputs for compliance with data protection standards and run penetration testing on logging components"
+      },
+      {
+        "category": "resource",
+        "description": "Introducing a new TokenCounter module and modifying the hook system increases code complexity without clear performance gains in simple token counting.",
+        "impact": "medium",
+        "likelihood": "high",
+        "mitigation": "Keep implementation minimal by reusing existing hooks instead of duplicating functionality. Avoid unnecessary abstraction layers beyond what's required for tracking.",
+        "contingency": "Re-evaluate design if token estimation becomes more complex and consider simplifying to direct integration with LLM SDKs that already expose token usage metrics.",
+        "affected_phases": [
+          1,
+          3
+        ],
+        "verification": "Code review should confirm no redundant or overly abstracted logic is introduced into the core tracking mechanism"
+      }
+    ],
+    "overall_risk_level": "medium",
+    "recommended_contingencies": [
+      "Monitor token estimates against actual billing data and adjust heuristic formulas accordingly. Implement fallback to exact counting when available via SDK APIs.",
+      "Add configurable sampling rate (e.g., 10%) for token tracking in production environments and enable opt-in flag for detailed logging.",
+      "Use a redaction filter that removes sensitive fields (like user IDs) before passing messages into the TokenCounter. Log only metadata about tokens consumed rather than full conversation history."
+    ]
+  }
+}

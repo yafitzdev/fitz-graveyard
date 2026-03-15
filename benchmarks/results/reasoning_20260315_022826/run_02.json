@@ -1,0 +1,16 @@
+{
+  "run": 2,
+  "elapsed_s": 761.9,
+  "success": true,
+  "recommended": "HTTP-Level Telemetry Middleware",
+  "plan_size": 104375,
+  "stage_timings": {
+    "agent_gathering": 7.703000000008615,
+    "implementation_check": 2.7039999999979045,
+    "context": 61.671000000002095,
+    "architecture_design": 378.23499999998603,
+    "roadmap_risk": 308.89000000001397,
+    "coherence_check": 2.6410000000032596
+  },
+  "error": null
+}

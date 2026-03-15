@@ -1,0 +1,16 @@
+{
+  "run": 1,
+  "elapsed_s": 505.0,
+  "success": true,
+  "recommended": "Instrumentation-Based Hook Injection (Recommended)",
+  "plan_size": 65421,
+  "stage_timings": {
+    "agent_gathering": 10.01600000000326,
+    "implementation_check": 4.905999999988126,
+    "context": 44.14000000001397,
+    "architecture_design": 380.23499999998603,
+    "roadmap_risk": 62.78100000001723,
+    "coherence_check": 2.8589999999967404
+  },
+  "error": null
+}

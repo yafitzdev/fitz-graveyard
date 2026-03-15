@@ -1,0 +1,16 @@
+{
+  "run": 3,
+  "elapsed_s": 553.8,
+  "success": true,
+  "recommended": "Instrumentation-Driven Tracking",
+  "plan_size": 84186,
+  "stage_timings": {
+    "agent_gathering": 8.203000000008615,
+    "implementation_check": 2.577999999979511,
+    "context": 58.828000000008615,
+    "architecture_design": 340.2820000000065,
+    "roadmap_risk": 139.35899999999674,
+    "coherence_check": 4.453000000008615
+  },
+  "error": null
+}

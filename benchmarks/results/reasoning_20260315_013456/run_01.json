@@ -1,0 +1,16 @@
+{
+  "run": 1,
+  "elapsed_s": 483.6,
+  "success": true,
+  "recommended": "Augment Return Types",
+  "plan_size": 71438,
+  "stage_timings": {
+    "agent_gathering": 16.046000000002095,
+    "implementation_check": 5.171999999991385,
+    "context": 66.21900000001187,
+    "architecture_design": 342.21899999998277,
+    "roadmap_risk": 50.859000000025844,
+    "coherence_check": 3.0469999999913853
+  },
+  "error": null
+}

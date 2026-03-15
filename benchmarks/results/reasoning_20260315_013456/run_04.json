@@ -1,0 +1,16 @@
+{
+  "run": 4,
+  "elapsed_s": 502.9,
+  "success": true,
+  "recommended": "Incremental Answer Extension",
+  "plan_size": 62591,
+  "stage_timings": {
+    "agent_gathering": 7.015999999974156,
+    "implementation_check": 2.625,
+    "context": 56.437000000005355,
+    "architecture_design": 379.3280000000086,
+    "roadmap_risk": 54.60999999998603,
+    "coherence_check": 2.8440000000118744
+  },
+  "error": null
+}

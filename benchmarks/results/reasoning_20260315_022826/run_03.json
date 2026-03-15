@@ -1,0 +1,16 @@
+{
+  "run": 3,
+  "elapsed_s": 469.3,
+  "success": true,
+  "recommended": "InstrumentedProxy Hook Approach",
+  "plan_size": 57696,
+  "stage_timings": {
+    "agent_gathering": 6.48399999999674,
+    "implementation_check": 2.60999999998603,
+    "context": 76.60900000002584,
+    "architecture_design": 314.81299999999464,
+    "roadmap_risk": 64.88999999998487,
+    "coherence_check": 3.860000000015134
+  },
+  "error": null
+}

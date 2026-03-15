@@ -1,0 +1,16 @@
+{
+  "run": 4,
+  "elapsed_s": 779.1,
+  "success": true,
+  "recommended": "Extend Base Protocols with Structured Responses",
+  "plan_size": 56742,
+  "stage_timings": {
+    "agent_gathering": 6.030999999988126,
+    "implementation_check": 2.4539999999979045,
+    "context": 61.39000000001397,
+    "architecture_design": 644.75,
+    "roadmap_risk": 63.23499999998603,
+    "coherence_check": 1.25
+  },
+  "error": null
+}
