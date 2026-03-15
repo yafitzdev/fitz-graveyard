@@ -22,8 +22,6 @@
 pip install fitz-graveyard
 
 fitz-graveyard plan "Add OAuth2 authentication with Google and GitHub providers"
-fitz-graveyard run   # let it cook overnight
-fitz-graveyard get 1 # full architectural plan in the morning
 ```
 
 ---
