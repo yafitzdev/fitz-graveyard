@@ -438,7 +438,11 @@ class BackgroundWorker:
         # Step 4: Build diagnostics and create PlanOutput
         call_metrics = []
         if hasattr(self._ollama_client, "drain_call_metrics"):
-            call_metrics = self._ollama_client.drain_call_metrics()
+            metrics = self._ollama_client.drain_call_metrics()
+            # Handle both sync and async (AsyncMock returns coroutine)
+            if hasattr(metrics, "__await__"):
+                metrics = await metrics
+            call_metrics = metrics if isinstance(metrics, list) else []
         diagnostics: dict[str, Any] = {
             "provider": self._config.provider,
             "model": self._ollama_client.model,
