@@ -117,7 +117,16 @@ class RoadmapRiskStage(PipelineStage):
 
     Uses reasoning + per-field-group extraction for reliability with small models.
     Returns split output: {"roadmap": {...}, "risk": {...}}.
+
+    Supports two modes:
+    - Combined (default): single reasoning call with roadmap_risk.txt
+    - Split (split_reasoning=True): two sequential calls — roadmap.txt
+      then risk.txt with the roadmap injected. Reduces peak context.
     """
+
+    def __init__(self, *, split_reasoning: bool = False) -> None:
+        super().__init__()
+        self._split_reasoning = split_reasoning
 
     @property
     def name(self) -> str:
@@ -127,10 +136,15 @@ class RoadmapRiskStage(PipelineStage):
     def progress_range(self) -> tuple[float, float]:
         return (0.65, 0.95)
 
-    def build_prompt(self, job_description: str, prior_outputs: dict[str, Any]) -> list[dict]:
-        prompt_template = load_prompt("roadmap_risk")
+    def _build_prompt_parts(
+        self, job_description: str, prior_outputs: dict[str, Any],
+    ) -> tuple[str, str, str, str]:
+        """Extract shared prompt components.
 
+        Returns: (context_str, architecture_design_str, binding, krag_context)
+        """
         context_str = ""
+        ctx = {}
         if "context" in prior_outputs:
             ctx = prior_outputs["context"]
             if isinstance(ctx, str):
@@ -155,69 +169,88 @@ class RoadmapRiskStage(PipelineStage):
             )
         if "design" in prior_outputs:
             design = prior_outputs["design"]
-
-            # Full ADR details so roadmap can reference decisions
             adrs = design.get("adrs", [])
             if adrs:
                 architecture_design_str += "\nKey Decisions (ADRs):\n"
                 for adr in adrs:
-                    title = adr.get("title", "")
-                    decision = adr.get("decision", "")
-                    rationale = adr.get("rationale", "")
-                    architecture_design_str += f"- {title}: {decision} ({rationale})\n"
-
-            # Full component details
+                    architecture_design_str += f"- {adr.get('title', '')}: {adr.get('decision', '')} ({adr.get('rationale', '')})\n"
             components = design.get("components", [])
             if components:
                 architecture_design_str += "\nComponents:\n"
                 for comp in components:
-                    name = comp.get("name", "")
-                    purpose = comp.get("purpose", "")
-                    interfaces = ", ".join(comp.get("interfaces", []))
-                    deps = ", ".join(comp.get("dependencies", []))
-                    architecture_design_str += f"- {name}: {purpose}"
-                    if interfaces:
-                        architecture_design_str += f" [interfaces: {interfaces}]"
-                    if deps:
-                        architecture_design_str += f" [depends on: {deps}]"
-                    architecture_design_str += "\n"
-
+                    line = f"- {comp.get('name', '')}: {comp.get('purpose', '')}"
+                    ifaces = ", ".join(comp.get("interfaces", []))
+                    if ifaces:
+                        line += f" [interfaces: {ifaces}]"
+                    architecture_design_str += line + "\n"
             integrations = design.get("integration_points", [])
             if integrations:
                 architecture_design_str += f"\nIntegration Points: {', '.join(integrations)}\n"
-
-            # Include artifacts list so roadmap knows what files to produce
             artifacts = design.get("artifacts", [])
             if artifacts:
-                artifact_names = [a.get("filename", "") for a in artifacts]
-                architecture_design_str += f"\nDesign Artifacts: {', '.join(artifact_names)}\n"
+                architecture_design_str += f"\nDesign Artifacts: {', '.join(a.get('filename', '') for a in artifacts)}\n"
 
-        # Build binding constraints from prior stages (reuse parsed ctx from above)
         binding_parts = []
         if "context" in prior_outputs:
-            artifacts = ctx.get("needed_artifacts", [])
-            if artifacts:
-                binding_parts.append("Deliverable files (from context):\n" + "\n".join(f"  - {a}" for a in artifacts))
+            needed = ctx.get("needed_artifacts", [])
+            if needed:
+                binding_parts.append("Deliverable files (from context):\n" + "\n".join(f"  - {a}" for a in needed))
         if "architecture" in prior_outputs:
-            arch = prior_outputs["architecture"]
-            rec = arch.get("recommended", "")
+            rec = prior_outputs["architecture"].get("recommended", "")
             if rec:
                 binding_parts.append(f"Chosen approach: {rec}")
         if "design" in prior_outputs:
-            design = prior_outputs["design"]
-            comps = [c.get("name", "") for c in design.get("components", []) if c.get("name")]
+            comps = [c.get("name", "") for c in prior_outputs["design"].get("components", []) if c.get("name")]
             if comps:
                 binding_parts.append(f"Components to implement: {', '.join(comps)}")
         binding = "\n".join(binding_parts) if binding_parts else "No specific binding constraints."
 
-        # Use raw summaries for reasoning prompt — more detail for accurate roadmap
         krag_context = self._get_raw_summaries(prior_outputs)
+        return context_str.strip(), architecture_design_str.strip(), binding, krag_context
+
+    def build_prompt(self, job_description: str, prior_outputs: dict[str, Any]) -> list[dict]:
+        prompt_template = load_prompt("roadmap_risk")
+        context_str, arch_design_str, binding, krag_context = self._build_prompt_parts(
+            job_description, prior_outputs,
+        )
         prompt = prompt_template.format(
             description=job_description,
-            context=context_str.strip(),
-            architecture_design=architecture_design_str.strip(),
+            context=context_str,
+            architecture_design=arch_design_str,
             krag_context=krag_context,
             binding_constraints=binding,
+        )
+        return self._make_messages(prompt)
+
+    def _build_split_roadmap_prompt(
+        self, job_description: str, prior_outputs: dict[str, Any],
+    ) -> list[dict]:
+        prompt_template = load_prompt("roadmap")
+        context_str, arch_design_str, binding, krag_context = self._build_prompt_parts(
+            job_description, prior_outputs,
+        )
+        prompt = prompt_template.format(
+            context=context_str,
+            architecture_design=arch_design_str,
+            krag_context=krag_context,
+            binding_constraints=binding,
+        )
+        return self._make_messages(prompt)
+
+    def _build_split_risk_prompt(
+        self, job_description: str, prior_outputs: dict[str, Any],
+        roadmap_reasoning: str,
+    ) -> list[dict]:
+        prompt_template = load_prompt("risk")
+        context_str, arch_design_str, binding, krag_context = self._build_prompt_parts(
+            job_description, prior_outputs,
+        )
+        prompt = prompt_template.format(
+            context=context_str,
+            architecture_design=arch_design_str,
+            krag_context=krag_context,
+            binding_constraints=binding,
+            roadmap=roadmap_reasoning,
         )
         return self._make_messages(prompt)
 
@@ -252,32 +285,84 @@ class RoadmapRiskStage(PipelineStage):
             "risk": risk.model_dump(),
         }
 
+    async def _execute_combined(
+        self, client: Any, job_description: str, prior_outputs: dict[str, Any],
+    ) -> str:
+        """Single combined reasoning call (original behavior)."""
+        messages = self.build_prompt(job_description, prior_outputs)
+        await self._report_substep("reasoning")
+        t0 = time.monotonic()
+        reasoning = await self._reason_with_tools(client, messages, prior_outputs)
+        t1 = time.monotonic()
+        logger.info(f"Stage '{self.name}': reasoning took {t1 - t0:.1f}s ({len(reasoning)} chars)")
+
+        krag_context = self._get_gathered_context(prior_outputs)
+        return await self._self_critique(
+            client, reasoning, job_description, krag_context=krag_context,
+        )
+
+    async def _execute_split(
+        self, client: Any, job_description: str, prior_outputs: dict[str, Any],
+    ) -> str:
+        """Two sequential reasoning calls: roadmap then risk."""
+        # Roadmap reasoning
+        roadmap_messages = self._build_split_roadmap_prompt(job_description, prior_outputs)
+        await self._report_substep("reasoning:roadmap")
+        t0 = time.monotonic()
+        roadmap_reasoning = await self._reason_with_tools(
+            client, roadmap_messages, prior_outputs,
+        )
+        t1 = time.monotonic()
+        logger.info(
+            f"Stage '{self.name}': roadmap reasoning took "
+            f"{t1 - t0:.1f}s ({len(roadmap_reasoning)} chars)"
+        )
+
+        # Risk reasoning (with roadmap injected)
+        risk_messages = self._build_split_risk_prompt(
+            job_description, prior_outputs, roadmap_reasoning,
+        )
+        await self._report_substep("reasoning:risk")
+        t2 = time.monotonic()
+        risk_reasoning = await self._reason_with_tools(
+            client, risk_messages, prior_outputs,
+        )
+        t3 = time.monotonic()
+        logger.info(
+            f"Stage '{self.name}': risk reasoning took "
+            f"{t3 - t2:.1f}s ({len(risk_reasoning)} chars)"
+        )
+
+        reasoning = (
+            "## Roadmap\n\n" + roadmap_reasoning
+            + "\n\n## Risk Assessment\n\n" + risk_reasoning
+        )
+
+        krag_context = self._get_gathered_context(prior_outputs)
+        return await self._self_critique(
+            client, reasoning, job_description, krag_context=krag_context,
+        )
+
     async def execute(self, client: Any, job_description: str, prior_outputs: dict[str, Any]) -> StageResult:
         try:
-            # 1. Reasoning pass (with file access tool)
-            messages = self.build_prompt(job_description, prior_outputs)
-            await self._report_substep("reasoning")
-            t0 = time.monotonic()
-            reasoning = await self._reason_with_tools(
-                client, messages, prior_outputs,
-            )
-            t1 = time.monotonic()
-            logger.info(f"Stage '{self.name}': reasoning took {t1 - t0:.1f}s ({len(reasoning)} chars)")
-
-            # 2. Self-critique pass
-            krag_context = self._get_gathered_context(prior_outputs)
-            reasoning = await self._self_critique(
-                client, reasoning, job_description, krag_context=krag_context,
-            )
+            if self._split_reasoning:
+                reasoning = await self._execute_split(
+                    client, job_description, prior_outputs,
+                )
+            else:
+                reasoning = await self._execute_combined(
+                    client, job_description, prior_outputs,
+                )
 
             # 3. Per-field-group extraction
             # Selective context: phases needs codebase for verification commands,
             # risks needs it to ground risks in actual code structure
             _CONTEXT_GROUPS = {"phases", "risks"}
+            extract_context = self._get_gathered_context(prior_outputs)
 
             merged: dict[str, Any] = {}
             for group in _FIELD_GROUPS:
-                extra = krag_context if group["label"] in _CONTEXT_GROUPS else ""
+                extra = extract_context if group["label"] in _CONTEXT_GROUPS else ""
                 partial = await self._extract_field_group(
                     client,
                     reasoning,

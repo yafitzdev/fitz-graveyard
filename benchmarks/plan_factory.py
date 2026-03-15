@@ -289,7 +289,7 @@ async def _run_reasoning_once(
     stages = [
         ContextStage(),
         ArchitectureDesignStage(split_reasoning=split_reasoning),
-        RoadmapRiskStage(),
+        RoadmapRiskStage(split_reasoning=split_reasoning),
     ]
     pipeline = PlanningPipeline(
         stages=stages, checkpoint_manager=_NullCheckpointManager(),

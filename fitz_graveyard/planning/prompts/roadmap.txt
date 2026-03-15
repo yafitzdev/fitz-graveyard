@@ -1,19 +1,27 @@
-You are creating an implementation roadmap for this project.
+You are creating an implementation roadmap for this project. Think like someone who has built and operated systems like this before.
 
 {krag_context}
+
+## Binding Constraints (from prior stages)
+
+The following decisions are final. Your roadmap must be consistent with them:
+{binding_constraints}
 
 Project context:
 {context}
 
-Architecture:
-{architecture}
+Architecture and design:
+{architecture_design}
 
-Design:
-{design}
+## Roadmap
 
 Think through the actual implementation sequence:
 
-1. Phase 0 — Unknown first: What is the single most important thing to verify before writing the first line of code? What assumption, if wrong, would invalidate everything that follows? This becomes Phase 0. It has no code deliverable — just a concrete verification task with a clear pass/fail outcome.
+1. Phase 0 — Read before writing: What must be verified by READING SOURCE CODE before the first line of code is written? This phase produces zero code. Its deliverable is a list of verified facts: "I read X file and confirmed Y behavior." Concrete pass/fail outcome. Examples:
+   - Read config.py to verify loader precedence (YAML vs Python provider)
+   - Read validators.py to confirm which schema fields are required vs optional
+   - Read an existing YAML plugin to confirm exact field format
+   If nothing needs verification, skip Phase 0.
 
 2. True MVP: What is the minimum that proves the core value and could be shown to a stakeholder? Be ruthless — what can be cut from v1 without losing the core value proposition?
 
@@ -25,4 +33,10 @@ Think through the actual implementation sequence:
 
 6. Concrete deliverables: What would someone see, test, or demo at the end of each phase? Not "implement X module" — what working behavior does it produce? If a phase delivers a config file, schema, or small artifact, write the complete content inline — not a description of it.
 
-7. Scope discipline: Each phase must be necessary and sufficient to deliver the stated goal. Anything that could be a standalone follow-up task gets cut. 4-7 phases total. Design for incremental delivery, not a textbook waterfall.
+7. Scope discipline: Each phase must be necessary and sufficient. Fewer phases is better. 3-5 phases for most projects. A config file task does NOT need 6 phases. If a phase has only one small deliverable, merge it with the adjacent phase. Anything that could be a standalone follow-up task gets cut.
+
+8. Verification: For each phase, what is the exact command someone runs to verify it worked? Not "run tests" — the actual command: `python -m pytest tests/unit/test_something.py -v` or `python -c "from module import func; func()"`. If verification is manual, describe exactly what the person should see.
+
+9. Time estimates: Rough effort per phase (e.g., "~1 hour", "~30 min"). Be honest — small tasks are small. A phase that writes one file and runs a validator is not "2-3 days".
+
+10. Parallelism: Which phases can genuinely run in parallel? Tests alongside config updates? If everything is truly sequential, say so — but check first.

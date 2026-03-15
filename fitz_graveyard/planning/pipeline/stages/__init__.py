@@ -17,20 +17,22 @@ DEFAULT_STAGES: list[PipelineStage] = [
 ]
 
 
-def create_stages() -> list[PipelineStage]:
+def create_stages(*, split_reasoning: bool = False) -> list[PipelineStage]:
     """
     Create the three planning pipeline stages.
 
-    Context gathering is handled by AgentContextGatherer before the pipeline runs.
-    Stages read gathered context from prior_outputs['_gathered_context'].
+    Args:
+        split_reasoning: If True, arch+design and roadmap+risk each use
+            two sequential reasoning calls instead of one. Reduces peak
+            context from ~29K to ~8K tokens per call.
 
     Returns:
         List of configured pipeline stages.
     """
     return [
         ContextStage(),
-        ArchitectureDesignStage(),
-        RoadmapRiskStage(),
+        ArchitectureDesignStage(split_reasoning=split_reasoning),
+        RoadmapRiskStage(split_reasoning=split_reasoning),
     ]
 
 

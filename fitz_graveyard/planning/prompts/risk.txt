@@ -2,21 +2,29 @@ You are doing a risk assessment for this project. Think like someone who has bui
 
 {krag_context}
 
+## Binding Constraints (from prior stages)
+
+The following decisions are final. Your risk assessment must reference them:
+{binding_constraints}
+
 Project context:
 {context}
 
-Architecture:
-{architecture}
-
-Design:
-{design}
+Architecture and design:
+{architecture_design}
 
 Roadmap:
 {roadmap}
 
+## Risk Assessment (based on the roadmap above)
+
 Identify the real risks — not textbook categories, but the things that would actually derail this specific project.
 
 SCOPE RULE: Every risk you list must be directly caused by a decision made in this plan. If a risk would exist whether or not this feature was built, cut it. Do not list risks about other parts of the system, general operational concerns, or things outside the scope of these roadmap phases.
+
+GROUNDING RULE: Every risk must reference a real technical mechanism. If your risk mentions a specific file, API, or module, it MUST appear in the codebase context or architecture/design sections. If you cannot point to where the risk originates in actual code, cut it.
+
+QUALITY OVER QUANTITY: 3-4 high-quality risks beat 5+ padded generic concerns. Each risk should make a reader say "I hadn't thought of that."
 
 1. Technical bets: This plan makes assumptions that could prove false. What are the 2-3 most critical ones specific to what was just designed? What happens to the timeline and design if each one is wrong?
 
@@ -27,5 +35,7 @@ SCOPE RULE: Every risk you list must be directly caused by a decision made in th
 4. Silent failure modes: Where could this feature fail in a way that produces no error — just wrong output? These are the most dangerous because no one notices until production.
 
 5. Security attack surface introduced by this change: What new attack surface does this feature specifically add? If the feature adds no new attack surface, say so explicitly rather than inventing one.
+
+6. Testable assertion: Every risk MUST include a concrete verification — the exact check, assertion, or command that would catch this risk. Not "monitor for errors" — the specific test. If you cannot write a concrete test for a risk, the risk is too vague — sharpen it or cut it.
 
 Be specific. Generic risks like "scope creep" or risks about unrelated system components are useless and will be cut.
