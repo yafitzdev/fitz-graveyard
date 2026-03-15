@@ -28,7 +28,7 @@ fitz-graveyard get 1 # full architectural plan in the morning
 
 ---
 
-### About
+### About 🧑‍🌾
 
 Solo project by Yan Fitzner ([LinkedIn](https://www.linkedin.com/in/yan-fitzner/), [GitHub](https://github.com/yafitzdev)).
 
@@ -47,7 +47,7 @@ What if the planning phase could run on local hardware instead? What if you coul
 
 ---
 
-### The Insight
+### The Insight 💡
 
 Running LLMs locally means balancing three things: **tokens per second**, **quantization quality**, and **model intelligence**. A 70B model at high quant gives you excellent reasoning but crawls at 2-5 tok/s on consumer hardware. That feels unusable — until you realize planning doesn't need to be interactive.
 
@@ -67,25 +67,25 @@ And the best part: **as local models improve, your plans improve for free.**
 
 ### Why fitz-graveyard?
 
-**Hybrid model pipeline**
+**Hybrid model pipeline 🔀**
 > Use a small model (Qwen3.5-4B) for fast code retrieval and a larger model (Qwen3-Coder-30B or dense Qwen3.5-27B) for architectural reasoning. The orchestrator auto-switches between models via LM Studio CLI. Split reasoning mode breaks large LLM calls into ~8K-token pieces, enabling dense 27B models at 32K context.
 
-**Reads your codebase first**
+**Reads your codebase first 🔍**
 > An agent builds a structural index of your codebase (classes, functions, imports), selects relevant files via LLM scan, expands through import chains and `__init__.py` facades, and auto-includes architectural hub files (files importing many subsystems). Every planning stage sees your actual code with tool access to read more on demand.
 
-**Per-field extraction that small models can handle**
+**Per-field extraction that small models can handle 🧩**
 > Each stage does 1 reasoning pass + 1 self-critique + N tiny JSON extractions (<2000 chars each). Even a 3B model can reliably produce structured output at this scale. Failed extractions get Pydantic defaults instead of crashing the stage — partial plan > no plan.
 
-**Crash recovery built in**
+**Crash recovery built in 🔄**
 > Jobs checkpoint to SQLite. Machine crashes mid-plan? `retry` picks up from the last checkpoint. Power goes out overnight? Resume in the morning.
 
-**Claude where it counts, local everywhere else**
+**Claude where it counts, local everywhere else 🎯**
 > The local model does the heavy lifting — 95% of the tokens. But the pipeline knows what it's uncertain about. Per-section confidence scoring flags weak spots, and those sections can pause for an Anthropic API review pass before the plan finalizes. Fully optional — off by default, zero API calls unless you opt in.
 
-**Two interfaces, same engine**
+**Two interfaces, same engine 🔌**
 > CLI for background job queues, MCP server for Claude Code / Claude Desktop integration. Both wrap the same `tools/` service layer and SQLite job store.
 
-**Other features at a glance**
+**Other features at a glance 🃏**
 > 1. [x] **Three LLM providers.** Ollama (with OOM fallback), LM Studio (OpenAI-compatible API), or llama.cpp (managed subprocess with flash attention and configurable KV cache).
 > 2. [x] **Split reasoning.** Architecture and design as separate calls, roadmap and risk as separate calls. Reduces peak context from ~29K to ~8K tokens per call.
 > 3. [x] **Hub + facade retrieval signals.** Deterministic file selection that doesn't depend on LLM judgment — auto-includes orchestration files and `__init__.py` re-exports.
@@ -128,7 +128,7 @@ A retrieval agent pre-stage followed by 3 planning stages. Split reasoning mode 
 
 <details>
 
-<summary><strong>Quick Start</strong></summary>
+<summary><strong>📦 Quick Start</strong></summary>
 
 <br>
 
@@ -167,7 +167,7 @@ pip install "fitz-graveyard[dev]"          # pytest, build tools
 
 <details>
 
-<summary><strong>CLI Reference</strong></summary>
+<summary><strong>📦 CLI Reference</strong></summary>
 
 <br>
 
@@ -196,7 +196,7 @@ QUEUED -> RUNNING -> COMPLETE
 
 <details>
 
-<summary><strong>MCP Server</strong></summary>
+<summary><strong>📦 MCP Server</strong></summary>
 
 <br>
 
@@ -231,7 +231,7 @@ Plug into Claude Code or Claude Desktop:
 
 <details>
 
-<summary><strong>Configuration</strong></summary>
+<summary><strong>📦 Configuration</strong></summary>
 
 <br>
 
@@ -301,7 +301,7 @@ output:
 
 <details>
 
-<summary><strong>Architecture</strong></summary>
+<summary><strong>📦 Architecture</strong></summary>
 
 <br>
 
@@ -335,7 +335,7 @@ fitz_graveyard/
 
 <details>
 
-<summary><strong>Development</strong></summary>
+<summary><strong>📦 Development</strong></summary>
 
 <br>
 
