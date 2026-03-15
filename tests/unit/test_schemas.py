@@ -470,8 +470,7 @@ class TestPromptLoading:
         """Test loading roadmap stage prompt."""
         prompt = load_prompt("roadmap")
         assert "{context}" in prompt
-        assert "{architecture}" in prompt
-        assert "{design}" in prompt
+        assert "{architecture_design}" in prompt
         assert "phases" in prompt.lower()
 
     def test_load_risk_prompt(self):
@@ -479,6 +478,7 @@ class TestPromptLoading:
         prompt = load_prompt("risk")
         assert "{context}" in prompt
         assert "{roadmap}" in prompt
+        assert "{architecture_design}" in prompt
         assert "risk" in prompt.lower()
 
     def test_nonexistent_prompt_raises(self):
