@@ -1,0 +1,743 @@
+{
+  "context": {
+    "project_description": "Extend the existing instrumentation framework to track LLM token usage for ChatProvider, EmbeddingProvider, and VisionProvider operations, enabling observability into how many tokens each query consumes.",
+    "key_requirements": [
+      "Add token accounting capability that tracks input/output tokens per LLM call",
+      "Implement approximate token counting using text length and model context windows",
+      "Integrate with existing BenchmarkHook infrastructure without breaking API compatibility"
+    ],
+    "constraints": [
+      "Only instrument ChatProvider, EmbeddingProvider, and VisionProvider operations (not RerankProvider)",
+      "Preserve backward compatibility - do not modify existing APIs or response formats",
+      "Leverage existing InstrumentedProxy pattern rather than creating new wrapper classes"
+    ],
+    "existing_context": "",
+    "stakeholders": [
+      "user who wants to see how many LLM tokens each query costs",
+      "engine components that use ChatProvider, EmbeddingProvider, VisionProvider"
+    ],
+    "scope_boundaries": {
+      "in_scope": [
+        "token tracking for ChatProvider operations",
+        "token tracking for EmbeddingProvider operations",
+        "token tracking for VisionProvider operations",
+        "instrumentation hooks using BenchmarkHook mechanism",
+        "token estimation based on text length and model context windows"
+      ],
+      "out_of_scope": [
+        "token tracking for RerankProvider operations",
+        "modifying API responses to include token counts",
+        "implementing cost estimator based on token counts",
+        "real-time streaming metrics for token usage"
+      ]
+    },
+    "existing_files": [
+      "fitz_ai/core/instrumentation.py \u2014 Instrumentation system for benchmarking plugin performance.",
+      "fitz_ai/llm/providers/base.py \u2014 Provider protocols for LLM clients.",
+      "fitz_ai/llm/providers/openai.py \u2014 OpenAI provider wrappers using the official SDK.",
+      "fitz_ai/llm/providers/anthropic.py \u2014 Anthropic provider wrappers using the official SDK.",
+      "fitz_ai/llm/providers/cohere.py \u2014 Cohere provider wrappers using the official SDK.",
+      "fitz_ai/llm/providers/ollama.py \u2014 Ollama provider wrappers using direct HTTP calls.",
+      "fitz_ai/logging/logger.py \u2014 discovered by agent",
+      "fitz_ai/logging/tags.py \u2014 discovered by agent",
+      "fitz_ai/engines/fitz_krag/engine.py \u2014 discovered by agent",
+      "fitz_ai/sdk/fitz.py \u2014 discovered by agent",
+      "fitz_ai/api/routes/query.py \u2014 discovered by agent",
+      "fitz_ai/engines/fitz_krag/ingestion/pipeline.py \u2014 discovered by agent",
+      "fitz_ai/ingestion/diff/executor.py \u2014 discovered by agent",
+      "fitz_ai/ingestion/enrichment/pipeline.py \u2014 discovered by agent",
+      "tests/integration/cloud_fixtures.py \u2014 discovered by agent",
+      "tools/governance/eval_pipeline.py \u2014 discovered by agent",
+      "tools/governance/extract_features.py \u2014 discovered by agent",
+      "fitz_ai/cli/commands/eval.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/token_provider.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/base.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/certificates.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/m2m.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/api_key.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/composite.py \u2014 discovered by agent",
+      "fitz_ai/core/paths/workspace.py \u2014 discovered by agent"
+    ],
+    "needed_artifacts": [
+      "fitz_ai/core/instrumentation.py \u2014 Extend existing infrastructure to support token tracking by adding a new hook interface specifically for token accounting and updating InstrumentedProxy logic to handle token counters properly"
+    ],
+    "assumptions": [
+      {
+        "assumption": "Token Counting Methodology: We approximate tokens using text length and model context windows, since exact counting requires access to each provider's tokenizer which is not exposed in current SDKs.",
+        "impact": "Approximate cost tracking; acceptable for observability but may lead to inaccurate billing estimates.",
+        "confidence": "high"
+      },
+      {
+        "assumption": "Instrumentation Integration: Existing instrumentation framework via `BenchmarkHook` can be extended to track LLM calls with token usage metrics.",
+        "impact": "Some provider implementations may require custom handling beyond the generic approach, potentially increasing complexity or breaking compatibility.",
+        "confidence": "medium"
+      },
+      {
+        "assumption": "Provider Support Scope: Only Chat, Embedding, and Vision operations are instrumented as these represent core LLM usage for queries.",
+        "impact": "Rerank could also incur costs but is not tracked, possibly missing significant cost data.",
+        "confidence": "high"
+      },
+      {
+        "assumption": "Token Accounting Granularity: Per-call token tracking (input/output) suffices for the requirement to 'see how many LLM tokens each query costs'.",
+        "impact": "Streaming operations or high-frequency calls may go untracked if not handled correctly, leading to incomplete cost visibility.",
+        "confidence": "high"
+      },
+      {
+        "assumption": "API Compatibility: Token information should be logged/observed without changing API responses.",
+        "impact": "If users want token data returned in response objects, changes would be needed which could break backward compatibility.",
+        "confidence": "high"
+      },
+      {
+        "assumption": "Token Definition Consistency: For cost accounting purposes, chat uses input + output tokens as 'total tokens', embeddings count text as input, and vision assumes fixed estimates for image processing.",
+        "impact": "Providers may define tokens differently internally, leading to inconsistencies in cost reporting across different LLM backends.",
+        "confidence": "medium"
+      }
+    ]
+  },
+  "architecture_design": {
+    "architecture": {
+      "approaches": [
+        {
+          "name": "Token Accounting Hook Pattern",
+          "description": "A new `TokenAccountingHook` protocol extending `BenchmarkHook`, updated `InstrumentedProxy._wrap_method()` to track tokens when hooks are present, new token estimation logic using model context windows and text length approximations, integration with existing instrumentation system (no API changes), token tracking in `on_call_start`/`on_call_end` methods of the hook",
+          "pros": [
+            "Integrates cleanly with existing infrastructure without breaking changes",
+            "Leverages established `BenchmarkHook` pattern already in use",
+            "Extensible to all providers with minimal code duplication",
+            "Requires no API modifications and maintains backward compatibility",
+            "Unified token tracking across multiple providers (OpenAI, Anthropic, Cohere, Ollama)"
+          ],
+          "cons": [
+            "Approximation approach has variance that could be misleading",
+            "Relies on model context windows which may not exactly match actual token usage"
+          ],
+          "complexity": "medium",
+          "best_for": [
+            "Systems with existing instrumentation infrastructure",
+            "Projects requiring minimal API changes",
+            "Multi-provider LLM systems needing unified metrics"
+          ]
+        },
+        {
+          "name": "Token Counting Service Pattern",
+          "description": "Dedicated `TokenCounterService` that wraps provider instances, injected via dependency injection throughout the system, requires modifying factory methods and service constructors to inject this counter, new service must be passed through entire call stack",
+          "pros": [
+            "Clear separation of concerns between core logic and token accounting",
+            "Explicit control over when and where token counting occurs"
+          ],
+          "cons": [
+            "Requires extensive refactoring of existing systems",
+            "Breaking API contracts due to constructor signature changes",
+            "High operational burden from updating factory methods and usage sites",
+            "Potential for breaking changes throughout the system"
+          ],
+          "complexity": "high",
+          "best_for": [
+            "Systems where clear separation is more important than minimal impact",
+            "Projects with flexibility in API contracts"
+          ]
+        }
+      ],
+      "recommended": "Token Accounting Hook Pattern",
+      "reasoning": "Approach 1 is correct because it integrates cleanly with existing infrastructure without breaking changes, leverages the established BenchmarkHook pattern already in use, and is extensible to all providers with minimal code duplication. It requires no API modifications and maintains backward compatibility while enabling unified token tracking across multiple LLM providers (OpenAI, Anthropic, Cohere, Ollama). Approach 2 would be wrong because it requires extensive refactoring that violates the constraint of not modifying existing APIs or response formats, potentially breaking many systems. Approach 3 would be wrong because it's error-prone and inconsistent compared to the existing proxy-based instrumentation system with manual application across all provider implementations.",
+      "key_tradeoffs": {
+        "Instrumentation vs Refactoring": "Approach 1 uses existing hook infrastructure with minimal changes, while Approach 2 requires extensive system refactoring that breaks API contracts",
+        "Precision vs Performance": "Approximate token counting based on text length and context windows trades exactness for performance and simplicity",
+        "Coverage Consistency": "Decorator pattern risks inconsistent coverage across providers, while hook pattern ensures uniform tracking"
+      },
+      "technology_considerations": [
+        "TokenAccountingHook protocol extending BenchmarkHook for seamless integration with existing instrumentation system",
+        "InstrumentedProxy._wrap_method() modification to detect and invoke token accounting hooks without API changes",
+        "Text length and context window approximations for token estimation across multiple LLM providers (OpenAI, Anthropic, Cohere, Ollama)",
+        "ValueError raising for unsupported model context windows instead of silent failure to ensure robustness"
+      ],
+      "scope_statement": "Implement token accounting via a new hook protocol extending BenchmarkHook that integrates with InstrumentedProxy without API changes, using approximation methods for text length and context windows."
+    },
+    "design": {
+      "adrs": [
+        {
+          "title": "ADR: Token Accounting Hook Pattern",
+          "context": "Need to track token usage across different LLM providers (Chat, Embedding, Vision) without breaking existing APIs or requiring extensive refactoring.",
+          "decision": "Implement a new TokenAccountingHook protocol that extends BenchmarkHook and integrate it into the existing InstrumentedProxy system for automatic instrumentation of provider methods.",
+          "rationale": "This approach leverages the existing benchmarking infrastructure, maintains backward compatibility, requires no API changes, and scales across all supported providers (OpenAI, Anthropic, Cohere, Ollama). It avoids heavy refactoring needed by service or decorator patterns.",
+          "consequences": [
+            "Minimal operational burden - only adds new hook type and modifies existing wrapping logic",
+            "Unified token tracking across multiple provider implementations",
+            "Integration with existing benchmarking infrastructure without API modifications",
+            "Approximate token counting based on text length and context windows (not exact parsing)",
+            "Excludes RerankProvider from tracking per requirements"
+          ],
+          "alternatives_considered": [
+            "Service Pattern - rejected because it requires extensive refactoring of constructor signatures and service injection points, violating API contract constraints",
+            "Decorator Pattern - rejected because it's error-prone with inconsistent coverage across providers and requires manual application everywhere"
+          ]
+        },
+        {
+          "title": "ADR: Token Data Granularity vs. Performance Tradeoff",
+          "context": "The TokenAccountingHook architecture must decide what level of token detail to capture and propagate across system boundaries, particularly when instrumenting proxy requests for multiple LLM providers.",
+          "decision": "Capture only essential token counts (input/output) rather than detailed per-token breakdowns or timing data in the hook interface",
+          "rationale": "This approach minimizes cross-boundary data transfer while maintaining core functionality for billing and analytics. The detailed tokenization information can be retained internally within each provider's instrumentation layer.",
+          "consequences": [
+            "Reduced observability for debugging specific prompt/response token usage patterns",
+            "Potential loss of fine-grained cost optimization opportunities that require per-token analysis",
+            "Simpler hook interface contract with fewer fields to maintain across different providers"
+          ],
+          "alternatives_considered": [
+            "Passing complete tokenization metadata through hooks including per-token costs and timing data",
+            "Implementing a pluggable telemetry format that can be configured for different provider requirements"
+          ]
+        }
+      ],
+      "components": [
+        {
+          "name": "TokenAccountingHook",
+          "purpose": "Extends BenchmarkHook to provide token tracking capability for LLM method calls",
+          "responsibilities": [
+            "Track input and output tokens for chat, embed, and describe_image operations",
+            "Provide approximate token estimation based on text length and model context windows"
+          ],
+          "interfaces": [
+            "on_call_start(layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any",
+            "on_call_end(context: Any, result: Any, error: Exception | None) -> None"
+          ],
+          "dependencies": [
+            "BenchmarkHook"
+          ]
+        },
+        {
+          "name": "InstrumentedProxy",
+          "purpose": "Wraps provider instances to instrument method calls with hooks",
+          "responsibilities": [
+            "Wrap target objects with instrumentation for tracking",
+            "Detect and invoke token accounting hooks during method execution",
+            "Maintain proxy behavior while adding timing and hook invocation"
+          ],
+          "interfaces": [
+            "__init__(target: Any, layer: str, plugin_name: str, methods_to_track: set[str] | None)",
+            "__getattr__(name: str) -> Any",
+            "_wrap_method(method: Callable, method_name: str) -> Callable"
+          ],
+          "dependencies": [
+            "BenchmarkHook",
+            "TokenAccountingHook"
+          ]
+        }
+      ],
+      "data_model": {
+        "TokenUsage": [
+          "input_tokens: int",
+          "output_tokens: int"
+        ]
+      },
+      "integration_points": [
+        "InstrumentedProxy \u2014 extends BenchmarkHook protocol to track token usage during LLM calls, integrating with existing benchmarking infrastructure"
+      ],
+      "artifacts": [
+        {
+          "filename": "fitz_ai/core/instrumentation.py",
+          "content": "class BenchmarkHook(Protocol):\n  on_call_start(layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any\n  on_call_end(context: Any, result: Any, error: Exception | None) -> None\n\nclass CachingHook(Protocol):\n  get_cached_result(layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any\n  cache_result(layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict, result: Any) -> None\n\nclass TokenAccountingHook(Protocol):\n  on_call_start(layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any\n  on_call_end(context: Any, result: Any, error: Exception | None) -> None\n  record_input_tokens(layer: str, plugin_name: str, method: str, tokens: int) -> None\n  record_output_tokens(layer: str, plugin_name: str, method: str, tokens: int) -> None\n\nregister_hook(hook: BenchmarkHook) -> None\nunregister_hook(hook: BenchmarkHook) -> None\nclear_hooks() -> None\nhas_hooks() -> bool\nget_hooks() -> list[BenchmarkHook]\n\nclass InstrumentedProxy:\n  __init__(target: Any, layer: str, plugin_name: str, methods_to_track: set[str] | None)\n  __getattr__(name: str) -> Any\n  _wrap_method(method: Callable, method_name: str) -> Callable\n  __repr__() -> str\n  __str__() -> str\n\nmaybe_wrap(target: Any, layer: str, plugin_name: str, methods_to_track: set[str] | None) -> Any\nwrap(target: Any, layer: str, plugin_name: str, methods_to_track: set[str] | None) -> InstrumentedProxy",
+          "purpose": "Instrumentation system for benchmarking plugin performance including new token accounting hook protocol and updates to proxy wrapping logic"
+        }
+      ]
+    }
+  },
+  "architecture": {
+    "approaches": [
+      {
+        "name": "Token Accounting Hook Pattern",
+        "description": "A new `TokenAccountingHook` protocol extending `BenchmarkHook`, updated `InstrumentedProxy._wrap_method()` to track tokens when hooks are present, new token estimation logic using model context windows and text length approximations, integration with existing instrumentation system (no API changes), token tracking in `on_call_start`/`on_call_end` methods of the hook",
+        "pros": [
+          "Integrates cleanly with existing infrastructure without breaking changes",
+          "Leverages established `BenchmarkHook` pattern already in use",
+          "Extensible to all providers with minimal code duplication",
+          "Requires no API modifications and maintains backward compatibility",
+          "Unified token tracking across multiple providers (OpenAI, Anthropic, Cohere, Ollama)"
+        ],
+        "cons": [
+          "Approximation approach has variance that could be misleading",
+          "Relies on model context windows which may not exactly match actual token usage"
+        ],
+        "complexity": "medium",
+        "best_for": [
+          "Systems with existing instrumentation infrastructure",
+          "Projects requiring minimal API changes",
+          "Multi-provider LLM systems needing unified metrics"
+        ]
+      },
+      {
+        "name": "Token Counting Service Pattern",
+        "description": "Dedicated `TokenCounterService` that wraps provider instances, injected via dependency injection throughout the system, requires modifying factory methods and service constructors to inject this counter, new service must be passed through entire call stack",
+        "pros": [
+          "Clear separation of concerns between core logic and token accounting",
+          "Explicit control over when and where token counting occurs"
+        ],
+        "cons": [
+          "Requires extensive refactoring of existing systems",
+          "Breaking API contracts due to constructor signature changes",
+          "High operational burden from updating factory methods and usage sites",
+          "Potential for breaking changes throughout the system"
+        ],
+        "complexity": "high",
+        "best_for": [
+          "Systems where clear separation is more important than minimal impact",
+          "Projects with flexibility in API contracts"
+        ]
+      }
+    ],
+    "recommended": "Token Accounting Hook Pattern",
+    "reasoning": "Approach 1 is correct because it integrates cleanly with existing infrastructure without breaking changes, leverages the established BenchmarkHook pattern already in use, and is extensible to all providers with minimal code duplication. It requires no API modifications and maintains backward compatibility while enabling unified token tracking across multiple LLM providers (OpenAI, Anthropic, Cohere, Ollama). Approach 2 would be wrong because it requires extensive refactoring that violates the constraint of not modifying existing APIs or response formats, potentially breaking many systems. Approach 3 would be wrong because it's error-prone and inconsistent compared to the existing proxy-based instrumentation system with manual application across all provider implementations.",
+    "key_tradeoffs": {
+      "Instrumentation vs Refactoring": "Approach 1 uses existing hook infrastructure with minimal changes, while Approach 2 requires extensive system refactoring that breaks API contracts",
+      "Precision vs Performance": "Approximate token counting based on text length and context windows trades exactness for performance and simplicity",
+      "Coverage Consistency": "Decorator pattern risks inconsistent coverage across providers, while hook pattern ensures uniform tracking"
+    },
+    "technology_considerations": [
+      "TokenAccountingHook protocol extending BenchmarkHook for seamless integration with existing instrumentation system",
+      "InstrumentedProxy._wrap_method() modification to detect and invoke token accounting hooks without API changes",
+      "Text length and context window approximations for token estimation across multiple LLM providers (OpenAI, Anthropic, Cohere, Ollama)",
+      "ValueError raising for unsupported model context windows instead of silent failure to ensure robustness"
+    ],
+    "scope_statement": "Implement token accounting via a new hook protocol extending BenchmarkHook that integrates with InstrumentedProxy without API changes, using approximation methods for text length and context windows."
+  },
+  "design": {
+    "adrs": [
+      {
+        "title": "ADR: Token Accounting Hook Pattern",
+        "context": "Need to track token usage across different LLM providers (Chat, Embedding, Vision) without breaking existing APIs or requiring extensive refactoring.",
+        "decision": "Implement a new TokenAccountingHook protocol that extends BenchmarkHook and integrate it into the existing InstrumentedProxy system for automatic instrumentation of provider methods.",
+        "rationale": "This approach leverages the existing benchmarking infrastructure, maintains backward compatibility, requires no API changes, and scales across all supported providers (OpenAI, Anthropic, Cohere, Ollama). It avoids heavy refactoring needed by service or decorator patterns.",
+        "consequences": [
+          "Minimal operational burden - only adds new hook type and modifies existing wrapping logic",
+          "Unified token tracking across multiple provider implementations",
+          "Integration with existing benchmarking infrastructure without API modifications",
+          "Approximate token counting based on text length and context windows (not exact parsing)",
+          "Excludes RerankProvider from tracking per requirements"
+        ],
+        "alternatives_considered": [
+          "Service Pattern - rejected because it requires extensive refactoring of constructor signatures and service injection points, violating API contract constraints",
+          "Decorator Pattern - rejected because it's error-prone with inconsistent coverage across providers and requires manual application everywhere"
+        ]
+      },
+      {
+        "title": "ADR: Token Data Granularity vs. Performance Tradeoff",
+        "context": "The TokenAccountingHook architecture must decide what level of token detail to capture and propagate across system boundaries, particularly when instrumenting proxy requests for multiple LLM providers.",
+        "decision": "Capture only essential token counts (input/output) rather than detailed per-token breakdowns or timing data in the hook interface",
+        "rationale": "This approach minimizes cross-boundary data transfer while maintaining core functionality for billing and analytics. The detailed tokenization information can be retained internally within each provider's instrumentation layer.",
+        "consequences": [
+          "Reduced observability for debugging specific prompt/response token usage patterns",
+          "Potential loss of fine-grained cost optimization opportunities that require per-token analysis",
+          "Simpler hook interface contract with fewer fields to maintain across different providers"
+        ],
+        "alternatives_considered": [
+          "Passing complete tokenization metadata through hooks including per-token costs and timing data",
+          "Implementing a pluggable telemetry format that can be configured for different provider requirements"
+        ]
+      }
+    ],
+    "components": [
+      {
+        "name": "TokenAccountingHook",
+        "purpose": "Extends BenchmarkHook to provide token tracking capability for LLM method calls",
+        "responsibilities": [
+          "Track input and output tokens for chat, embed, and describe_image operations",
+          "Provide approximate token estimation based on text length and model context windows"
+        ],
+        "interfaces": [
+          "on_call_start(layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any",
+          "on_call_end(context: Any, result: Any, error: Exception | None) -> None"
+        ],
+        "dependencies": [
+          "BenchmarkHook"
+        ]
+      },
+      {
+        "name": "InstrumentedProxy",
+        "purpose": "Wraps provider instances to instrument method calls with hooks",
+        "responsibilities": [
+          "Wrap target objects with instrumentation for tracking",
+          "Detect and invoke token accounting hooks during method execution",
+          "Maintain proxy behavior while adding timing and hook invocation"
+        ],
+        "interfaces": [
+          "__init__(target: Any, layer: str, plugin_name: str, methods_to_track: set[str] | None)",
+          "__getattr__(name: str) -> Any",
+          "_wrap_method(method: Callable, method_name: str) -> Callable"
+        ],
+        "dependencies": [
+          "BenchmarkHook",
+          "TokenAccountingHook"
+        ]
+      }
+    ],
+    "data_model": {
+      "TokenUsage": [
+        "input_tokens: int",
+        "output_tokens: int"
+      ]
+    },
+    "integration_points": [
+      "InstrumentedProxy \u2014 extends BenchmarkHook protocol to track token usage during LLM calls, integrating with existing benchmarking infrastructure"
+    ],
+    "artifacts": [
+      {
+        "filename": "fitz_ai/core/instrumentation.py",
+        "content": "class BenchmarkHook(Protocol):\n  on_call_start(layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any\n  on_call_end(context: Any, result: Any, error: Exception | None) -> None\n\nclass CachingHook(Protocol):\n  get_cached_result(layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any\n  cache_result(layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict, result: Any) -> None\n\nclass TokenAccountingHook(Protocol):\n  on_call_start(layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any\n  on_call_end(context: Any, result: Any, error: Exception | None) -> None\n  record_input_tokens(layer: str, plugin_name: str, method: str, tokens: int) -> None\n  record_output_tokens(layer: str, plugin_name: str, method: str, tokens: int) -> None\n\nregister_hook(hook: BenchmarkHook) -> None\nunregister_hook(hook: BenchmarkHook) -> None\nclear_hooks() -> None\nhas_hooks() -> bool\nget_hooks() -> list[BenchmarkHook]\n\nclass InstrumentedProxy:\n  __init__(target: Any, layer: str, plugin_name: str, methods_to_track: set[str] | None)\n  __getattr__(name: str) -> Any\n  _wrap_method(method: Callable, method_name: str) -> Callable\n  __repr__() -> str\n  __str__() -> str\n\nmaybe_wrap(target: Any, layer: str, plugin_name: str, methods_to_track: set[str] | None) -> Any\nwrap(target: Any, layer: str, plugin_name: str, methods_to_track: set[str] | None) -> InstrumentedProxy",
+        "purpose": "Instrumentation system for benchmarking plugin performance including new token accounting hook protocol and updates to proxy wrapping logic"
+      }
+    ]
+  },
+  "roadmap_risk": {
+    "roadmap": {
+      "phases": [
+        {
+          "number": 0,
+          "name": "Read Before Writing",
+          "objective": "Verify integration points by reading source",
+          "deliverables": [
+            "Verified: fitz_ai/llm/providers/base.py",
+            "Verified: fitz_ai/llm/providers/openai.py",
+            "Verified: fitz_ai/llm/providers/anthropic.py",
+            "Verified: fitz_ai/llm/providers/cohere.py",
+            "Verified: fitz_ai/llm/providers/ollama.py"
+          ],
+          "dependencies": [],
+          "estimated_complexity": "low",
+          "key_risks": [],
+          "verification_command": "pytest tests/test_providers.py -v",
+          "estimated_effort": "~15 min"
+        },
+        {
+          "number": 2,
+          "name": "Define TokenAccountingHook Protocol",
+          "objective": "Create the new hook interface to extend benchmarking capabilities for token tracking",
+          "deliverables": [
+            "TokenAccountingHook protocol definition in fitz_ai/core/instrumentation.py"
+          ],
+          "dependencies": [],
+          "estimated_complexity": "medium",
+          "key_risks": [
+            "Risk of missing existing infrastructure patterns in the codebase"
+          ],
+          "verification_command": "pytest tests/test_instrumentation.py -v",
+          "estimated_effort": "~30 minutes"
+        },
+        {
+          "number": 3,
+          "name": "Enhance InstrumentedProxy Logic",
+          "objective": "Update proxy logic to support both BenchmarkHook and TokenAccountingHook",
+          "deliverables": [
+            "Updated _wrap_method in fitz_ai/core/instrumentation.py to handle token accounting hooks"
+          ],
+          "dependencies": [
+            2
+          ],
+          "estimated_complexity": "high",
+          "key_risks": [
+            "Risk of not properly integrating with existing InstrumentedProxy._wrap_method implementation",
+            "Potential performance overhead from additional hook checks"
+          ],
+          "verification_command": "pytest tests/test_instrumentation.py::test_token_accounting_hook_integration -v",
+          "estimated_effort": "~45 minutes"
+        },
+        {
+          "number": 4,
+          "name": "Create Sample Hook Implementation",
+          "objective": "Create a simple hook that demonstrates usage for testing purposes",
+          "deliverables": [
+            "MockTokenHook implementation in tests or example code"
+          ],
+          "dependencies": [
+            2,
+            3
+          ],
+          "estimated_complexity": "low",
+          "key_risks": [
+            "Risk of incomplete mock implementation that doesn't cover edge cases"
+          ],
+          "verification_command": "pytest tests/test_instrumentation.py::test_mock_token_hook -v",
+          "estimated_effort": "~30 minutes"
+        }
+      ],
+      "critical_path": [
+        0,
+        2,
+        3,
+        4
+      ],
+      "parallel_opportunities": [],
+      "total_phases": 4
+    },
+    "risk": {
+      "risks": [
+        {
+          "category": "technical",
+          "description": "Hook Registration Timing - The implementation depends on proper registration of hooks before providers are instrumented",
+          "impact": "medium",
+          "likelihood": "high",
+          "mitigation": "Implement thorough testing to verify that registering hook after provider creation still works properly through instrumentation checks",
+          "contingency": "If late registration fails, implement a fallback mechanism that attempts re-instrumentation when hooks are registered later",
+          "affected_phases": [
+            2
+          ],
+          "verification": "Test that registering hook after provider creation still works properly (through instrumentation checks)"
+        },
+        {
+          "category": "technical",
+          "description": "Provider Method Signatures - Different LLM providers have varying method signatures causing potential instrumentation gaps",
+          "impact": "medium",
+          "likelihood": "high",
+          "mitigation": "Test with each provider type (OpenAI, Anthropic, Cohere, Ollama) to ensure all methods are instrumented correctly",
+          "contingency": "For uninstrumented methods, log a warning and implement graceful fallback behavior while documenting unsupported methods",
+          "affected_phases": [
+            2
+          ],
+          "verification": "Test with each provider type (OpenAI, Anthropic, Cohere, Ollama)"
+        },
+        {
+          "category": "technical",
+          "description": "Streaming Chat Methods - chat_stream methods return iterators rather than strings making token tracking complex",
+          "impact": "high",
+          "likelihood": "medium",
+          "mitigation": "Implement separate handling for streaming vs non-streaming calls to ensure correct token estimation for both cases",
+          "contingency": "For streaming responses, implement approximate token counting that tracks cumulative output tokens over time rather than individual chunks",
+          "affected_phases": [
+            2
+          ],
+          "verification": "Test streaming vs non-streaming calls to verify proper handling of both types"
+        },
+        {
+          "category": "technical",
+          "description": "Batch Operations - EmbeddingProvider has batch operations that process multiple texts requiring correct aggregation of token counts",
+          "impact": "medium",
+          "likelihood": "high",
+          "mitigation": "Create unit tests on embed_batch and related methods with multiple items to verify proper token counting across batches",
+          "contingency": "If batch aggregation fails, implement conservative estimate approach that overcounts tokens rather than undercounting",
+          "affected_phases": [
+            2
+          ],
+          "verification": "Unit tests on embed_batch and related methods with multiple items"
+        },
+        {
+          "category": "technical",
+          "description": "Instrumentation Overhead - Adding hooks may introduce performance overhead to already slow LLM calls",
+          "impact": "medium",
+          "likelihood": "high",
+          "mitigation": "Conduct performance benchmarks showing <10% overhead in typical usage and optimize hook execution logic where possible",
+          "contingency": "Implement optional instrumentation flag that allows disabling token tracking when not needed for development/testing",
+          "affected_phases": [
+            2
+          ],
+          "verification": "Performance benchmarks showing <10% overhead in typical usage"
+        },
+        {
+          "category": "integration",
+          "description": "Hook Registration Dependencies - Consumers may use token tracking without proper hook setup causing silent failure",
+          "impact": "high",
+          "likelihood": "medium",
+          "mitigation": "Implement comprehensive testing for both cases: with and without hooks registered to ensure graceful degradation",
+          "contingency": "Add explicit validation that ensures hooks are registered before attempting token tracking, or implement fallback behavior when no hooks present",
+          "affected_phases": [
+            2
+          ],
+          "verification": "Test both cases: with and without hooks registered"
+        },
+        {
+          "category": "quality",
+          "description": "Token estimation fails silently for unknown models or edge cases",
+          "impact": "medium",
+          "likelihood": "high",
+          "mitigation": "Add default fallbacks (e.g., conservative estimates) that are logged as warnings when token estimation cannot be performed accurately",
+          "contingency": "Implement comprehensive logging with warning levels to alert users about potential inaccuracies in token tracking for unknown models",
+          "affected_phases": [
+            2
+          ],
+          "verification": "Add default fallbacks (e.g., conservative estimates) that are logged as warnings"
+        }
+      ],
+      "overall_risk_level": "high",
+      "recommended_contingencies": [
+        "Implement a fallback mechanism for late hook registration that attempts re-instrumentation when hooks become available",
+        "For uninstrumented methods, implement graceful logging and documentation of unsupported methods instead of complete failure",
+        "Establish separate handling logic for streaming vs non-streaming responses to properly track token usage over time",
+        "Create conservative estimate approach for batch operations that overcounts tokens rather than undercounting in case of aggregation failures",
+        "Implement optional instrumentation flag that allows disabling token tracking when not needed during development/testing cycles"
+      ]
+    }
+  },
+  "roadmap": {
+    "phases": [
+      {
+        "number": 0,
+        "name": "Read Before Writing",
+        "objective": "Verify integration points by reading source",
+        "deliverables": [
+          "Verified: fitz_ai/llm/providers/base.py",
+          "Verified: fitz_ai/llm/providers/openai.py",
+          "Verified: fitz_ai/llm/providers/anthropic.py",
+          "Verified: fitz_ai/llm/providers/cohere.py",
+          "Verified: fitz_ai/llm/providers/ollama.py"
+        ],
+        "dependencies": [],
+        "estimated_complexity": "low",
+        "key_risks": [],
+        "verification_command": "pytest tests/test_providers.py -v",
+        "estimated_effort": "~15 min"
+      },
+      {
+        "number": 2,
+        "name": "Define TokenAccountingHook Protocol",
+        "objective": "Create the new hook interface to extend benchmarking capabilities for token tracking",
+        "deliverables": [
+          "TokenAccountingHook protocol definition in fitz_ai/core/instrumentation.py"
+        ],
+        "dependencies": [],
+        "estimated_complexity": "medium",
+        "key_risks": [
+          "Risk of missing existing infrastructure patterns in the codebase"
+        ],
+        "verification_command": "pytest tests/test_instrumentation.py -v",
+        "estimated_effort": "~30 minutes"
+      },
+      {
+        "number": 3,
+        "name": "Enhance InstrumentedProxy Logic",
+        "objective": "Update proxy logic to support both BenchmarkHook and TokenAccountingHook",
+        "deliverables": [
+          "Updated _wrap_method in fitz_ai/core/instrumentation.py to handle token accounting hooks"
+        ],
+        "dependencies": [
+          2
+        ],
+        "estimated_complexity": "high",
+        "key_risks": [
+          "Risk of not properly integrating with existing InstrumentedProxy._wrap_method implementation",
+          "Potential performance overhead from additional hook checks"
+        ],
+        "verification_command": "pytest tests/test_instrumentation.py::test_token_accounting_hook_integration -v",
+        "estimated_effort": "~45 minutes"
+      },
+      {
+        "number": 4,
+        "name": "Create Sample Hook Implementation",
+        "objective": "Create a simple hook that demonstrates usage for testing purposes",
+        "deliverables": [
+          "MockTokenHook implementation in tests or example code"
+        ],
+        "dependencies": [
+          2,
+          3
+        ],
+        "estimated_complexity": "low",
+        "key_risks": [
+          "Risk of incomplete mock implementation that doesn't cover edge cases"
+        ],
+        "verification_command": "pytest tests/test_instrumentation.py::test_mock_token_hook -v",
+        "estimated_effort": "~30 minutes"
+      }
+    ],
+    "critical_path": [
+      0,
+      2,
+      3,
+      4
+    ],
+    "parallel_opportunities": [],
+    "total_phases": 4
+  },
+  "risk": {
+    "risks": [
+      {
+        "category": "technical",
+        "description": "Hook Registration Timing - The implementation depends on proper registration of hooks before providers are instrumented",
+        "impact": "medium",
+        "likelihood": "high",
+        "mitigation": "Implement thorough testing to verify that registering hook after provider creation still works properly through instrumentation checks",
+        "contingency": "If late registration fails, implement a fallback mechanism that attempts re-instrumentation when hooks are registered later",
+        "affected_phases": [
+          2
+        ],
+        "verification": "Test that registering hook after provider creation still works properly (through instrumentation checks)"
+      },
+      {
+        "category": "technical",
+        "description": "Provider Method Signatures - Different LLM providers have varying method signatures causing potential instrumentation gaps",
+        "impact": "medium",
+        "likelihood": "high",
+        "mitigation": "Test with each provider type (OpenAI, Anthropic, Cohere, Ollama) to ensure all methods are instrumented correctly",
+        "contingency": "For uninstrumented methods, log a warning and implement graceful fallback behavior while documenting unsupported methods",
+        "affected_phases": [
+          2
+        ],
+        "verification": "Test with each provider type (OpenAI, Anthropic, Cohere, Ollama)"
+      },
+      {
+        "category": "technical",
+        "description": "Streaming Chat Methods - chat_stream methods return iterators rather than strings making token tracking complex",
+        "impact": "high",
+        "likelihood": "medium",
+        "mitigation": "Implement separate handling for streaming vs non-streaming calls to ensure correct token estimation for both cases",
+        "contingency": "For streaming responses, implement approximate token counting that tracks cumulative output tokens over time rather than individual chunks",
+        "affected_phases": [
+          2
+        ],
+        "verification": "Test streaming vs non-streaming calls to verify proper handling of both types"
+      },
+      {
+        "category": "technical",
+        "description": "Batch Operations - EmbeddingProvider has batch operations that process multiple texts requiring correct aggregation of token counts",
+        "impact": "medium",
+        "likelihood": "high",
+        "mitigation": "Create unit tests on embed_batch and related methods with multiple items to verify proper token counting across batches",
+        "contingency": "If batch aggregation fails, implement conservative estimate approach that overcounts tokens rather than undercounting",
+        "affected_phases": [
+          2
+        ],
+        "verification": "Unit tests on embed_batch and related methods with multiple items"
+      },
+      {
+        "category": "technical",
+        "description": "Instrumentation Overhead - Adding hooks may introduce performance overhead to already slow LLM calls",
+        "impact": "medium",
+        "likelihood": "high",
+        "mitigation": "Conduct performance benchmarks showing <10% overhead in typical usage and optimize hook execution logic where possible",
+        "contingency": "Implement optional instrumentation flag that allows disabling token tracking when not needed for development/testing",
+        "affected_phases": [
+          2
+        ],
+        "verification": "Performance benchmarks showing <10% overhead in typical usage"
+      },
+      {
+        "category": "integration",
+        "description": "Hook Registration Dependencies - Consumers may use token tracking without proper hook setup causing silent failure",
+        "impact": "high",
+        "likelihood": "medium",
+        "mitigation": "Implement comprehensive testing for both cases: with and without hooks registered to ensure graceful degradation",
+        "contingency": "Add explicit validation that ensures hooks are registered before attempting token tracking, or implement fallback behavior when no hooks present",
+        "affected_phases": [
+          2
+        ],
+        "verification": "Test both cases: with and without hooks registered"
+      },
+      {
+        "category": "quality",
+        "description": "Token estimation fails silently for unknown models or edge cases",
+        "impact": "medium",
+        "likelihood": "high",
+        "mitigation": "Add default fallbacks (e.g., conservative estimates) that are logged as warnings when token estimation cannot be performed accurately",
+        "contingency": "Implement comprehensive logging with warning levels to alert users about potential inaccuracies in token tracking for unknown models",
+        "affected_phases": [
+          2
+        ],
+        "verification": "Add default fallbacks (e.g., conservative estimates) that are logged as warnings"
+      }
+    ],
+    "overall_risk_level": "high",
+    "recommended_contingencies": [
+      "Implement a fallback mechanism for late hook registration that attempts re-instrumentation when hooks become available",
+      "For uninstrumented methods, implement graceful logging and documentation of unsupported methods instead of complete failure",
+      "Establish separate handling logic for streaming vs non-streaming responses to properly track token usage over time",
+      "Create conservative estimate approach for batch operations that overcounts tokens rather than undercounting in case of aggregation failures",
+      "Implement optional instrumentation flag that allows disabling token tracking when not needed during development/testing cycles"
+    ]
+  }
+}

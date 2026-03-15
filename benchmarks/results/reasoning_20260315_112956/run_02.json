@@ -1,0 +1,16 @@
+{
+  "run": 2,
+  "elapsed_s": 456.9,
+  "success": true,
+  "recommended": "Protocol Extension with Structured Responses",
+  "plan_size": 72737,
+  "stage_timings": {
+    "agent_gathering": 6.625,
+    "implementation_check": 2.6719999999913853,
+    "context": 63.25,
+    "architecture_design": 275.39000000001397,
+    "roadmap_risk": 106.875,
+    "coherence_check": 2.077999999979511
+  },
+  "error": null
+}

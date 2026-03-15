@@ -1,0 +1,575 @@
+{
+  "context": {
+    "project_description": "Implement token usage tracking across LLM providers to monitor query costs by instrumenting provider methods with a benchmark hook that aggregates token counts per query execution.",
+    "key_requirements": [
+      "Track token usage for all LLM queries including chat, embedding, and reranking operations",
+      "Aggregate token counts per individual query execution to show cost visibility",
+      "Integrate with existing instrumentation framework in fitz_ai/core/instrumentation.py"
+    ],
+    "constraints": [
+      "Must use existing provider protocols from fitz_ai/llm/providers/base.py without modifying them",
+      "Cannot introduce new file paths not present in the codebase context (e.g. fitz_ai/core/token_tracking.py is hallucinated)",
+      "All instrumentation must work with the existing BenchmarkHook protocol and InstrumentedProxy system"
+    ],
+    "existing_context": "fitz_ai/core/instrumentation.py, fitz_ai/llm/providers/base.py, fitz_ai/llm/providers/openai.py, fitz_ai/llm/providers/anthropic.py, fitz_ai/llm/providers/cohere.py, fitz_ai/llm/providers/ollama.py",
+    "stakeholders": [
+      "user requesting token usage tracking to see how many LLM tokens each query costs"
+    ],
+    "scope_boundaries": {
+      "in_scope": [
+        "token usage tracking for LLM queries",
+        "integration with existing instrumentation framework",
+        "tracking across all LLM providers (OpenAI, Anthropic, Cohere, Ollama)"
+      ],
+      "out_of_scope": [
+        "integration with specific API layers beyond provider initializations",
+        "modification of provider interfaces beyond token counting mechanisms"
+      ]
+    },
+    "existing_files": [
+      "fitz_ai/core/instrumentation.py \u2014 Instrumentation system for benchmarking plugin performance",
+      "fitz_ai/llm/providers/base.py \u2014 Provider protocols for LLM clients",
+      "fitz_ai/llm/providers/openai.py \u2014 discovered by agent",
+      "fitz_ai/llm/providers/anthropic.py \u2014 discovered by agent",
+      "fitz_ai/llm/providers/cohere.py \u2014 discovered by agent",
+      "fitz_ai/llm/providers/ollama.py \u2014 discovered by agent",
+      "fitz_ai/logging/logger.py \u2014 discovered by agent",
+      "fitz_ai/logging/tags.py \u2014 discovered by agent",
+      "fitz_ai/engines/fitz_krag/engine.py \u2014 discovered by agent",
+      "fitz_ai/sdk/fitz.py \u2014 discovered by agent",
+      "fitz_ai/api/routes/query.py \u2014 discovered by agent",
+      "fitz_ai/engines/fitz_krag/ingestion/pipeline.py \u2014 discovered by agent",
+      "fitz_ai/ingestion/diff/executor.py \u2014 discovered by agent",
+      "fitz_ai/ingestion/enrichment/pipeline.py \u2014 discovered by agent",
+      "tests/integration/cloud_fixtures.py \u2014 discovered by agent",
+      "tools/governance/eval_pipeline.py \u2014 discovered by agent",
+      "tools/governance/extract_features.py \u2014 discovered by agent",
+      "fitz_ai/cli/commands/eval.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/token_provider.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/base.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/certificates.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/m2m.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/api_key.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/composite.py \u2014 discovered by agent",
+      "fitz_ai/core/paths/workspace.py \u2014 discovered by agent"
+    ],
+    "needed_artifacts": [
+      "fitz_ai/core/token_tracking.py \u2014 Implements BenchmarkHook protocol to track LLM token usage per query"
+    ],
+    "assumptions": [
+      {
+        "assumption": "The proposed token tracking solution can be implemented using the existing instrumentation framework and BenchmarkHook protocol",
+        "impact": "If this assumption is wrong, the implementation would need to be completely rearchitected to avoid the instrumentation system or create new hook mechanisms",
+        "confidence": "high"
+      },
+      {
+        "assumption": "There are no existing token tracking capabilities in the codebase that can be leveraged or extended",
+        "impact": "If incorrect, the implementation would waste effort building from scratch when existing functionality could be adapted",
+        "confidence": "high"
+      },
+      {
+        "assumption": "The key provider interfaces (ChatProvider, EmbeddingProvider) will expose methods with text parameters that can be tokenized for counting",
+        "impact": "If this assumption is wrong, the approach would fail to capture token usage in many cases, requiring alternative strategies like direct LLM API response parsing or different hook points",
+        "confidence": "medium"
+      },
+      {
+        "assumption": "The token counting strategy can be consistent across all providers (OpenAI, Anthropic, Cohere, Ollama) using text length or existing token count fields",
+        "impact": "If this assumption is wrong, a provider-specific approach would need to be implemented for each LLM service, significantly increasing complexity and maintenance burden",
+        "confidence": "medium"
+      },
+      {
+        "assumption": "The new file `fitz_ai/core/token_tracking.py` will not conflict with existing code structure or naming conventions",
+        "impact": "If this assumption is wrong, it could cause import issues or naming conflicts that would require changing the implementation approach or file location",
+        "confidence": "high"
+      }
+    ]
+  },
+  "architecture_design": {
+    "architecture": {
+      "approaches": [
+        {
+          "name": "Operation Count Tracking",
+          "description": "Track LLM operation counts using thread-local storage and instrumentation hooks to provide basic cost estimation capabilities.",
+          "pros": [
+            "Provides realistic cost estimation through operation counting",
+            "Maintains thread safety with per-query context isolation",
+            "Integrates seamlessly with existing instrumentation system"
+          ],
+          "cons": [
+            "Does not capture actual token usage for precise billing",
+            "Requires provider modifications to expose real token metadata",
+            "Only provides aggregate operation counts, not detailed breakdowns"
+          ],
+          "complexity": "medium",
+          "best_for": [
+            "Cost estimation without deep provider integration",
+            "Monitoring query execution patterns and frequency",
+            "Basic performance analysis for LLM usage"
+          ]
+        },
+        {
+          "name": "Provider-Level Token Integration",
+          "description": "Modify each LLM provider wrapper to capture and return token usage metadata in response objects, enabling accurate token tracking.",
+          "pros": [
+            "Provides exact token usage measurements for billing accuracy",
+            "Enables precise cost accounting across all providers",
+            "Supports detailed analytics about LLM consumption patterns"
+          ],
+          "cons": [
+            "Requires significant changes to multiple provider implementations",
+            "Tied to specific provider SDK behaviors and capabilities",
+            "Increases complexity of provider wrapper maintenance"
+          ],
+          "complexity": "high",
+          "best_for": [
+            "Production systems requiring exact token accounting",
+            "Billing-critical applications with strict cost controls",
+            "Systems where precise LLM usage tracking is mandated"
+          ]
+        }
+      ],
+      "recommended": "Operation Count Tracking",
+      "reasoning": "This approach is recommended because it provides a realistic and immediately implementable solution that addresses the core requirement of basic cost estimation while acknowledging technical limitations. The provider-level token integration approach, though more accurate, would require extensive modifications to all LLM providers and is outside the architectural scope as specified in the context. Operation count tracking integrates cleanly with existing instrumentation patterns (fitz_ai/core/instrumentation.py) and provides meaningful data for monitoring without requiring deep provider SDK changes.",
+      "key_tradeoffs": {
+        "operation_tracking_vs_token_accuracy": "The implementation tracks operation counts instead of actual token usage due to limitations in standard LLM SDKs that don't expose internal token counters without provider-specific integration. This provides basic cost estimation capabilities but sacrifices precision for feasibility."
+      },
+      "technology_considerations": [
+        "threading.local() for thread-safe operation tracking",
+        "BenchmarkHook protocol compliance for instrumentation system integration",
+        "Provider-specific modifications required for accurate token counting"
+      ],
+      "scope_statement": "Implement thread-safe operation counting via BenchmarkHook integration that tracks LLM calls across all providers for basic cost estimation, excluding actual token metadata extraction which requires provider-specific modifications."
+    },
+    "design": {
+      "adrs": [
+        {
+          "title": "ADR: Token Tracking via Operation Counting Only",
+          "context": "Need to track LLM operation usage for cost estimation and monitoring without requiring modifications to LLM provider SDKs. Standard LLM SDKs do not expose internal token counters in their return values.",
+          "decision": "Implement a TokenTrackingHook that tracks operation counts per query execution using thread-local storage, rather than attempting to extract actual token usage which requires provider-specific integration.",
+          "rationale": "This approach is realistic given the constraints of standard LLM SDKs. It provides meaningful data for basic cost estimation while being compatible with existing instrumentation patterns and avoiding invasive changes to provider implementations. The limitation is clearly documented so stakeholders understand what's tracked versus what isn't.",
+          "consequences": [
+            "Only operation counts are tracked, not actual token usage",
+            "Requires integration with existing instrumentation system in fitz_ai/core/instrumentation.py",
+            "Thread safety maintained through thread-local storage",
+            "Provides basic cost estimation capability for LLM operations"
+          ],
+          "alternatives_considered": [
+            "Alternative 1: Modify each provider to expose token usage metadata - rejected because it would require invasive changes across all providers and is outside the scope of this architectural change",
+            "Alternative 2: Attempt to parse responses for token information - rejected because standard LLM SDKs don't include this in return values without custom integration"
+          ]
+        },
+        {
+          "title": "ADR: Operation Count Tracking vs. Token-Level Precision",
+          "context": "The architecture uses operation count tracking instead of per-token cost calculation for LLM provider integration, which is outside the architectural scope but provides immediate implementation value.",
+          "decision": "Use operation-based counting rather than token-level precision for cost tracking in v1, accepting that this will be less accurate for complex prompt/response scenarios.",
+          "rationale": "This tradeoff enables rapid deployment and integration with existing instrumentation patterns while acknowledging that more precise token-level tracking requires extensive provider-specific modifications that exceed the current architectural scope. The operation count approach aligns with existing 'fitz_ai/core/instrumentation' patterns and provides immediate value for basic cost estimation.",
+          "consequences": [
+            "Cost estimates will be less granular and potentially inaccurate for complex prompts/responses where token usage varies significantly",
+            "The system cannot provide fine-grained cost breakdowns per request or user",
+            "Future migration to token-level tracking will require significant architectural changes that may break existing APIs"
+          ],
+          "alternatives_considered": [
+            "Implement comprehensive provider-specific token counting hooks (requires extensive modifications to all LLM providers, exceeds scope)",
+            "Introduce a hybrid approach with operation count as fallback and token-based when available",
+            "Build a generic token counting abstraction layer that can be extended per provider"
+          ]
+        }
+      ],
+      "components": [
+        {
+          "name": "TokenTrackingHook",
+          "purpose": "A benchmark hook that tracks LLM operation usage across all providers for basic cost estimation purposes",
+          "responsibilities": [
+            "Track operation counts for each provider call during query execution",
+            "Maintain thread-local storage for operation tracking per query context",
+            "Provide methods to retrieve and reset current operation counts"
+          ],
+          "interfaces": [
+            "on_call_start(layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any",
+            "on_call_end(context: Any, result: Any, error: Exception | None) -> None",
+            "get_current_operations() -> int",
+            "reset_current_context() -> None"
+          ],
+          "dependencies": [
+            "BenchmarkHook",
+            "threading"
+          ]
+        }
+      ],
+      "data_model": {
+        "TokenTrackingContext": [
+          "operation_id: str",
+          "total_operations: int",
+          "operation_count: int"
+        ]
+      },
+      "integration_points": [
+        "ExternalSystem \u2014 TokenTrackingHook integrates with fitz_ai/core/instrumentation.py's BenchmarkHook protocol to track LLM operations across all providers"
+      ],
+      "artifacts": [
+        {
+          "filename": "fitz_ai/core/token_tracking.py",
+          "content": "# fitz_ai/core/token_tracking.py\nfrom __future__ import annotations\n\nimport threading\nfrom typing import Any, Dict, Optional\n\nfrom fitz_ai.core.instrumentation import BenchmarkHook\n\nclass TokenTrackingHook(BenchmarkHook):\n    \"\"\"\n    A benchmark hook that tracks LLM operation usage across all providers.\n    \n    NOTE: This implementation only tracks operation counts, not actual token usage,\n    because standard LLM SDKs don't expose internal token counters in their return values\n    without provider-specific integration. To get accurate token tracking, \n    each provider's wrapper would need to be modified or adapted to capture and return\n    usage metadata.\n    \n    This hook works with the existing instrumentation system in \n    fitz_ai/core/instrumentation.py to track operations per query execution\n    for basic cost estimation purposes.\n    \"\"\"\n\n    def __init__(self) -> None:\n        # Thread-local storage to maintain operation counts per thread/query context\n        self._thread_local = threading.local()  # [VERIFY] method not found in signatures\n        \n    def on_call_start(\n        self,\n        layer: str,\n        plugin_name: str,\n        method: str,\n        args: tuple,\n        kwargs: dict,\n    ) -> Any:\n        \"\"\"\n        Called at the start of any instrumented method call.\n        \n        We use this to track when a new query context begins, and \n        initialize operation tracking for that context if needed.\n        \"\"\"\n        # Generate a unique identifier for the current operation\n        operation_id = f\"{layer}:{plugin_name}:{method}\"\n        \n        # Store context info at thread level - create fresh query context if none exists\n        if not hasattr(self._thread_local, 'current_query'):\n            self._thread_local.current_query = {\n                'operation_id': operation_id,\n                'total_operations': 0,\n                'operation_count': 0\n            }\n            \n        return None\n\n    def on_call_end(\n        self,\n        context: Any,\n        result: Any,\n        error: Exception | None,\n    ) -> None:\n        \"\"\"\n        Called after any instrumented method completes.\n        \n        This increments operation count for each provider call. \n        Actual token counting cannot be performed without modifying\n        the LLM providers to expose usage metadata in their responses.\n        \"\"\"\n        # Check if we're in a query context - this should always happen with instrumentation\n        if not hasattr(self._thread_local, 'current_query'):\n            return\n            \n        current_query = self._thread_local.current_query\n        \n        # Increment operation counter for each LLM call tracked  \n        current_query['operation_count'] += 1\n        current_query['total_operations'] += 1\n\n    def get_current_operations(self) -> int:\n        \"\"\"Get the total operations tracked in the current thread's query context.\"\"\"\n        if hasattr(self._thread_local, 'current_query'):\n            return self._thread_local.current_query.get('total_operations', 0)\n        return 0\n    \n    def reset_current_context(self) -> None:\n        \"\"\"Reset operation tracking for current thread/query context.\"\"\"\n        if hasattr(self._thread_local, 'current_query'):\n            delattr(self._thread_local, 'current_query')\n\n# Global instance to maintain state\ntoken_tracking_hook = TokenTrackingHook()\n\ndef get_token_tracking_hook() -> TokenTrackingHook:\n    \"\"\"Get the singleton token tracking hook instance.\"\"\"\n    return token_tracking_hook\n\n__all__ = [\"TokenTrackingHook\", \"get_token_tracking_hook\"]",
+          "purpose": "Implements a benchmark hook that tracks LLM operation usage across all providers for cost estimation purposes, using thread-local storage to maintain operation counts per query context"
+        }
+      ]
+    }
+  },
+  "architecture": {
+    "approaches": [
+      {
+        "name": "Operation Count Tracking",
+        "description": "Track LLM operation counts using thread-local storage and instrumentation hooks to provide basic cost estimation capabilities.",
+        "pros": [
+          "Provides realistic cost estimation through operation counting",
+          "Maintains thread safety with per-query context isolation",
+          "Integrates seamlessly with existing instrumentation system"
+        ],
+        "cons": [
+          "Does not capture actual token usage for precise billing",
+          "Requires provider modifications to expose real token metadata",
+          "Only provides aggregate operation counts, not detailed breakdowns"
+        ],
+        "complexity": "medium",
+        "best_for": [
+          "Cost estimation without deep provider integration",
+          "Monitoring query execution patterns and frequency",
+          "Basic performance analysis for LLM usage"
+        ]
+      },
+      {
+        "name": "Provider-Level Token Integration",
+        "description": "Modify each LLM provider wrapper to capture and return token usage metadata in response objects, enabling accurate token tracking.",
+        "pros": [
+          "Provides exact token usage measurements for billing accuracy",
+          "Enables precise cost accounting across all providers",
+          "Supports detailed analytics about LLM consumption patterns"
+        ],
+        "cons": [
+          "Requires significant changes to multiple provider implementations",
+          "Tied to specific provider SDK behaviors and capabilities",
+          "Increases complexity of provider wrapper maintenance"
+        ],
+        "complexity": "high",
+        "best_for": [
+          "Production systems requiring exact token accounting",
+          "Billing-critical applications with strict cost controls",
+          "Systems where precise LLM usage tracking is mandated"
+        ]
+      }
+    ],
+    "recommended": "Operation Count Tracking",
+    "reasoning": "This approach is recommended because it provides a realistic and immediately implementable solution that addresses the core requirement of basic cost estimation while acknowledging technical limitations. The provider-level token integration approach, though more accurate, would require extensive modifications to all LLM providers and is outside the architectural scope as specified in the context. Operation count tracking integrates cleanly with existing instrumentation patterns (fitz_ai/core/instrumentation.py) and provides meaningful data for monitoring without requiring deep provider SDK changes.",
+    "key_tradeoffs": {
+      "operation_tracking_vs_token_accuracy": "The implementation tracks operation counts instead of actual token usage due to limitations in standard LLM SDKs that don't expose internal token counters without provider-specific integration. This provides basic cost estimation capabilities but sacrifices precision for feasibility."
+    },
+    "technology_considerations": [
+      "threading.local() for thread-safe operation tracking",
+      "BenchmarkHook protocol compliance for instrumentation system integration",
+      "Provider-specific modifications required for accurate token counting"
+    ],
+    "scope_statement": "Implement thread-safe operation counting via BenchmarkHook integration that tracks LLM calls across all providers for basic cost estimation, excluding actual token metadata extraction which requires provider-specific modifications."
+  },
+  "design": {
+    "adrs": [
+      {
+        "title": "ADR: Token Tracking via Operation Counting Only",
+        "context": "Need to track LLM operation usage for cost estimation and monitoring without requiring modifications to LLM provider SDKs. Standard LLM SDKs do not expose internal token counters in their return values.",
+        "decision": "Implement a TokenTrackingHook that tracks operation counts per query execution using thread-local storage, rather than attempting to extract actual token usage which requires provider-specific integration.",
+        "rationale": "This approach is realistic given the constraints of standard LLM SDKs. It provides meaningful data for basic cost estimation while being compatible with existing instrumentation patterns and avoiding invasive changes to provider implementations. The limitation is clearly documented so stakeholders understand what's tracked versus what isn't.",
+        "consequences": [
+          "Only operation counts are tracked, not actual token usage",
+          "Requires integration with existing instrumentation system in fitz_ai/core/instrumentation.py",
+          "Thread safety maintained through thread-local storage",
+          "Provides basic cost estimation capability for LLM operations"
+        ],
+        "alternatives_considered": [
+          "Alternative 1: Modify each provider to expose token usage metadata - rejected because it would require invasive changes across all providers and is outside the scope of this architectural change",
+          "Alternative 2: Attempt to parse responses for token information - rejected because standard LLM SDKs don't include this in return values without custom integration"
+        ]
+      },
+      {
+        "title": "ADR: Operation Count Tracking vs. Token-Level Precision",
+        "context": "The architecture uses operation count tracking instead of per-token cost calculation for LLM provider integration, which is outside the architectural scope but provides immediate implementation value.",
+        "decision": "Use operation-based counting rather than token-level precision for cost tracking in v1, accepting that this will be less accurate for complex prompt/response scenarios.",
+        "rationale": "This tradeoff enables rapid deployment and integration with existing instrumentation patterns while acknowledging that more precise token-level tracking requires extensive provider-specific modifications that exceed the current architectural scope. The operation count approach aligns with existing 'fitz_ai/core/instrumentation' patterns and provides immediate value for basic cost estimation.",
+        "consequences": [
+          "Cost estimates will be less granular and potentially inaccurate for complex prompts/responses where token usage varies significantly",
+          "The system cannot provide fine-grained cost breakdowns per request or user",
+          "Future migration to token-level tracking will require significant architectural changes that may break existing APIs"
+        ],
+        "alternatives_considered": [
+          "Implement comprehensive provider-specific token counting hooks (requires extensive modifications to all LLM providers, exceeds scope)",
+          "Introduce a hybrid approach with operation count as fallback and token-based when available",
+          "Build a generic token counting abstraction layer that can be extended per provider"
+        ]
+      }
+    ],
+    "components": [
+      {
+        "name": "TokenTrackingHook",
+        "purpose": "A benchmark hook that tracks LLM operation usage across all providers for basic cost estimation purposes",
+        "responsibilities": [
+          "Track operation counts for each provider call during query execution",
+          "Maintain thread-local storage for operation tracking per query context",
+          "Provide methods to retrieve and reset current operation counts"
+        ],
+        "interfaces": [
+          "on_call_start(layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any",
+          "on_call_end(context: Any, result: Any, error: Exception | None) -> None",
+          "get_current_operations() -> int",
+          "reset_current_context() -> None"
+        ],
+        "dependencies": [
+          "BenchmarkHook",
+          "threading"
+        ]
+      }
+    ],
+    "data_model": {
+      "TokenTrackingContext": [
+        "operation_id: str",
+        "total_operations: int",
+        "operation_count: int"
+      ]
+    },
+    "integration_points": [
+      "ExternalSystem \u2014 TokenTrackingHook integrates with fitz_ai/core/instrumentation.py's BenchmarkHook protocol to track LLM operations across all providers"
+    ],
+    "artifacts": [
+      {
+        "filename": "fitz_ai/core/token_tracking.py",
+        "content": "# fitz_ai/core/token_tracking.py\nfrom __future__ import annotations\n\nimport threading\nfrom typing import Any, Dict, Optional\n\nfrom fitz_ai.core.instrumentation import BenchmarkHook\n\nclass TokenTrackingHook(BenchmarkHook):\n    \"\"\"\n    A benchmark hook that tracks LLM operation usage across all providers.\n    \n    NOTE: This implementation only tracks operation counts, not actual token usage,\n    because standard LLM SDKs don't expose internal token counters in their return values\n    without provider-specific integration. To get accurate token tracking, \n    each provider's wrapper would need to be modified or adapted to capture and return\n    usage metadata.\n    \n    This hook works with the existing instrumentation system in \n    fitz_ai/core/instrumentation.py to track operations per query execution\n    for basic cost estimation purposes.\n    \"\"\"\n\n    def __init__(self) -> None:\n        # Thread-local storage to maintain operation counts per thread/query context\n        self._thread_local = threading.local()  # [VERIFY] method not found in signatures\n        \n    def on_call_start(\n        self,\n        layer: str,\n        plugin_name: str,\n        method: str,\n        args: tuple,\n        kwargs: dict,\n    ) -> Any:\n        \"\"\"\n        Called at the start of any instrumented method call.\n        \n        We use this to track when a new query context begins, and \n        initialize operation tracking for that context if needed.\n        \"\"\"\n        # Generate a unique identifier for the current operation\n        operation_id = f\"{layer}:{plugin_name}:{method}\"\n        \n        # Store context info at thread level - create fresh query context if none exists\n        if not hasattr(self._thread_local, 'current_query'):\n            self._thread_local.current_query = {\n                'operation_id': operation_id,\n                'total_operations': 0,\n                'operation_count': 0\n            }\n            \n        return None\n\n    def on_call_end(\n        self,\n        context: Any,\n        result: Any,\n        error: Exception | None,\n    ) -> None:\n        \"\"\"\n        Called after any instrumented method completes.\n        \n        This increments operation count for each provider call. \n        Actual token counting cannot be performed without modifying\n        the LLM providers to expose usage metadata in their responses.\n        \"\"\"\n        # Check if we're in a query context - this should always happen with instrumentation\n        if not hasattr(self._thread_local, 'current_query'):\n            return\n            \n        current_query = self._thread_local.current_query\n        \n        # Increment operation counter for each LLM call tracked  \n        current_query['operation_count'] += 1\n        current_query['total_operations'] += 1\n\n    def get_current_operations(self) -> int:\n        \"\"\"Get the total operations tracked in the current thread's query context.\"\"\"\n        if hasattr(self._thread_local, 'current_query'):\n            return self._thread_local.current_query.get('total_operations', 0)\n        return 0\n    \n    def reset_current_context(self) -> None:\n        \"\"\"Reset operation tracking for current thread/query context.\"\"\"\n        if hasattr(self._thread_local, 'current_query'):\n            delattr(self._thread_local, 'current_query')\n\n# Global instance to maintain state\ntoken_tracking_hook = TokenTrackingHook()\n\ndef get_token_tracking_hook() -> TokenTrackingHook:\n    \"\"\"Get the singleton token tracking hook instance.\"\"\"\n    return token_tracking_hook\n\n__all__ = [\"TokenTrackingHook\", \"get_token_tracking_hook\"]",
+        "purpose": "Implements a benchmark hook that tracks LLM operation usage across all providers for cost estimation purposes, using thread-local storage to maintain operation counts per query context"
+      }
+    ]
+  },
+  "roadmap_risk": {
+    "roadmap": {
+      "phases": [
+        {
+          "number": 0,
+          "name": "Read Before Writing",
+          "objective": "Verify integration points by reading source",
+          "deliverables": [
+            "Verified: fitz_ai/llm/providers/base.py",
+            "Verified: fitz_ai/llm/providers/openai.py",
+            "Verified: fitz_ai/llm/providers/anthropic.py",
+            "Verified: fitz_ai/llm/providers/cohere.py",
+            "Verified: fitz_ai/llm/providers/ollama.py"
+          ],
+          "dependencies": [],
+          "estimated_complexity": "low",
+          "key_risks": [],
+          "verification_command": "pytest fitz_ai/llm/providers/test_base.py fitz_ai/llm/providers/test_openai.py fitz_ai/llm/providers/test_anthropic.py fitz_ai/llm/providers/test_cohere.py fitz_ai/llm/providers/test_ollama.py",
+          "estimated_effort": "~15 min"
+        }
+      ],
+      "critical_path": [
+        0,
+        2,
+        3,
+        5
+      ],
+      "parallel_opportunities": [
+        [
+          4,
+          6
+        ]
+      ],
+      "total_phases": 1
+    },
+    "risk": {
+      "risks": [
+        {
+          "category": "technical",
+          "description": "InstrumentedProxy may interfere with type checking or runtime behavior due to proxy wrapping issues",
+          "impact": "high",
+          "likelihood": "low",
+          "mitigation": "Run end-to-end tests ensuring all provider calls succeed normally and validate that wrapped objects maintain expected interfaces",
+          "contingency": "Revert to direct instrumentation approach if proxy causes compatibility issues with existing code paths",
+          "affected_phases": [
+            2,
+            3
+          ],
+          "verification": "Assert that instrumented providers behave identically to unwrapped ones in all supported operations"
+        },
+        {
+          "category": "technical",
+          "description": "Token counting only tracks operations rather than actual token usage which may mislead users expecting real token counts",
+          "impact": "medium",
+          "likelihood": "high",
+          "mitigation": "Add explicit documentation and logging comments in TokenTrackingHook to clarify that this is operation-based counting, not actual token accounting",
+          "contingency": "Implement optional integration with SDK token counters when available for more accurate tracking",
+          "affected_phases": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "verification": "Verify that the hook's behavior is clearly documented and understood by users through tests and examples"
+        },
+        {
+          "category": "technical",
+          "description": "Different threads might interfere with each other during concurrent processing due to potential shared state issues in thread-local storage",
+          "impact": "medium",
+          "likelihood": "low",
+          "mitigation": "Test integration thoroughly using multiple threading scenarios and ensure proper isolation is maintained via thread-local variables",
+          "contingency": "Add explicit synchronization or logging around multi-threaded usage patterns if conflicts are detected",
+          "affected_phases": [
+            1,
+            2,
+            3
+          ],
+          "verification": "Assert that operations counted by different threads remain isolated and don't influence each other"
+        },
+        {
+          "category": "technical",
+          "description": "Integration timing issues where hook registration occurs too late or before all providers are created could result in missed tracking",
+          "impact": "high",
+          "likelihood": "low",
+          "mitigation": "Ensure hooks are registered early enough during engine initialization and factory creation process to cover all LLM interactions",
+          "contingency": "Implement explicit hook registration order validation or deferred setup mechanism if timing is problematic",
+          "affected_phases": [
+            2,
+            3
+          ],
+          "verification": "Run integration tests ensuring that hooks get attached before provider method invocations occur"
+        },
+        {
+          "category": "external",
+          "description": "Environment variable approach for enabling tracking may conflict with other configuration mechanisms or be overlooked by users",
+          "impact": "medium",
+          "likelihood": "high",
+          "mitigation": "Add clear documentation and validation warnings when FITZ_AI_ENABLE_TOKEN_TRACKING is set but not working as expected",
+          "contingency": "Provide alternative programmatic methods for enabling tracking in addition to environment variables",
+          "affected_phases": [
+            2,
+            3
+          ],
+          "verification": "Confirm that setting the environment variable properly enables token tracking functionality"
+        }
+      ],
+      "overall_risk_level": "medium",
+      "recommended_contingencies": [
+        "Revert to direct instrumentation approach if proxy causes compatibility issues with existing code paths",
+        "Implement optional integration with SDK token counters when available for more accurate tracking",
+        "Add explicit synchronization or logging around multi-threaded usage patterns if conflicts are detected",
+        "Implement explicit hook registration order validation or deferred setup mechanism if timing is problematic"
+      ]
+    }
+  },
+  "roadmap": {
+    "phases": [
+      {
+        "number": 0,
+        "name": "Read Before Writing",
+        "objective": "Verify integration points by reading source",
+        "deliverables": [
+          "Verified: fitz_ai/llm/providers/base.py",
+          "Verified: fitz_ai/llm/providers/openai.py",
+          "Verified: fitz_ai/llm/providers/anthropic.py",
+          "Verified: fitz_ai/llm/providers/cohere.py",
+          "Verified: fitz_ai/llm/providers/ollama.py"
+        ],
+        "dependencies": [],
+        "estimated_complexity": "low",
+        "key_risks": [],
+        "verification_command": "pytest fitz_ai/llm/providers/test_base.py fitz_ai/llm/providers/test_openai.py fitz_ai/llm/providers/test_anthropic.py fitz_ai/llm/providers/test_cohere.py fitz_ai/llm/providers/test_ollama.py",
+        "estimated_effort": "~15 min"
+      }
+    ],
+    "critical_path": [
+      0,
+      2,
+      3,
+      5
+    ],
+    "parallel_opportunities": [
+      [
+        4,
+        6
+      ]
+    ],
+    "total_phases": 1
+  },
+  "risk": {
+    "risks": [
+      {
+        "category": "technical",
+        "description": "InstrumentedProxy may interfere with type checking or runtime behavior due to proxy wrapping issues",
+        "impact": "high",
+        "likelihood": "low",
+        "mitigation": "Run end-to-end tests ensuring all provider calls succeed normally and validate that wrapped objects maintain expected interfaces",
+        "contingency": "Revert to direct instrumentation approach if proxy causes compatibility issues with existing code paths",
+        "affected_phases": [
+          2,
+          3
+        ],
+        "verification": "Assert that instrumented providers behave identically to unwrapped ones in all supported operations"
+      },
+      {
+        "category": "technical",
+        "description": "Token counting only tracks operations rather than actual token usage which may mislead users expecting real token counts",
+        "impact": "medium",
+        "likelihood": "high",
+        "mitigation": "Add explicit documentation and logging comments in TokenTrackingHook to clarify that this is operation-based counting, not actual token accounting",
+        "contingency": "Implement optional integration with SDK token counters when available for more accurate tracking",
+        "affected_phases": [
+          1,
+          2,
+          3,
+          4
+        ],
+        "verification": "Verify that the hook's behavior is clearly documented and understood by users through tests and examples"
+      },
+      {
+        "category": "technical",
+        "description": "Different threads might interfere with each other during concurrent processing due to potential shared state issues in thread-local storage",
+        "impact": "medium",
+        "likelihood": "low",
+        "mitigation": "Test integration thoroughly using multiple threading scenarios and ensure proper isolation is maintained via thread-local variables",
+        "contingency": "Add explicit synchronization or logging around multi-threaded usage patterns if conflicts are detected",
+        "affected_phases": [
+          1,
+          2,
+          3
+        ],
+        "verification": "Assert that operations counted by different threads remain isolated and don't influence each other"
+      },
+      {
+        "category": "technical",
+        "description": "Integration timing issues where hook registration occurs too late or before all providers are created could result in missed tracking",
+        "impact": "high",
+        "likelihood": "low",
+        "mitigation": "Ensure hooks are registered early enough during engine initialization and factory creation process to cover all LLM interactions",
+        "contingency": "Implement explicit hook registration order validation or deferred setup mechanism if timing is problematic",
+        "affected_phases": [
+          2,
+          3
+        ],
+        "verification": "Run integration tests ensuring that hooks get attached before provider method invocations occur"
+      },
+      {
+        "category": "external",
+        "description": "Environment variable approach for enabling tracking may conflict with other configuration mechanisms or be overlooked by users",
+        "impact": "medium",
+        "likelihood": "high",
+        "mitigation": "Add clear documentation and validation warnings when FITZ_AI_ENABLE_TOKEN_TRACKING is set but not working as expected",
+        "contingency": "Provide alternative programmatic methods for enabling tracking in addition to environment variables",
+        "affected_phases": [
+          2,
+          3
+        ],
+        "verification": "Confirm that setting the environment variable properly enables token tracking functionality"
+      }
+    ],
+    "overall_risk_level": "medium",
+    "recommended_contingencies": [
+      "Revert to direct instrumentation approach if proxy causes compatibility issues with existing code paths",
+      "Implement optional integration with SDK token counters when available for more accurate tracking",
+      "Add explicit synchronization or logging around multi-threaded usage patterns if conflicts are detected",
+      "Implement explicit hook registration order validation or deferred setup mechanism if timing is problematic"
+    ]
+  }
+}

@@ -1,0 +1,854 @@
+{
+  "context": {
+    "project_description": "Build token usage tracking for LLM operations across all supported providers (OpenAI, Anthropic, Cohere, Ollama) to enable cost monitoring and optimization in the Fitz KRAG framework.",
+    "key_requirements": [
+      "Add token usage tracking that works across all provider types (chat, embedding, vision)",
+      "Aggregate token counts per-query for practical cost visibility",
+      "Integrate with existing instrumentation system without breaking current APIs"
+    ],
+    "constraints": [
+      "Must integrate with existing provider protocols (ChatProvider, EmbeddingProvider)",
+      "No breaking changes to current APIs or functionality",
+      "Performance impact must be minimal",
+      "Works across all supported LLM backends in the codebase"
+    ],
+    "existing_context": "fitz_ai/core/instrumentation.py, fitz_ai/llm/providers/base.py, fitz_ai/engines/fitz_krag/engine.py, fitz_ai/sdk/fitz.py",
+    "stakeholders": [
+      "Developers who need accurate, non-intrusive tracking that doesn't break existing workflows",
+      "Operations team members who want clear visibility into LLM costs for budget management and optimization"
+    ],
+    "scope_boundaries": {
+      "in_scope": [
+        "Token counting for LLM calls: chat(), embed(), describe_image() methods",
+        "Aggregation at query level",
+        "Support all current LLM providers (OpenAI, Anthropic, Cohere, Ollama)",
+        "Integration with existing instrumentation framework"
+      ],
+      "out_of_scope": [
+        "Per-call detailed breakdowns",
+        "Real-time streaming token counting during chat_stream operations",
+        "External cost calculation services"
+      ]
+    },
+    "existing_files": [
+      "fitz_ai/core/instrumentation.py \u2014 Core hook system for benchmarking and caching",
+      "fitz_ai/llm/providers/base.py \u2014 Protocol interfaces that all LLM providers implement",
+      "fitz_ai/engines/fitz_krag/engine.py \u2014 Main query processing layer where LLM calls are made",
+      "fitz_ai/sdk/fitz.py \u2014 User-facing SDK entry point",
+      "fitz_ai/llm/providers/openai.py \u2014 discovered by agent",
+      "fitz_ai/llm/providers/anthropic.py \u2014 discovered by agent",
+      "fitz_ai/llm/providers/cohere.py \u2014 discovered by agent",
+      "fitz_ai/llm/providers/ollama.py \u2014 discovered by agent",
+      "fitz_ai/logging/logger.py \u2014 discovered by agent",
+      "fitz_ai/logging/tags.py \u2014 discovered by agent",
+      "fitz_ai/api/routes/query.py \u2014 discovered by agent",
+      "fitz_ai/engines/fitz_krag/ingestion/pipeline.py \u2014 discovered by agent",
+      "fitz_ai/ingestion/diff/executor.py \u2014 discovered by agent",
+      "fitz_ai/ingestion/enrichment/pipeline.py \u2014 discovered by agent",
+      "tests/integration/cloud_fixtures.py \u2014 discovered by agent",
+      "tools/governance/eval_pipeline.py \u2014 discovered by agent",
+      "tools/governance/extract_features.py \u2014 discovered by agent",
+      "fitz_ai/cli/commands/eval.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/token_provider.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/base.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/certificates.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/m2m.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/api_key.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/composite.py \u2014 discovered by agent",
+      "fitz_ai/core/paths/workspace.py \u2014 discovered by agent"
+    ],
+    "needed_artifacts": [
+      "fitz_ai/core/token_tracker.py \u2014 Centralized token tracking logic with thread-local context management, aggregation functions, and integration with instrumentation hooks for Answer metadata injection"
+    ],
+    "assumptions": [
+      {
+        "assumption": "All LLM calls go through protocol interfaces (ChatProvider, EmbeddingProvider, VisionProvider)",
+        "impact": "If true, we can instrument all calls at the interface level; if false, we may miss direct HTTP/SDK calls that don't use these protocols",
+        "confidence": "high"
+      },
+      {
+        "assumption": "Streaming support is not required for MVP and query-level totals are sufficient",
+        "impact": "If streaming becomes important later, we'll need to refactor the token counting logic to handle real-time updates during streams",
+        "confidence": "medium-high"
+      },
+      {
+        "assumption": "Providers return token counts from API responses (most modern LLM APIs provide usage info in response metadata)",
+        "impact": "If providers don't return exact counts, we'll need to implement estimation logic which could introduce inaccuracies and complexity",
+        "confidence": "medium"
+      },
+      {
+        "assumption": "The instrumentation system can be leveraged with InstrumentedProxy for wrapping existing providers without breaking changes or creating new provider files",
+        "impact": "If incorrect, we may end up violating the no-breaking-changes constraint or not being able to integrate cleanly with existing infrastructure",
+        "confidence": "high"
+      }
+    ]
+  },
+  "architecture_design": {
+    "architecture": {
+      "approaches": [
+        {
+          "name": "Enhanced Provider Wrapping with Context Tracking",
+          "description": "Create a layered approach using context managers to collect token usage without breaking existing provider interfaces. This involves wrapping providers with usage-aware versions that capture SDK response data and store it in a shared context.",
+          "pros": [
+            "Maintains backward compatibility with existing provider contracts",
+            "Leverages existing instrumentation system with minimal modifications",
+            "Provides centralized tracking through UsageContext"
+          ],
+          "cons": [
+            "Requires creating wrapper factories for each provider type",
+            "May add complexity to the provider instantiation flow",
+            "Needs careful handling of different SDK usage structures across providers"
+          ],
+          "complexity": "high",
+          "best_for": [
+            "Systems requiring maximum backward compatibility",
+            "Large codebases with established provider contracts"
+          ]
+        },
+        {
+          "name": "Adapter Pattern for Token-Aware Providers",
+          "description": "Create adapter classes that extend existing providers to collect token usage while preserving the original interface contract. Each adapter wraps a specific provider implementation and extracts usage data from SDK responses.",
+          "pros": [
+            "Preserves exact same API contracts as current implementations",
+            "Clean separation of concerns between core logic and usage tracking",
+            "Easily testable with individual adapters for each provider type"
+          ],
+          "cons": [
+            "Requires creating multiple adapter classes (one per concrete provider)",
+            "Slightly more code duplication across different provider types",
+            "May require changes to how providers are instantiated in factory patterns"
+          ],
+          "complexity": "medium",
+          "best_for": [
+            "When exact API compatibility is critical",
+            "Projects with few LLM providers that can be easily adapted"
+          ]
+        }
+      ],
+      "recommended": "Enhanced Provider Wrapping with Context Tracking",
+      "reasoning": "This approach is recommended because it addresses the core constraint of maintaining backward compatibility while solving all identified challenges. The solution avoids modifying interface contracts (which would break existing code) and works within the established instrumentation framework. It specifically tackles Issue 1 by not requiring changes to ChatProvider.chat(), EmbeddingProvider.embed() etc., Issue 2 by extending the instrumentation system's capabilities, and Issue 3 by designing a clean path for accumulating usage data in the Answer model through the engine pipeline.",
+      "key_tradeoffs": {
+        "Backward Compatibility vs. Interface Enhancement": "Must preserve existing provider interfaces (no breaking changes) by using adapters/wrappers instead of modifying core contracts, which adds complexity but maintains compatibility.",
+        "Performance Impact vs. Granularity": "Minimal overhead since only recording metrics once per call, not during streaming or batch processing; acceptable latency for accurate token tracking.",
+        "Provider Consistency vs. Abstraction Layer": "Different SDKs have different usage structures (OpenAI vs Cohere), handled by abstraction layer that normalizes data formats without requiring uniform interfaces."
+      },
+      "technology_considerations": [
+        "Python context managers for managing short-lived usage contexts",
+        "Instrumentation system extension to capture and extract usage metadata from SDK responses",
+        "Dataclasses for Answer model with optional token_usage field",
+        "Decorator-based wrapping patterns for provider augmentation without interface modification",
+        "Hook-based instrumentation approach to integrate seamlessly with existing benchmarking infrastructure"
+      ],
+      "scope_statement": "Add token usage tracking capability that captures LLM provider consumption metrics without breaking existing APIs or requiring changes to core provider interfaces. This involves extending the instrumentation system, updating answer models with usage fields, and integrating tracking into the main engine pipeline."
+    },
+    "design": {
+      "adrs": [
+        {
+          "title": "ADR: Token Usage Tracking Architecture",
+          "context": "Add token usage tracking so I can see how many LLM tokens each query costs. This requires capturing and aggregating token consumption from all LLM provider calls throughout the execution pipeline.",
+          "decision": "Implement a layered approach using enhanced instrumentation with context tracking rather than modifying core provider interfaces, creating adapter patterns for token-aware providers, and extending the Answer model to store usage data.",
+          "rationale": "This solution preserves backward compatibility by not breaking existing provider contracts while enabling comprehensive token tracking. It leverages existing infrastructure like InstrumentedProxy and BenchmarkHook systems but extends them to capture SDK response metadata including usage fields. The approach uses context managers for clean state management and avoids performance impact through minimal overhead during method calls.",
+          "consequences": [
+            "All LLM providers continue returning their current data types (str, list[float], etc.) without breaking changes",
+            "Token usage data is captured transparently via instrumentation system extensions",
+            "Answer model now supports token_usage field for reporting",
+            "New UsageContext class manages tracking state per-query execution",
+            "Engine methods can optionally accept and use usage context to accumulate metrics"
+          ],
+          "alternatives_considered": [
+            "Alternative 1 - Modify provider interfaces to return tuples with tokens: rejected because it would break backward compatibility with existing code that depends on current method signatures like ChatProvider.chat() returning str",
+            "Alternative 2 - Direct modification of all provider implementations to capture and store usage data locally: rejected because it creates duplication across multiple providers, is hard to maintain, and doesn't leverage existing instrumentation framework properly"
+          ]
+        },
+        {
+          "title": "ADR: Centralized UsageContext Storage vs Distributed Context Propagation",
+          "context": "The architecture uses a centralized UsageContext that gets passed through the instrumentation system, which means all context tracking relies on this single point of truth rather than distributed context propagation. This creates tight coupling between wrapper components and the context storage mechanism.",
+          "decision": "Use a global/centralized UsageContext with thread-local or request-scoped storage to maintain state across wrapped provider calls",
+          "rationale": "This approach provides clean separation of concerns while maintaining backward compatibility with existing interfaces. It allows for centralized monitoring without requiring interface modifications and works within the established instrumentation framework.",
+          "consequences": [
+            "Tight coupling between wrapper components and context management system creates a single point of failure if the global context storage becomes corrupted or unavailable",
+            "Thread-local storage may not work correctly in async/await scenarios or when using thread pools, potentially leading to context leakage or incorrect usage tracking",
+            "Difficult to debug and trace across distributed systems where context needs to be propagated via HTTP headers or other mechanisms"
+          ],
+          "alternatives_considered": [
+            "Distributed context propagation with explicit context passing through method parameters - would break backward compatibility but provide better distributed tracing support",
+            "Context injection via decorator pattern at call site - would require code changes and could be error-prone during adoption",
+            "Event-based context tracking using message queues or pub/sub systems - provides maximum decoupling but adds significant complexity and latency"
+          ]
+        }
+      ],
+      "components": [
+        {
+          "name": "UsageContext",
+          "purpose": "Manages and aggregates token usage data from LLM provider calls",
+          "responsibilities": [
+            "Track prompt and completion tokens by provider and method",
+            "Store usage data in a structured format for reporting"
+          ],
+          "interfaces": [
+            "record_usage(provider_name: str, method_name: str, prompt_tokens: int, completion_tokens: int)"
+          ],
+          "dependencies": []
+        },
+        {
+          "name": "TokenUsageHook",
+          "purpose": "Instrumentation hook that extracts token usage from LLM SDK responses",
+          "responsibilities": [
+            "Capture usage data during provider method calls",
+            "Store extracted usage in associated UsageContext"
+          ],
+          "interfaces": [
+            "on_call_start(layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any",
+            "on_call_end(context: Any, result: Any, error: Exception | None) -> None"
+          ],
+          "dependencies": [
+            "InstrumentedProxy",
+            "UsageContext"
+          ]
+        },
+        {
+          "name": "TokenAwareOpenAIChat",
+          "purpose": "Adapter that wraps OpenAIChat to track token usage without breaking interface contract",
+          "responsibilities": [
+            "Call original OpenAIChat methods while capturing usage data",
+            "Store usage in associated UsageContext"
+          ],
+          "interfaces": [
+            "chat(messages: list[dict[str, Any]]) -> str",
+            "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+          ],
+          "dependencies": [
+            "OpenAIChat",
+            "UsageContext"
+          ]
+        },
+        {
+          "name": "TokenAwareOpenAIEmbedding",
+          "purpose": "Adapter that wraps OpenAIEmbedding to track token usage without breaking interface contract",
+          "responsibilities": [
+            "Call original OpenAIEmbedding methods while capturing usage data",
+            "Store usage in associated UsageContext"
+          ],
+          "interfaces": [
+            "embed(text: str) -> list[float]",
+            "embed_batch(texts: list[str]) -> list[list[float]]"
+          ],
+          "dependencies": [
+            "OpenAIEmbedding",
+            "UsageContext"
+          ]
+        },
+        {
+          "name": "TokenAwareCohereChat",
+          "purpose": "Adapter that wraps CohereChat to track token usage without breaking interface contract",
+          "responsibilities": [
+            "Call original CohereChat methods while capturing usage data",
+            "Store usage in associated UsageContext"
+          ],
+          "interfaces": [
+            "chat(messages: list[dict[str, Any]]) -> str",
+            "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+          ],
+          "dependencies": [
+            "CohereChat",
+            "UsageContext"
+          ]
+        },
+        {
+          "name": "TokenAwareAnthropicChat",
+          "purpose": "Adapter that wraps AnthropicChat to track token usage without breaking interface contract",
+          "responsibilities": [
+            "Call original AnthropicChat methods while capturing usage data",
+            "Store usage in associated UsageContext"
+          ],
+          "interfaces": [
+            "chat(messages: list[dict[str, Any]]) -> str",
+            "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+          ],
+          "dependencies": [
+            "AnthropicChat",
+            "UsageContext"
+          ]
+        },
+        {
+          "name": "FitzKragEngine",
+          "purpose": "Main engine for knowledge routing augmented generation with token usage tracking capability",
+          "responsibilities": [
+            "Execute query processing pipeline including LLM calls",
+            "Optionally collect and aggregate token usage data during execution",
+            "Return answers enriched with token usage information when requested"
+          ],
+          "interfaces": [
+            "answer(query: Query, usage_context: Optional[UsageContext] = None) -> Answer"
+          ],
+          "dependencies": [
+            "UsageContext",
+            "Answer"
+          ]
+        }
+      ],
+      "data_model": {
+        "Answer": [
+          "text: str",
+          "provenance: Provenance",
+          "token_usage: Optional[dict]"
+        ],
+        "UsageContext": [
+          "usage_by_provider: defaultdict[str, dict]"
+        ]
+      },
+      "integration_points": [
+        "ExternalSystem \u2014 OpenAI API via fitz_ai/llm/providers/openai.py",
+        "ExternalSystem \u2014 Anthropic API via fitz_ai/llm/providers/anthropic.py",
+        "ExternalSystem \u2014 Cohere API via fitz_ai/llm/providers/cohere.py",
+        "ExternalSystem \u2014 Ollama API via fitz_ai/llm/providers/ollama.py"
+      ],
+      "artifacts": [
+        {
+          "filename": "fitz_ai/core/usage_tracker.py",
+          "content": "from collections import defaultdict\nfrom typing import Optional, Dict, Any\n\nclass UsageContext:\n    def __init__(self):\n        self.usage_by_provider = defaultdict(dict)\n\n    def record_usage(self, provider_name: str, method_name: str, prompt_tokens: int, completion_tokens: int):\n        key = f\"{provider_name}.{method_name}\"\n        if key not in self.usage_by_provider:\n            self.usage_by_provider[key] = {\"prompt_tokens\": 0, \"completion_tokens\": 0}\n        self.usage_by_provider[key][\"prompt_tokens\"] += prompt_tokens\n        self.usage_by_provider[key][\"completion_tokens\"] += completion_tokens\n\nclass TokenUsageHook:\n    def __init__(self, usage_context: UsageContext):\n        self.usage_context = usage_context\n\n    def on_call_start(self, layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any:\n        pass\n\n    def on_call_end(self, context: Any, result: Any, error: Exception | None) -> None:\n        # This would be implemented to extract usage from SDK responses\n        # Implementation depends on specific provider SDK behavior\n        pass",
+          "purpose": "Provides usage tracking context and hook system for collecting LLM token consumption data"
+        },
+        {
+          "filename": "fitz_ai/core/answer.py",
+          "content": "from dataclasses import dataclass\nfrom typing import Optional\n\nfrom fitz_ai.core.answer_mode import AnswerMode\nfrom fitz_ai.core.provenance import Provenance\n\ndataclass\nclass Answer:\n    text: str\n    provenance: Provenance\n    token_usage: Optional[dict] = None\n\n    def __post_init__(self):\n        if self.token_usage is None:\n            self.token_usage = {}",
+          "purpose": "Extends the Answer model to include token usage information for tracking LLM consumption"
+        },
+        {
+          "filename": "fitz_ai/engines/fitz_krag/engine.py",
+          "content": "# ... existing imports and code ...\nfrom fitz_ai.core.usage_tracker import UsageContext\n# ... rest of file remains unchanged except for modifications below ...\n\nclass FitzKragEngine:\n    # ... existing methods ...\n    \n    def answer(self, query: Query, usage_context: Optional[UsageContext] = None) -> Answer:\n        # Set up usage tracking if requested\n        if usage_context:\n            # Wrap providers with usage-aware versions or register hooks  \n            pass\n        \n        # ... existing engine logic ...\n        \n        # At end, populate answer with accumulated usage data\n        if usage_context:\n            return Answer(text=answer.text, provenance=answer.provenance, \n                         token_usage=dict(usage_context.usage_by_provider))\n        return answer",
+          "purpose": "Modifies the engine's answer method to accept and utilize usage context for collecting token metrics"
+        },
+        {
+          "filename": "fitz_ai/sdk/fitz.py",
+          "content": "# ... existing imports ...\nfrom fitz_ai.core.usage_tracker import UsageContext\n# ... rest of file remains unchanged except for modifications below ...\n\nclass fitz:\n    # ... existing methods ...\n    \n    def ask(self, question: str, top_k: Optional[int], conversation_context: Optional['ConversationContext'], track_usage: bool = False) -> Answer:\n        usage_context = UsageContext() if track_usage else None\n        answer = self._ask(question, top_k, conversation_context)\n        if track_usage and usage_context:\n            answer.token_usage = dict(usage_context.usage_by_provider)\n        return answer\n    \n    def query(self, question: str, conversation_context: Optional['ConversationContext'], track_usage: bool = False) -> Answer:\n        usage_context = UsageContext() if track_usage else None\n        answer = self._query(question, conversation_context)\n        if track_usage and usage_context:\n            answer.token_usage = dict(usage_context.usage_by_provider)\n        return answer",
+          "purpose": "Updates SDK methods to optionally collect and return token usage data from queries"
+        }
+      ]
+    }
+  },
+  "architecture": {
+    "approaches": [
+      {
+        "name": "Enhanced Provider Wrapping with Context Tracking",
+        "description": "Create a layered approach using context managers to collect token usage without breaking existing provider interfaces. This involves wrapping providers with usage-aware versions that capture SDK response data and store it in a shared context.",
+        "pros": [
+          "Maintains backward compatibility with existing provider contracts",
+          "Leverages existing instrumentation system with minimal modifications",
+          "Provides centralized tracking through UsageContext"
+        ],
+        "cons": [
+          "Requires creating wrapper factories for each provider type",
+          "May add complexity to the provider instantiation flow",
+          "Needs careful handling of different SDK usage structures across providers"
+        ],
+        "complexity": "high",
+        "best_for": [
+          "Systems requiring maximum backward compatibility",
+          "Large codebases with established provider contracts"
+        ]
+      },
+      {
+        "name": "Adapter Pattern for Token-Aware Providers",
+        "description": "Create adapter classes that extend existing providers to collect token usage while preserving the original interface contract. Each adapter wraps a specific provider implementation and extracts usage data from SDK responses.",
+        "pros": [
+          "Preserves exact same API contracts as current implementations",
+          "Clean separation of concerns between core logic and usage tracking",
+          "Easily testable with individual adapters for each provider type"
+        ],
+        "cons": [
+          "Requires creating multiple adapter classes (one per concrete provider)",
+          "Slightly more code duplication across different provider types",
+          "May require changes to how providers are instantiated in factory patterns"
+        ],
+        "complexity": "medium",
+        "best_for": [
+          "When exact API compatibility is critical",
+          "Projects with few LLM providers that can be easily adapted"
+        ]
+      }
+    ],
+    "recommended": "Enhanced Provider Wrapping with Context Tracking",
+    "reasoning": "This approach is recommended because it addresses the core constraint of maintaining backward compatibility while solving all identified challenges. The solution avoids modifying interface contracts (which would break existing code) and works within the established instrumentation framework. It specifically tackles Issue 1 by not requiring changes to ChatProvider.chat(), EmbeddingProvider.embed() etc., Issue 2 by extending the instrumentation system's capabilities, and Issue 3 by designing a clean path for accumulating usage data in the Answer model through the engine pipeline.",
+    "key_tradeoffs": {
+      "Backward Compatibility vs. Interface Enhancement": "Must preserve existing provider interfaces (no breaking changes) by using adapters/wrappers instead of modifying core contracts, which adds complexity but maintains compatibility.",
+      "Performance Impact vs. Granularity": "Minimal overhead since only recording metrics once per call, not during streaming or batch processing; acceptable latency for accurate token tracking.",
+      "Provider Consistency vs. Abstraction Layer": "Different SDKs have different usage structures (OpenAI vs Cohere), handled by abstraction layer that normalizes data formats without requiring uniform interfaces."
+    },
+    "technology_considerations": [
+      "Python context managers for managing short-lived usage contexts",
+      "Instrumentation system extension to capture and extract usage metadata from SDK responses",
+      "Dataclasses for Answer model with optional token_usage field",
+      "Decorator-based wrapping patterns for provider augmentation without interface modification",
+      "Hook-based instrumentation approach to integrate seamlessly with existing benchmarking infrastructure"
+    ],
+    "scope_statement": "Add token usage tracking capability that captures LLM provider consumption metrics without breaking existing APIs or requiring changes to core provider interfaces. This involves extending the instrumentation system, updating answer models with usage fields, and integrating tracking into the main engine pipeline."
+  },
+  "design": {
+    "adrs": [
+      {
+        "title": "ADR: Token Usage Tracking Architecture",
+        "context": "Add token usage tracking so I can see how many LLM tokens each query costs. This requires capturing and aggregating token consumption from all LLM provider calls throughout the execution pipeline.",
+        "decision": "Implement a layered approach using enhanced instrumentation with context tracking rather than modifying core provider interfaces, creating adapter patterns for token-aware providers, and extending the Answer model to store usage data.",
+        "rationale": "This solution preserves backward compatibility by not breaking existing provider contracts while enabling comprehensive token tracking. It leverages existing infrastructure like InstrumentedProxy and BenchmarkHook systems but extends them to capture SDK response metadata including usage fields. The approach uses context managers for clean state management and avoids performance impact through minimal overhead during method calls.",
+        "consequences": [
+          "All LLM providers continue returning their current data types (str, list[float], etc.) without breaking changes",
+          "Token usage data is captured transparently via instrumentation system extensions",
+          "Answer model now supports token_usage field for reporting",
+          "New UsageContext class manages tracking state per-query execution",
+          "Engine methods can optionally accept and use usage context to accumulate metrics"
+        ],
+        "alternatives_considered": [
+          "Alternative 1 - Modify provider interfaces to return tuples with tokens: rejected because it would break backward compatibility with existing code that depends on current method signatures like ChatProvider.chat() returning str",
+          "Alternative 2 - Direct modification of all provider implementations to capture and store usage data locally: rejected because it creates duplication across multiple providers, is hard to maintain, and doesn't leverage existing instrumentation framework properly"
+        ]
+      },
+      {
+        "title": "ADR: Centralized UsageContext Storage vs Distributed Context Propagation",
+        "context": "The architecture uses a centralized UsageContext that gets passed through the instrumentation system, which means all context tracking relies on this single point of truth rather than distributed context propagation. This creates tight coupling between wrapper components and the context storage mechanism.",
+        "decision": "Use a global/centralized UsageContext with thread-local or request-scoped storage to maintain state across wrapped provider calls",
+        "rationale": "This approach provides clean separation of concerns while maintaining backward compatibility with existing interfaces. It allows for centralized monitoring without requiring interface modifications and works within the established instrumentation framework.",
+        "consequences": [
+          "Tight coupling between wrapper components and context management system creates a single point of failure if the global context storage becomes corrupted or unavailable",
+          "Thread-local storage may not work correctly in async/await scenarios or when using thread pools, potentially leading to context leakage or incorrect usage tracking",
+          "Difficult to debug and trace across distributed systems where context needs to be propagated via HTTP headers or other mechanisms"
+        ],
+        "alternatives_considered": [
+          "Distributed context propagation with explicit context passing through method parameters - would break backward compatibility but provide better distributed tracing support",
+          "Context injection via decorator pattern at call site - would require code changes and could be error-prone during adoption",
+          "Event-based context tracking using message queues or pub/sub systems - provides maximum decoupling but adds significant complexity and latency"
+        ]
+      }
+    ],
+    "components": [
+      {
+        "name": "UsageContext",
+        "purpose": "Manages and aggregates token usage data from LLM provider calls",
+        "responsibilities": [
+          "Track prompt and completion tokens by provider and method",
+          "Store usage data in a structured format for reporting"
+        ],
+        "interfaces": [
+          "record_usage(provider_name: str, method_name: str, prompt_tokens: int, completion_tokens: int)"
+        ],
+        "dependencies": []
+      },
+      {
+        "name": "TokenUsageHook",
+        "purpose": "Instrumentation hook that extracts token usage from LLM SDK responses",
+        "responsibilities": [
+          "Capture usage data during provider method calls",
+          "Store extracted usage in associated UsageContext"
+        ],
+        "interfaces": [
+          "on_call_start(layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any",
+          "on_call_end(context: Any, result: Any, error: Exception | None) -> None"
+        ],
+        "dependencies": [
+          "InstrumentedProxy",
+          "UsageContext"
+        ]
+      },
+      {
+        "name": "TokenAwareOpenAIChat",
+        "purpose": "Adapter that wraps OpenAIChat to track token usage without breaking interface contract",
+        "responsibilities": [
+          "Call original OpenAIChat methods while capturing usage data",
+          "Store usage in associated UsageContext"
+        ],
+        "interfaces": [
+          "chat(messages: list[dict[str, Any]]) -> str",
+          "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+        ],
+        "dependencies": [
+          "OpenAIChat",
+          "UsageContext"
+        ]
+      },
+      {
+        "name": "TokenAwareOpenAIEmbedding",
+        "purpose": "Adapter that wraps OpenAIEmbedding to track token usage without breaking interface contract",
+        "responsibilities": [
+          "Call original OpenAIEmbedding methods while capturing usage data",
+          "Store usage in associated UsageContext"
+        ],
+        "interfaces": [
+          "embed(text: str) -> list[float]",
+          "embed_batch(texts: list[str]) -> list[list[float]]"
+        ],
+        "dependencies": [
+          "OpenAIEmbedding",
+          "UsageContext"
+        ]
+      },
+      {
+        "name": "TokenAwareCohereChat",
+        "purpose": "Adapter that wraps CohereChat to track token usage without breaking interface contract",
+        "responsibilities": [
+          "Call original CohereChat methods while capturing usage data",
+          "Store usage in associated UsageContext"
+        ],
+        "interfaces": [
+          "chat(messages: list[dict[str, Any]]) -> str",
+          "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+        ],
+        "dependencies": [
+          "CohereChat",
+          "UsageContext"
+        ]
+      },
+      {
+        "name": "TokenAwareAnthropicChat",
+        "purpose": "Adapter that wraps AnthropicChat to track token usage without breaking interface contract",
+        "responsibilities": [
+          "Call original AnthropicChat methods while capturing usage data",
+          "Store usage in associated UsageContext"
+        ],
+        "interfaces": [
+          "chat(messages: list[dict[str, Any]]) -> str",
+          "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+        ],
+        "dependencies": [
+          "AnthropicChat",
+          "UsageContext"
+        ]
+      },
+      {
+        "name": "FitzKragEngine",
+        "purpose": "Main engine for knowledge routing augmented generation with token usage tracking capability",
+        "responsibilities": [
+          "Execute query processing pipeline including LLM calls",
+          "Optionally collect and aggregate token usage data during execution",
+          "Return answers enriched with token usage information when requested"
+        ],
+        "interfaces": [
+          "answer(query: Query, usage_context: Optional[UsageContext] = None) -> Answer"
+        ],
+        "dependencies": [
+          "UsageContext",
+          "Answer"
+        ]
+      }
+    ],
+    "data_model": {
+      "Answer": [
+        "text: str",
+        "provenance: Provenance",
+        "token_usage: Optional[dict]"
+      ],
+      "UsageContext": [
+        "usage_by_provider: defaultdict[str, dict]"
+      ]
+    },
+    "integration_points": [
+      "ExternalSystem \u2014 OpenAI API via fitz_ai/llm/providers/openai.py",
+      "ExternalSystem \u2014 Anthropic API via fitz_ai/llm/providers/anthropic.py",
+      "ExternalSystem \u2014 Cohere API via fitz_ai/llm/providers/cohere.py",
+      "ExternalSystem \u2014 Ollama API via fitz_ai/llm/providers/ollama.py"
+    ],
+    "artifacts": [
+      {
+        "filename": "fitz_ai/core/usage_tracker.py",
+        "content": "from collections import defaultdict\nfrom typing import Optional, Dict, Any\n\nclass UsageContext:\n    def __init__(self):\n        self.usage_by_provider = defaultdict(dict)\n\n    def record_usage(self, provider_name: str, method_name: str, prompt_tokens: int, completion_tokens: int):\n        key = f\"{provider_name}.{method_name}\"\n        if key not in self.usage_by_provider:\n            self.usage_by_provider[key] = {\"prompt_tokens\": 0, \"completion_tokens\": 0}\n        self.usage_by_provider[key][\"prompt_tokens\"] += prompt_tokens\n        self.usage_by_provider[key][\"completion_tokens\"] += completion_tokens\n\nclass TokenUsageHook:\n    def __init__(self, usage_context: UsageContext):\n        self.usage_context = usage_context\n\n    def on_call_start(self, layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any:\n        pass\n\n    def on_call_end(self, context: Any, result: Any, error: Exception | None) -> None:\n        # This would be implemented to extract usage from SDK responses\n        # Implementation depends on specific provider SDK behavior\n        pass",
+        "purpose": "Provides usage tracking context and hook system for collecting LLM token consumption data"
+      },
+      {
+        "filename": "fitz_ai/core/answer.py",
+        "content": "from dataclasses import dataclass\nfrom typing import Optional\n\nfrom fitz_ai.core.answer_mode import AnswerMode\nfrom fitz_ai.core.provenance import Provenance\n\ndataclass\nclass Answer:\n    text: str\n    provenance: Provenance\n    token_usage: Optional[dict] = None\n\n    def __post_init__(self):\n        if self.token_usage is None:\n            self.token_usage = {}",
+        "purpose": "Extends the Answer model to include token usage information for tracking LLM consumption"
+      },
+      {
+        "filename": "fitz_ai/engines/fitz_krag/engine.py",
+        "content": "# ... existing imports and code ...\nfrom fitz_ai.core.usage_tracker import UsageContext\n# ... rest of file remains unchanged except for modifications below ...\n\nclass FitzKragEngine:\n    # ... existing methods ...\n    \n    def answer(self, query: Query, usage_context: Optional[UsageContext] = None) -> Answer:\n        # Set up usage tracking if requested\n        if usage_context:\n            # Wrap providers with usage-aware versions or register hooks  \n            pass\n        \n        # ... existing engine logic ...\n        \n        # At end, populate answer with accumulated usage data\n        if usage_context:\n            return Answer(text=answer.text, provenance=answer.provenance, \n                         token_usage=dict(usage_context.usage_by_provider))\n        return answer",
+        "purpose": "Modifies the engine's answer method to accept and utilize usage context for collecting token metrics"
+      },
+      {
+        "filename": "fitz_ai/sdk/fitz.py",
+        "content": "# ... existing imports ...\nfrom fitz_ai.core.usage_tracker import UsageContext\n# ... rest of file remains unchanged except for modifications below ...\n\nclass fitz:\n    # ... existing methods ...\n    \n    def ask(self, question: str, top_k: Optional[int], conversation_context: Optional['ConversationContext'], track_usage: bool = False) -> Answer:\n        usage_context = UsageContext() if track_usage else None\n        answer = self._ask(question, top_k, conversation_context)\n        if track_usage and usage_context:\n            answer.token_usage = dict(usage_context.usage_by_provider)\n        return answer\n    \n    def query(self, question: str, conversation_context: Optional['ConversationContext'], track_usage: bool = False) -> Answer:\n        usage_context = UsageContext() if track_usage else None\n        answer = self._query(question, conversation_context)\n        if track_usage and usage_context:\n            answer.token_usage = dict(usage_context.usage_by_provider)\n        return answer",
+        "purpose": "Updates SDK methods to optionally collect and return token usage data from queries"
+      }
+    ]
+  },
+  "roadmap_risk": {
+    "roadmap": {
+      "phases": [
+        {
+          "number": 0,
+          "name": "Read Before Writing",
+          "objective": "Verify integration points by reading source",
+          "deliverables": [
+            "Verified: fitz_ai/llm/providers/base.py",
+            "Verified: fitz_ai/llm/providers/openai.py",
+            "Verified: fitz_ai/llm/providers/anthropic.py",
+            "Verified: fitz_ai/llm/providers/cohere.py",
+            "Verified: fitz_ai/llm/providers/ollama.py"
+          ],
+          "dependencies": [],
+          "estimated_complexity": "low",
+          "key_risks": [],
+          "verification_command": "pytest fitz_ai/llm/providers/test_base.py fitz_ai/llm/providers/test_openai.py fitz_ai/llm/providers/test_anthropic.py fitz_ai/llm/providers/test_cohere.py fitz_ai/llm/providers/test_ollama.py",
+          "estimated_effort": "~15 min"
+        },
+        {
+          "number": 2,
+          "name": "Core Token Tracker Implementation",
+          "objective": "Implement a thread-local usage aggregator for tracking LLM tokens consumed during a single request/query execution",
+          "deliverables": [
+            "fitz_ai/core/token_tracker.py"
+          ],
+          "dependencies": [],
+          "estimated_complexity": "medium",
+          "key_risks": [
+            "Thread-local storage may not work correctly in async contexts",
+            "Token extraction patterns vary across different LLM providers"
+          ],
+          "verification_command": "python -c \"from fitz_ai.core.token_tracker import UsageContext, get_usage_context; ctx = get_usage_context(); print('Token tracking initialized successfully'); ctx.record_usage('openai', 'chat', 100, 200); assert ctx.total_tokens == 300; print('Usage recording works correctly')\"",
+          "estimated_effort": "~1 hour"
+        },
+        {
+          "number": 3,
+          "name": "Instrumentation Integration",
+          "objective": "Integrate token tracking with existing LLM provider infrastructure using InstrumentedProxy to intercept real API responses and extract actual usage data",
+          "deliverables": [
+            "fitz_ai/llm/instrumentation.py",
+            "Updated provider factory logic to wrap providers"
+          ],
+          "dependencies": [
+            2
+          ],
+          "estimated_complexity": "high",
+          "key_risks": [
+            "Different SDKs have varying response structures for token usage data",
+            "Performance overhead from wrapping all LLM calls with instrumentation",
+            "Need to handle different method signatures across providers"
+          ],
+          "verification_command": "pytest tests/test_token_tracking.py -v",
+          "estimated_effort": "~2 hours"
+        }
+      ],
+      "critical_path": [
+        0,
+        2,
+        3,
+        5
+      ],
+      "parallel_opportunities": [
+        [
+          4,
+          6
+        ]
+      ],
+      "total_phases": 3
+    },
+    "risk": {
+      "risks": [
+        {
+          "category": "technical",
+          "description": "Token usage extraction logic may fail to parse usage data from different LLM provider SDK responses due to inconsistent response formats across providers (OpenAI, Anthropic, Cohere, etc.)",
+          "impact": "high",
+          "likelihood": "medium",
+          "mitigation": "Implement robust error handling with fallbacks and comprehensive unit tests for each supported provider's usage format parsing",
+          "contingency": "Fall back to zero token counts when extraction fails, log warning messages to alert operators of potential tracking issues",
+          "affected_phases": [
+            2
+          ],
+          "verification": "assert that all providers return valid token data or gracefully handle missing/invalid usage fields"
+        },
+        {
+          "category": "technical",
+          "description": "Thread-local storage used for context isolation may cause incorrect aggregation when concurrent queries are processed in the same thread, leading to inaccurate cost attribution per query",
+          "impact": "medium",
+          "likelihood": "low",
+          "mitigation": "Implement rigorous testing with multi-threaded scenarios and ensure proper reset of usage contexts after each request",
+          "contingency": "Add explicit context cleanup on request completion and implement thread-safe access checks for token data during concurrent execution",
+          "affected_phases": [
+            2
+          ],
+          "verification": "assert that each query maintains isolated token counts in multi-threaded environments"
+        },
+        {
+          "category": "resource",
+          "description": "Instrumentation overhead from wrapping all LLM provider calls could impact performance, especially under high concurrency or with large numbers of LLM operations per request",
+          "impact": "medium",
+          "likelihood": "medium",
+          "mitigation": "Profile token tracking implementation and use conditional instrumentation only when enabled via configuration flag",
+          "contingency": "Provide toggleable feature flag to disable token tracking in production environments where performance is critical, defaulting to disabled state",
+          "affected_phases": [
+            2
+          ],
+          "verification": "assert that latency increases less than 5% under normal load conditions"
+        },
+        {
+          "category": "quality",
+          "description": "Token counts may be inaccurate or missing if the wrapping logic fails to intercept certain provider methods or response types, particularly in streaming operations or custom integrations",
+          "impact": "high",
+          "likelihood": "low",
+          "mitigation": "Maintain comprehensive method tracking list and validate against actual SDK usage patterns for all supported LLM providers",
+          "contingency": "Log discrepancy warnings when token data is not captured from expected methods, implement fallback mechanisms to track basic operations even if detailed usage isn't available",
+          "affected_phases": [
+            2
+          ],
+          "verification": "assert that all documented provider methods are properly wrapped and tracked"
+        },
+        {
+          "category": "security",
+          "description": "Instrumentation logic might inadvertently expose sensitive data (like tokens or API keys) in logs if not carefully implemented, particularly when tracing internal method calls",
+          "impact": "medium",
+          "likelihood": "low",
+          "mitigation": "Apply strict logging filters to prevent inclusion of PII in traces and sanitize all instrumentation output",
+          "contingency": "Implement comprehensive log sanitization rules for instrumentation layer and conduct regular security reviews of traced data flows",
+          "affected_phases": [
+            2
+          ],
+          "verification": "assert that logs do not contain sensitive information from LLM requests or responses"
+        }
+      ],
+      "overall_risk_level": "medium",
+      "recommended_contingencies": [
+        "Implement conditional instrumentation with feature flag to disable tracking in performance-sensitive environments",
+        "Add comprehensive error logging and monitoring for failed token extraction scenarios with alerting thresholds",
+        "Create dedicated test suite specifically for multi-threaded usage context isolation under concurrent load"
+      ]
+    }
+  },
+  "roadmap": {
+    "phases": [
+      {
+        "number": 0,
+        "name": "Read Before Writing",
+        "objective": "Verify integration points by reading source",
+        "deliverables": [
+          "Verified: fitz_ai/llm/providers/base.py",
+          "Verified: fitz_ai/llm/providers/openai.py",
+          "Verified: fitz_ai/llm/providers/anthropic.py",
+          "Verified: fitz_ai/llm/providers/cohere.py",
+          "Verified: fitz_ai/llm/providers/ollama.py"
+        ],
+        "dependencies": [],
+        "estimated_complexity": "low",
+        "key_risks": [],
+        "verification_command": "pytest fitz_ai/llm/providers/test_base.py fitz_ai/llm/providers/test_openai.py fitz_ai/llm/providers/test_anthropic.py fitz_ai/llm/providers/test_cohere.py fitz_ai/llm/providers/test_ollama.py",
+        "estimated_effort": "~15 min"
+      },
+      {
+        "number": 2,
+        "name": "Core Token Tracker Implementation",
+        "objective": "Implement a thread-local usage aggregator for tracking LLM tokens consumed during a single request/query execution",
+        "deliverables": [
+          "fitz_ai/core/token_tracker.py"
+        ],
+        "dependencies": [],
+        "estimated_complexity": "medium",
+        "key_risks": [
+          "Thread-local storage may not work correctly in async contexts",
+          "Token extraction patterns vary across different LLM providers"
+        ],
+        "verification_command": "python -c \"from fitz_ai.core.token_tracker import UsageContext, get_usage_context; ctx = get_usage_context(); print('Token tracking initialized successfully'); ctx.record_usage('openai', 'chat', 100, 200); assert ctx.total_tokens == 300; print('Usage recording works correctly')\"",
+        "estimated_effort": "~1 hour"
+      },
+      {
+        "number": 3,
+        "name": "Instrumentation Integration",
+        "objective": "Integrate token tracking with existing LLM provider infrastructure using InstrumentedProxy to intercept real API responses and extract actual usage data",
+        "deliverables": [
+          "fitz_ai/llm/instrumentation.py",
+          "Updated provider factory logic to wrap providers"
+        ],
+        "dependencies": [
+          2
+        ],
+        "estimated_complexity": "high",
+        "key_risks": [
+          "Different SDKs have varying response structures for token usage data",
+          "Performance overhead from wrapping all LLM calls with instrumentation",
+          "Need to handle different method signatures across providers"
+        ],
+        "verification_command": "pytest tests/test_token_tracking.py -v",
+        "estimated_effort": "~2 hours"
+      }
+    ],
+    "critical_path": [
+      0,
+      2,
+      3,
+      5
+    ],
+    "parallel_opportunities": [
+      [
+        4,
+        6
+      ]
+    ],
+    "total_phases": 3
+  },
+  "risk": {
+    "risks": [
+      {
+        "category": "technical",
+        "description": "Token usage extraction logic may fail to parse usage data from different LLM provider SDK responses due to inconsistent response formats across providers (OpenAI, Anthropic, Cohere, etc.)",
+        "impact": "high",
+        "likelihood": "medium",
+        "mitigation": "Implement robust error handling with fallbacks and comprehensive unit tests for each supported provider's usage format parsing",
+        "contingency": "Fall back to zero token counts when extraction fails, log warning messages to alert operators of potential tracking issues",
+        "affected_phases": [
+          2
+        ],
+        "verification": "assert that all providers return valid token data or gracefully handle missing/invalid usage fields"
+      },
+      {
+        "category": "technical",
+        "description": "Thread-local storage used for context isolation may cause incorrect aggregation when concurrent queries are processed in the same thread, leading to inaccurate cost attribution per query",
+        "impact": "medium",
+        "likelihood": "low",
+        "mitigation": "Implement rigorous testing with multi-threaded scenarios and ensure proper reset of usage contexts after each request",
+        "contingency": "Add explicit context cleanup on request completion and implement thread-safe access checks for token data during concurrent execution",
+        "affected_phases": [
+          2
+        ],
+        "verification": "assert that each query maintains isolated token counts in multi-threaded environments"
+      },
+      {
+        "category": "resource",
+        "description": "Instrumentation overhead from wrapping all LLM provider calls could impact performance, especially under high concurrency or with large numbers of LLM operations per request",
+        "impact": "medium",
+        "likelihood": "medium",
+        "mitigation": "Profile token tracking implementation and use conditional instrumentation only when enabled via configuration flag",
+        "contingency": "Provide toggleable feature flag to disable token tracking in production environments where performance is critical, defaulting to disabled state",
+        "affected_phases": [
+          2
+        ],
+        "verification": "assert that latency increases less than 5% under normal load conditions"
+      },
+      {
+        "category": "quality",
+        "description": "Token counts may be inaccurate or missing if the wrapping logic fails to intercept certain provider methods or response types, particularly in streaming operations or custom integrations",
+        "impact": "high",
+        "likelihood": "low",
+        "mitigation": "Maintain comprehensive method tracking list and validate against actual SDK usage patterns for all supported LLM providers",
+        "contingency": "Log discrepancy warnings when token data is not captured from expected methods, implement fallback mechanisms to track basic operations even if detailed usage isn't available",
+        "affected_phases": [
+          2
+        ],
+        "verification": "assert that all documented provider methods are properly wrapped and tracked"
+      },
+      {
+        "category": "security",
+        "description": "Instrumentation logic might inadvertently expose sensitive data (like tokens or API keys) in logs if not carefully implemented, particularly when tracing internal method calls",
+        "impact": "medium",
+        "likelihood": "low",
+        "mitigation": "Apply strict logging filters to prevent inclusion of PII in traces and sanitize all instrumentation output",
+        "contingency": "Implement comprehensive log sanitization rules for instrumentation layer and conduct regular security reviews of traced data flows",
+        "affected_phases": [
+          2
+        ],
+        "verification": "assert that logs do not contain sensitive information from LLM requests or responses"
+      }
+    ],
+    "overall_risk_level": "medium",
+    "recommended_contingencies": [
+      "Implement conditional instrumentation with feature flag to disable tracking in performance-sensitive environments",
+      "Add comprehensive error logging and monitoring for failed token extraction scenarios with alerting thresholds",
+      "Create dedicated test suite specifically for multi-threaded usage context isolation under concurrent load"
+    ]
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "run": 5,
+  "elapsed_s": 447.6,
+  "success": true,
+  "recommended": "Token Accounting Hook Pattern",
+  "plan_size": 45852,
+  "stage_timings": {
+    "agent_gathering": 6.796999999991385,
+    "implementation_check": 2.672000000020489,
+    "context": 66.89099999997416,
+    "architecture_design": 254.59400000001187,
+    "roadmap_risk": 113.32800000000861,
+    "coherence_check": 3.2969999999913853
+  },
+  "error": null
+}

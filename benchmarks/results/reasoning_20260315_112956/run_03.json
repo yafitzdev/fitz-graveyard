@@ -1,0 +1,16 @@
+{
+  "run": 3,
+  "elapsed_s": 517.3,
+  "success": true,
+  "recommended": "Operation Count Tracking",
+  "plan_size": 41193,
+  "stage_timings": {
+    "agent_gathering": 6.155999999988126,
+    "implementation_check": 2.6719999999913853,
+    "context": 72.11000000001513,
+    "architecture_design": 258.2809999999881,
+    "roadmap_risk": 175.32800000000861,
+    "coherence_check": 2.6719999999913853
+  },
+  "error": null
+}
