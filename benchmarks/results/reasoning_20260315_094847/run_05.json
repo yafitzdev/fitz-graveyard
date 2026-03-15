@@ -1,0 +1,16 @@
+{
+  "run": 5,
+  "elapsed_s": 387.1,
+  "success": true,
+  "recommended": "Extend Provider Protocols with Structured Responses",
+  "plan_size": 76432,
+  "stage_timings": {
+    "agent_gathering": 6.094000000011874,
+    "implementation_check": 2.6559999999881256,
+    "context": 52.29700000002049,
+    "architecture_design": 279.01499999998487,
+    "roadmap_risk": 42.469000000011874,
+    "coherence_check": 4.546999999991385
+  },
+  "error": null
+}

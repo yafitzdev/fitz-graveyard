@@ -1,0 +1,16 @@
+{
+  "run": 1,
+  "elapsed_s": 684.0,
+  "success": true,
+  "recommended": "Direct Provider Implementation",
+  "plan_size": 65570,
+  "stage_timings": {
+    "agent_gathering": 9.359000000025844,
+    "implementation_check": 3.9689999999827705,
+    "context": 40.719000000011874,
+    "architecture_design": 500.9679999999935,
+    "roadmap_risk": 126.03200000000652,
+    "coherence_check": 2.889999999984866
+  },
+  "error": null
+}

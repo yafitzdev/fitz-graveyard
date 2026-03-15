@@ -1,0 +1,16 @@
+{
+  "run": 3,
+  "elapsed_s": 521.5,
+  "success": true,
+  "recommended": "Wrapper Injection Approach",
+  "plan_size": 50962,
+  "stage_timings": {
+    "agent_gathering": 7.828000000008615,
+    "implementation_check": 2.5929999999934807,
+    "context": 61.796999999991385,
+    "architecture_design": 243.78200000000652,
+    "roadmap_risk": 201.48399999999674,
+    "coherence_check": 3.937000000005355
+  },
+  "error": null
+}

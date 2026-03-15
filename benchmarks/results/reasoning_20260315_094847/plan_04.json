@@ -1,0 +1,948 @@
+{
+  "context": {
+    "project_description": "Implement token usage tracking across all LLM providers to monitor costs for each query by instrumenting provider calls and storing usage data in Answer metadata.",
+    "key_requirements": [
+      "Track token counts for chat, embedding, rerank, and vision operations across all LLM providers",
+      "Store token usage data in Answer.metadata for programmatic access",
+      "Integrate with existing instrumentation system using BenchmarkHook pattern"
+    ],
+    "constraints": [
+      "Must use existing InstrumentedProxy system for transparent tracking without changing business logic",
+      "Token usage must be tracked at query level and embedded in Answer objects",
+      "Implementation must work across all provider types: OpenAI, Anthropic, Cohere, Ollama"
+    ],
+    "existing_context": "fitz_ai/llm/providers/base.py, fitz_ai/core/instrumentation.py",
+    "stakeholders": [
+      "developer implementing token counting logic",
+      "user wanting to see LLM token costs per query",
+      "system integrator needing structured logging of usage data"
+    ],
+    "scope_boundaries": {
+      "in_scope": [
+        "token counting for chat, embedding, rerank, vision operations across providers",
+        "tracking at query level in Answer metadata",
+        "integration through provider layer with instrumentation system",
+        "storing token usage as part of Answer.metadata"
+      ],
+      "out_of_scope": [
+        "full breakdowns per message",
+        "implementation of custom tokenization logic per provider",
+        "changes to existing business logic beyond instrumentation",
+        "enhanced analytics or reporting features beyond basic tracking"
+      ]
+    },
+    "existing_files": [
+      "fitz_ai/llm/providers/base.py \u2014 Provider protocols for LLM clients.",
+      "fitz_ai/core/instrumentation.py \u2014 Instrumentation system for benchmarking plugin performance.",
+      "fitz_ai/llm/providers/openai.py \u2014 discovered by agent",
+      "fitz_ai/llm/providers/anthropic.py \u2014 discovered by agent",
+      "fitz_ai/llm/providers/cohere.py \u2014 discovered by agent",
+      "fitz_ai/llm/providers/ollama.py \u2014 discovered by agent",
+      "fitz_ai/logging/logger.py \u2014 discovered by agent",
+      "fitz_ai/logging/tags.py \u2014 discovered by agent",
+      "fitz_ai/engines/fitz_krag/engine.py \u2014 discovered by agent",
+      "fitz_ai/sdk/fitz.py \u2014 discovered by agent",
+      "fitz_ai/api/routes/query.py \u2014 discovered by agent",
+      "fitz_ai/engines/fitz_krag/ingestion/pipeline.py \u2014 discovered by agent",
+      "fitz_ai/ingestion/diff/executor.py \u2014 discovered by agent",
+      "fitz_ai/ingestion/enrichment/pipeline.py \u2014 discovered by agent",
+      "tests/integration/cloud_fixtures.py \u2014 discovered by agent",
+      "tools/governance/eval_pipeline.py \u2014 discovered by agent",
+      "tools/governance/extract_features.py \u2014 discovered by agent",
+      "fitz_ai/cli/commands/eval.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/token_provider.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/base.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/certificates.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/m2m.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/api_key.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/composite.py \u2014 discovered by agent",
+      "fitz_ai/core/paths/workspace.py \u2014 discovered by agent"
+    ],
+    "needed_artifacts": [
+      "fitz_ai/llm/token_counter.py \u2014 Main token counting logic with provider-specific implementations",
+      "fitz_ai/core/token_usage.py \u2014 Token usage data models and tracking utilities",
+      "fitz_ai/llm/providers/instrumented_providers.py \u2014 Instrumentation wrapper around all LLM providers",
+      "fitz_ai/llm/token_utils.py \u2014 Helper functions for token counting",
+      "fitz_ai/core/tracking_context.py \u2014 Context management for tracking scopes"
+    ],
+    "assumptions": [
+      {
+        "assumption": "Use library-based token counting (e.g., tiktoken for OpenAI, anthropic-tokenizer for Anthropic) that's already available or can be added",
+        "impact": "Would require implementing custom tokenization logic per provider which is complex and error-prone",
+        "confidence": "medium-high"
+      },
+      {
+        "assumption": "Track at query level in Answer metadata, potentially also log via structured logging",
+        "impact": "Could lose tracking or make it hard to access for users",
+        "confidence": "high"
+      },
+      {
+        "assumption": "Per-operation token counts (chat tokens, embedding tokens) rather than full breakdowns per message",
+        "impact": "Might miss optimization opportunities or cost drivers",
+        "confidence": "medium-high"
+      },
+      {
+        "assumption": "Integration through the provider layer in `fitz_ai/llm/providers` with instrumentation",
+        "impact": "Would require changing every LLM call site throughout codebase",
+        "confidence": "high"
+      },
+      {
+        "assumption": "Usage should be available in `Answer.metadata`, potentially also via logging or observability APIs",
+        "impact": "Users won't know how to access the tracking information",
+        "confidence": "high"
+      }
+    ]
+  },
+  "architecture_design": {
+    "architecture": {
+      "approaches": [
+        {
+          "name": "Instrumentation-Based Tracking",
+          "description": "Leverage existing InstrumentedProxy mechanism to wrap LLM provider methods and capture token usage from API responses.",
+          "pros": [
+            "Minimal code changes required",
+            "Reuses existing infrastructure",
+            "No breaking changes to public APIs"
+          ],
+          "cons": [
+            "Requires modification of provider classes to expose metadata",
+            "Token parsing logic must be implemented per-provider"
+          ],
+          "complexity": "medium",
+          "best_for": [
+            "Production systems with existing instrumentation patterns"
+          ]
+        },
+        {
+          "name": "Provider-Level Wrapper Enhancement",
+          "description": "Create enhanced wrapper classes around each LLM provider that capture and aggregate token usage internally.",
+          "pros": [
+            "Centralized token tracking logic",
+            "Clear separation of concerns",
+            "Support for multiple LLM providers"
+          ],
+          "cons": [
+            "Requires creating new wrapper classes or modifying existing ones",
+            "More code to maintain and test"
+          ],
+          "complexity": "high",
+          "best_for": [
+            "Systems requiring robust, future-proof token tracking"
+          ]
+        }
+      ],
+      "recommended": "Instrumentation-Based Tracking",
+      "reasoning": "This approach is right because it leverages the existing InstrumentedProxy system already present in fitz_ai/core/instrumentation.py and avoids over-engineering by not modifying core interfaces or adding new API response fields that don't exist. The other approach, Provider-Level Wrapper Enhancement, is wrong because while it would work, it requires more extensive changes to provider classes which could introduce bugs and increase maintenance overhead unnecessarily when the instrumentation system already provides a clean way to intercept method calls.",
+      "key_tradeoffs": {
+        "instrumentation_vs_modification": "Use existing InstrumentedProxy instead of building new tracking system to reduce complexity and leverage current infra",
+        "scope_limitation": "Avoid modifying API schemas or SDK signatures to maintain backward compatibility and focus on internal tracking only"
+      },
+      "technology_considerations": [
+        "InstrumentedProxy from fitz_ai/core/instrumentation.py for method wrapping",
+        "OpenAI response usage metadata (prompt_tokens, completion_tokens) for token counting",
+        "LLM provider-specific APIs (Cohere/Anthropic/Ollama) for extracting token usage fields"
+      ],
+      "scope_statement": "Implement token usage tracking by instrumenting LLM provider methods with minimal changes to existing code paths and leveraging the current instrumentation framework for capturing prompt/completion token counts from external API responses."
+    },
+    "design": {
+      "adrs": [
+        {
+          "title": "ADR: Instrument LLM Providers for Token Usage Tracking",
+          "context": "The system needs to track LLM token usage per query to provide cost visibility and optimization insights.",
+          "decision": "Leverage the existing instrumentation infrastructure in fitz_ai/core/instrumentation.py to wrap core LLM provider methods without modifying public APIs or response schemas.",
+          "rationale": "This approach minimizes architectural changes, avoids over-engineering by not redefining API responses, and uses already-existing mechanisms. It preserves backward compatibility while enabling token tracking at the provider level where raw usage data is available (e.g., OpenAI's response.usage).",
+          "consequences": [
+            "Minimal code modifications required - only patch or wrap LLM provider methods in specific implementations like OpenAIChat, CohereChat, etc.",
+            "Token usage becomes available internally during query processing but doesn't change SDK/API signatures unless explicitly added to Answer class.",
+            "No breaking changes to existing interfaces; new functionality is opt-in via instrumentation hooks or debug utilities."
+          ],
+          "alternatives_considered": [
+            "Alternative 1 \u2013 Add token_usage fields to QueryResponse schema: rejected because the QueryResponse model does not exist in provided codebase and would require extensive API rework.",
+            "Alternative 2 \u2013 Modify SDK method signatures to return usage data directly: rejected because it breaks backward compatibility and adds unnecessary complexity without clear benefit for current use cases.",
+            "Alternative 3 \u2013 Create a global token counter registry: rejected because it introduces tight coupling and doesn't leverage existing structured logging or instrumentation patterns."
+          ]
+        },
+        {
+          "title": "ADR: Data Sensitivity in Instrumentation-Based Tracking",
+          "context": "The instrumentation-based approach uses InstrumentedProxy to track calls across OpenAIChat, OpenAIEmbedding, and FitzKragEngine components. The proxy captures request/response data for observability but doesn't specify what sensitive information might be included.",
+          "decision": "InstrumentedProxy will capture all request/response data without filtering or sanitization to maintain complete traceability",
+          "rationale": "This aligns with the existing instrumentation system's design and provides maximum debugging capability. The assumption is that all components are trusted and any security concerns are handled at higher layers.",
+          "consequences": [
+            "Potential exposure of sensitive user data in logs/traces if not properly sanitized by downstream consumers",
+            "Increased data transfer overhead as complete payloads are captured instead of minimal necessary information",
+            "Requires additional documentation and training for developers on handling sensitive data in instrumented traces"
+          ],
+          "alternatives_considered": [
+            "Implement field-level filtering to exclude sensitive data (like API keys, user PII) before instrumentation",
+            "Add configuration options per component to enable/disable specific data capture levels",
+            "Create separate instrumentation channels for different sensitivity tiers of data"
+          ]
+        }
+      ],
+      "components": [
+        {
+          "name": "InstrumentedProxy",
+          "purpose": "Wraps target objects to instrument method calls for benchmarking and caching hooks",
+          "responsibilities": [
+            "Wrap methods of a target object with instrumentation",
+            "Track method calls using registered hooks",
+            "Provide transparent proxy behavior"
+          ],
+          "interfaces": [
+            "__init__(target: Any, layer: str, plugin_name: str, methods_to_track: set[str] | None)",
+            "__getattr__(name: str) -> Any",
+            "_wrap_method(method: Callable, method_name: str) -> Callable",
+            "__repr__() -> str",
+            "__str__() -> str"
+          ],
+          "dependencies": [
+            "BenchmarkHook",
+            "CachingHook"
+          ]
+        },
+        {
+          "name": "OpenAIChat",
+          "purpose": "Provides OpenAI chat completions with token tracking capability",
+          "responsibilities": [
+            "Execute chat requests to OpenAI models",
+            "Capture and expose token usage from API responses"
+          ],
+          "interfaces": [
+            "__init__(auth: AuthProvider, model: str | None, tier: ModelTier, base_url: str | None, models: dict[ModelTier, str] | None) -> None",
+            "chat(messages: list[dict[str, Any]]) -> str",
+            "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+          ],
+          "dependencies": [
+            "AuthProvider"
+          ]
+        },
+        {
+          "name": "OpenAIEmbedding",
+          "purpose": "Provides OpenAI embeddings with token tracking capability",
+          "responsibilities": [
+            "Generate embeddings for text using OpenAI models",
+            "Capture and expose token usage from API responses"
+          ],
+          "interfaces": [
+            "__init__(auth: AuthProvider, model: str | None, dimensions: int | None, base_url: str | None) -> None",
+            "embed(text: str) -> list[float]",
+            "embed_batch(texts: list[str]) -> list[list[float]]",
+            "dimensions() -> int"
+          ],
+          "dependencies": [
+            "AuthProvider"
+          ]
+        },
+        {
+          "name": "FitzKragEngine",
+          "purpose": "Knowledge Routing Augmented Generation engine for query processing and answer generation",
+          "responsibilities": [
+            "Process queries through ingestion pipeline",
+            "Route queries to appropriate retrieval strategies",
+            "Generate final answers with aggregated token usage"
+          ],
+          "interfaces": [
+            "__init__(config: FitzKragConfig)",
+            "load(collection: str) -> None",
+            "answer(query: Query) -> Answer",
+            "point(source: Path, collection: str | None) -> Any"
+          ],
+          "dependencies": [
+            "Answer",
+            "FitzKragConfig"
+          ]
+        }
+      ],
+      "data_model": {
+        "Answer": [
+          "content: str",
+          "provenance: Provenance",
+          "constraints: Constraints | None",
+          "token_usage: dict[str, int] | None"
+        ],
+        "RerankResult": [
+          "document_index: int",
+          "relevance_score: float"
+        ]
+      },
+      "integration_points": [
+        "LLM providers \u2014 wrap chat(), embed(), describe_image() methods with InstrumentedProxy to track token usage",
+        "FitzKragEngine \u2014 instrument core query processing steps that invoke LLMs (chat, embedding, reranking)",
+        "Answer construction \u2014 aggregate and attach total token counts when building final Answer objects"
+      ],
+      "artifacts": [
+        {
+          "filename": "fitz_ai/core/instrumentation.py",
+          "content": "class BenchmarkHook(Protocol):\n  def on_call_start(self, layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any: ...\n  def on_call_end(self, context: Any, result: Any, error: Exception | None) -> None: ...\nclass CachingHook(Protocol):\n  def get_cached_result(self, layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any: ...\n  def cache_result(self, layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict, result: Any) -> None: ...\ndef register_hook(hook: BenchmarkHook) -> None: ...\ndef unregister_hook(hook: BenchmarkHook) -> None: ...\ndef clear_hooks() -> None: ...\ndef has_hooks() -> bool: ...\ndef get_hooks() -> list[BenchmarkHook]: ...\nclass InstrumentedProxy:\n  def __init__(self, target: Any, layer: str, plugin_name: str, methods_to_track: set[str] | None): ...\n  def __getattr__(self, name: str) -> Any: ...\n  def _wrap_method(self, method: Callable, method_name: str) -> Callable: ...\n  def __repr__(self) -> str: ...\n  def __str__(self) -> str: ...\ndef maybe_wrap(target: Any, layer: str, plugin_name: str, methods_to_track: set[str] | None) -> Any: ...\ndef wrap(target: Any, layer: str, plugin_name: str, methods_to_track: set[str] | None) -> InstrumentedProxy: ...",
+          "purpose": "Provides instrumentation system for tracking LLM token usage and other performance metrics"
+        },
+        {
+          "filename": "fitz_ai/llm/providers/base.py",
+          "content": "class RerankResult:\nclass ChatProvider(Protocol):  # [SYNTAX ERROR: expected an indented block after class definition on line 1]\n  chat(messages: list[dict[str, Any]]) -> str\nclass StreamingChatProvider(Protocol):\n  chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]\nclass EmbeddingProvider(Protocol):\n  embed(text: str) -> list[float]\n  embed_batch(texts: list[str]) -> list[list[float]]\n  dimensions() -> int\nclass RerankProvider(Protocol):\n  rerank(query: str, documents: list[str], top_n: int | None) -> list[RerankResult]\nclass VisionProvider(Protocol):\n  describe_image(image_base64: str, prompt: str | None) -> str",
+          "purpose": "Defines base protocols for LLM providers that will be instrumented for token tracking"
+        },
+        {
+          "filename": "fitz_ai/core/answer.py",
+          "content": "from dataclasses import dataclass\nfrom typing import Any\n\nclass Answer:\n  def __post_init__(self): ...\n",
+          "purpose": "Defines the answer structure that will be extended to include token usage metadata"
+        }
+      ]
+    }
+  },
+  "architecture": {
+    "approaches": [
+      {
+        "name": "Instrumentation-Based Tracking",
+        "description": "Leverage existing InstrumentedProxy mechanism to wrap LLM provider methods and capture token usage from API responses.",
+        "pros": [
+          "Minimal code changes required",
+          "Reuses existing infrastructure",
+          "No breaking changes to public APIs"
+        ],
+        "cons": [
+          "Requires modification of provider classes to expose metadata",
+          "Token parsing logic must be implemented per-provider"
+        ],
+        "complexity": "medium",
+        "best_for": [
+          "Production systems with existing instrumentation patterns"
+        ]
+      },
+      {
+        "name": "Provider-Level Wrapper Enhancement",
+        "description": "Create enhanced wrapper classes around each LLM provider that capture and aggregate token usage internally.",
+        "pros": [
+          "Centralized token tracking logic",
+          "Clear separation of concerns",
+          "Support for multiple LLM providers"
+        ],
+        "cons": [
+          "Requires creating new wrapper classes or modifying existing ones",
+          "More code to maintain and test"
+        ],
+        "complexity": "high",
+        "best_for": [
+          "Systems requiring robust, future-proof token tracking"
+        ]
+      }
+    ],
+    "recommended": "Instrumentation-Based Tracking",
+    "reasoning": "This approach is right because it leverages the existing InstrumentedProxy system already present in fitz_ai/core/instrumentation.py and avoids over-engineering by not modifying core interfaces or adding new API response fields that don't exist. The other approach, Provider-Level Wrapper Enhancement, is wrong because while it would work, it requires more extensive changes to provider classes which could introduce bugs and increase maintenance overhead unnecessarily when the instrumentation system already provides a clean way to intercept method calls.",
+    "key_tradeoffs": {
+      "instrumentation_vs_modification": "Use existing InstrumentedProxy instead of building new tracking system to reduce complexity and leverage current infra",
+      "scope_limitation": "Avoid modifying API schemas or SDK signatures to maintain backward compatibility and focus on internal tracking only"
+    },
+    "technology_considerations": [
+      "InstrumentedProxy from fitz_ai/core/instrumentation.py for method wrapping",
+      "OpenAI response usage metadata (prompt_tokens, completion_tokens) for token counting",
+      "LLM provider-specific APIs (Cohere/Anthropic/Ollama) for extracting token usage fields"
+    ],
+    "scope_statement": "Implement token usage tracking by instrumenting LLM provider methods with minimal changes to existing code paths and leveraging the current instrumentation framework for capturing prompt/completion token counts from external API responses."
+  },
+  "design": {
+    "adrs": [
+      {
+        "title": "ADR: Instrument LLM Providers for Token Usage Tracking",
+        "context": "The system needs to track LLM token usage per query to provide cost visibility and optimization insights.",
+        "decision": "Leverage the existing instrumentation infrastructure in fitz_ai/core/instrumentation.py to wrap core LLM provider methods without modifying public APIs or response schemas.",
+        "rationale": "This approach minimizes architectural changes, avoids over-engineering by not redefining API responses, and uses already-existing mechanisms. It preserves backward compatibility while enabling token tracking at the provider level where raw usage data is available (e.g., OpenAI's response.usage).",
+        "consequences": [
+          "Minimal code modifications required - only patch or wrap LLM provider methods in specific implementations like OpenAIChat, CohereChat, etc.",
+          "Token usage becomes available internally during query processing but doesn't change SDK/API signatures unless explicitly added to Answer class.",
+          "No breaking changes to existing interfaces; new functionality is opt-in via instrumentation hooks or debug utilities."
+        ],
+        "alternatives_considered": [
+          "Alternative 1 \u2013 Add token_usage fields to QueryResponse schema: rejected because the QueryResponse model does not exist in provided codebase and would require extensive API rework.",
+          "Alternative 2 \u2013 Modify SDK method signatures to return usage data directly: rejected because it breaks backward compatibility and adds unnecessary complexity without clear benefit for current use cases.",
+          "Alternative 3 \u2013 Create a global token counter registry: rejected because it introduces tight coupling and doesn't leverage existing structured logging or instrumentation patterns."
+        ]
+      },
+      {
+        "title": "ADR: Data Sensitivity in Instrumentation-Based Tracking",
+        "context": "The instrumentation-based approach uses InstrumentedProxy to track calls across OpenAIChat, OpenAIEmbedding, and FitzKragEngine components. The proxy captures request/response data for observability but doesn't specify what sensitive information might be included.",
+        "decision": "InstrumentedProxy will capture all request/response data without filtering or sanitization to maintain complete traceability",
+        "rationale": "This aligns with the existing instrumentation system's design and provides maximum debugging capability. The assumption is that all components are trusted and any security concerns are handled at higher layers.",
+        "consequences": [
+          "Potential exposure of sensitive user data in logs/traces if not properly sanitized by downstream consumers",
+          "Increased data transfer overhead as complete payloads are captured instead of minimal necessary information",
+          "Requires additional documentation and training for developers on handling sensitive data in instrumented traces"
+        ],
+        "alternatives_considered": [
+          "Implement field-level filtering to exclude sensitive data (like API keys, user PII) before instrumentation",
+          "Add configuration options per component to enable/disable specific data capture levels",
+          "Create separate instrumentation channels for different sensitivity tiers of data"
+        ]
+      }
+    ],
+    "components": [
+      {
+        "name": "InstrumentedProxy",
+        "purpose": "Wraps target objects to instrument method calls for benchmarking and caching hooks",
+        "responsibilities": [
+          "Wrap methods of a target object with instrumentation",
+          "Track method calls using registered hooks",
+          "Provide transparent proxy behavior"
+        ],
+        "interfaces": [
+          "__init__(target: Any, layer: str, plugin_name: str, methods_to_track: set[str] | None)",
+          "__getattr__(name: str) -> Any",
+          "_wrap_method(method: Callable, method_name: str) -> Callable",
+          "__repr__() -> str",
+          "__str__() -> str"
+        ],
+        "dependencies": [
+          "BenchmarkHook",
+          "CachingHook"
+        ]
+      },
+      {
+        "name": "OpenAIChat",
+        "purpose": "Provides OpenAI chat completions with token tracking capability",
+        "responsibilities": [
+          "Execute chat requests to OpenAI models",
+          "Capture and expose token usage from API responses"
+        ],
+        "interfaces": [
+          "__init__(auth: AuthProvider, model: str | None, tier: ModelTier, base_url: str | None, models: dict[ModelTier, str] | None) -> None",
+          "chat(messages: list[dict[str, Any]]) -> str",
+          "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+        ],
+        "dependencies": [
+          "AuthProvider"
+        ]
+      },
+      {
+        "name": "OpenAIEmbedding",
+        "purpose": "Provides OpenAI embeddings with token tracking capability",
+        "responsibilities": [
+          "Generate embeddings for text using OpenAI models",
+          "Capture and expose token usage from API responses"
+        ],
+        "interfaces": [
+          "__init__(auth: AuthProvider, model: str | None, dimensions: int | None, base_url: str | None) -> None",
+          "embed(text: str) -> list[float]",
+          "embed_batch(texts: list[str]) -> list[list[float]]",
+          "dimensions() -> int"
+        ],
+        "dependencies": [
+          "AuthProvider"
+        ]
+      },
+      {
+        "name": "FitzKragEngine",
+        "purpose": "Knowledge Routing Augmented Generation engine for query processing and answer generation",
+        "responsibilities": [
+          "Process queries through ingestion pipeline",
+          "Route queries to appropriate retrieval strategies",
+          "Generate final answers with aggregated token usage"
+        ],
+        "interfaces": [
+          "__init__(config: FitzKragConfig)",
+          "load(collection: str) -> None",
+          "answer(query: Query) -> Answer",
+          "point(source: Path, collection: str | None) -> Any"
+        ],
+        "dependencies": [
+          "Answer",
+          "FitzKragConfig"
+        ]
+      }
+    ],
+    "data_model": {
+      "Answer": [
+        "content: str",
+        "provenance: Provenance",
+        "constraints: Constraints | None",
+        "token_usage: dict[str, int] | None"
+      ],
+      "RerankResult": [
+        "document_index: int",
+        "relevance_score: float"
+      ]
+    },
+    "integration_points": [
+      "LLM providers \u2014 wrap chat(), embed(), describe_image() methods with InstrumentedProxy to track token usage",
+      "FitzKragEngine \u2014 instrument core query processing steps that invoke LLMs (chat, embedding, reranking)",
+      "Answer construction \u2014 aggregate and attach total token counts when building final Answer objects"
+    ],
+    "artifacts": [
+      {
+        "filename": "fitz_ai/core/instrumentation.py",
+        "content": "class BenchmarkHook(Protocol):\n  def on_call_start(self, layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any: ...\n  def on_call_end(self, context: Any, result: Any, error: Exception | None) -> None: ...\nclass CachingHook(Protocol):\n  def get_cached_result(self, layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any: ...\n  def cache_result(self, layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict, result: Any) -> None: ...\ndef register_hook(hook: BenchmarkHook) -> None: ...\ndef unregister_hook(hook: BenchmarkHook) -> None: ...\ndef clear_hooks() -> None: ...\ndef has_hooks() -> bool: ...\ndef get_hooks() -> list[BenchmarkHook]: ...\nclass InstrumentedProxy:\n  def __init__(self, target: Any, layer: str, plugin_name: str, methods_to_track: set[str] | None): ...\n  def __getattr__(self, name: str) -> Any: ...\n  def _wrap_method(self, method: Callable, method_name: str) -> Callable: ...\n  def __repr__(self) -> str: ...\n  def __str__(self) -> str: ...\ndef maybe_wrap(target: Any, layer: str, plugin_name: str, methods_to_track: set[str] | None) -> Any: ...\ndef wrap(target: Any, layer: str, plugin_name: str, methods_to_track: set[str] | None) -> InstrumentedProxy: ...",
+        "purpose": "Provides instrumentation system for tracking LLM token usage and other performance metrics"
+      },
+      {
+        "filename": "fitz_ai/llm/providers/base.py",
+        "content": "class RerankResult:\nclass ChatProvider(Protocol):  # [SYNTAX ERROR: expected an indented block after class definition on line 1]\n  chat(messages: list[dict[str, Any]]) -> str\nclass StreamingChatProvider(Protocol):\n  chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]\nclass EmbeddingProvider(Protocol):\n  embed(text: str) -> list[float]\n  embed_batch(texts: list[str]) -> list[list[float]]\n  dimensions() -> int\nclass RerankProvider(Protocol):\n  rerank(query: str, documents: list[str], top_n: int | None) -> list[RerankResult]\nclass VisionProvider(Protocol):\n  describe_image(image_base64: str, prompt: str | None) -> str",
+        "purpose": "Defines base protocols for LLM providers that will be instrumented for token tracking"
+      },
+      {
+        "filename": "fitz_ai/core/answer.py",
+        "content": "from dataclasses import dataclass\nfrom typing import Any\n\nclass Answer:\n  def __post_init__(self): ...\n",
+        "purpose": "Defines the answer structure that will be extended to include token usage metadata"
+      }
+    ]
+  },
+  "roadmap_risk": {
+    "roadmap": {
+      "phases": [
+        {
+          "number": 0,
+          "name": "Read Before Writing",
+          "objective": "Verify integration points by reading source",
+          "deliverables": [
+            "Verified: fitz_ai/llm/providers/base.py",
+            "Verified: fitz_ai/llm/providers/openai.py",
+            "Verified: fitz_ai/llm/providers/anthropic.py",
+            "Verified: fitz_ai/llm/providers/cohere.py",
+            "Verified: fitz_ai/llm/providers/ollama.py"
+          ],
+          "dependencies": [],
+          "estimated_complexity": "low",
+          "key_risks": [],
+          "verification_command": "pytest tests/llm/providers/test_base.py tests/llm/providers/test_openai.py tests/llm/providers/test_anthropic.py tests/llm/providers/test_cohere.py tests/llm/providers/test_ollama.py -v",
+          "estimated_effort": "~15 min"
+        },
+        {
+          "number": 2,
+          "name": "Provider Protocol Definition",
+          "objective": "Define standardized protocols for LLM providers including chat, embedding, reranking, and vision capabilities.",
+          "deliverables": [
+            "Base provider protocols in fitz_ai/llm/providers/base.py"
+          ],
+          "dependencies": [],
+          "estimated_complexity": "medium",
+          "key_risks": [
+            "Inconsistent API design across providers",
+            "Difficulty maintaining protocol compatibility with evolving LLM APIs"
+          ],
+          "verification_command": "pytest tests/test_llm_providers_base.py -v",
+          "estimated_effort": "~4 hours"
+        },
+        {
+          "number": 3,
+          "name": "OpenAI Provider Implementation",
+          "objective": "Implement OpenAI provider wrappers using the official SDK for chat, embedding, and vision services.",
+          "deliverables": [
+            "OpenAIChat class in fitz_ai/llm/providers/openai.py",
+            "OpenAIEmbedding class in fitz_ai/llm/providers/openai.py",
+            "OpenAIVision class in fitz_ai/llm/providers/openai.py"
+          ],
+          "dependencies": [
+            2
+          ],
+          "estimated_complexity": "high",
+          "key_risks": [
+            "SDK version compatibility issues",
+            "Rate limiting and API key management"
+          ],
+          "verification_command": "pytest tests/test_openai_provider.py -v",
+          "estimated_effort": "~6 hours"
+        },
+        {
+          "number": 4,
+          "name": "Anthropic Provider Implementation",
+          "objective": "Implement Anthropic provider wrappers using the official SDK for chat and vision services.",
+          "deliverables": [
+            "AnthropicChat class in fitz_ai/llm/providers/anthropic.py",
+            "AnthropicVision class in fitz_ai/llm/providers/anthropic.py"
+          ],
+          "dependencies": [
+            2
+          ],
+          "estimated_complexity": "high",
+          "key_risks": [
+            "System message handling differences",
+            "API rate limits and authentication"
+          ],
+          "verification_command": "pytest tests/test_anthropic_provider.py -v",
+          "estimated_effort": "~5 hours"
+        },
+        {
+          "number": 5,
+          "name": "Cohere Provider Implementation",
+          "objective": "Implement Cohere provider wrappers for chat, embedding, and reranking services.",
+          "deliverables": [
+            "CohereChat class in fitz_ai/llm/providers/cohere.py",
+            "CohereEmbedding class in fitz_ai/llm/providers/cohere.py",
+            "CohereRerank class in fitz_ai/llm/providers/cohere.py"
+          ],
+          "dependencies": [
+            2
+          ],
+          "estimated_complexity": "high",
+          "key_risks": [
+            "Input type handling for embeddings",
+            "Reranking model accuracy and performance"
+          ],
+          "verification_command": "pytest tests/test_cohere_provider.py -v",
+          "estimated_effort": "~7 hours"
+        },
+        {
+          "number": 6,
+          "name": "Ollama Provider Implementation",
+          "objective": "Implement Ollama provider wrappers using direct HTTP calls for chat, embedding, reranking, and vision services.",
+          "deliverables": [
+            "OllamaChat class in fitz_ai/llm/providers/ollama.py",
+            "OllamaEmbedding class in fitz_ai/llm/providers/ollama.py",
+            "OllamaRerank class in fitz_ai/llm/providers/ollama.py",
+            "OllamaVision class in fitz_ai/llm/providers/ollama.py"
+          ],
+          "dependencies": [
+            2
+          ],
+          "estimated_complexity": "high",
+          "key_risks": [
+            "HTTP client reliability and connection pooling",
+            "Model compatibility across different Ollama versions"
+          ],
+          "verification_command": "pytest tests/test_ollama_provider.py -v",
+          "estimated_effort": "~8 hours"
+        },
+        {
+          "number": 7,
+          "name": "Instrumentation System Integration",
+          "objective": "Integrate the instrumentation system to benchmark and cache LLM provider performance.",
+          "deliverables": [
+            "Instrumented proxy wrapper in fitz_ai/core/instrumentation.py",
+            "Benchmark hooks for all provider classes"
+          ],
+          "dependencies": [
+            2,
+            3,
+            4,
+            5,
+            6
+          ],
+          "estimated_complexity": "medium",
+          "key_risks": [
+            "Performance overhead from instrumentation",
+            "Cache invalidation strategy effectiveness"
+          ],
+          "verification_command": "pytest tests/test_instrumentation.py -v",
+          "estimated_effort": "~3 hours"
+        }
+      ],
+      "critical_path": [
+        0,
+        2,
+        3,
+        5
+      ],
+      "parallel_opportunities": [
+        [
+          4,
+          6
+        ]
+      ],
+      "total_phases": 7
+    },
+    "risk": {
+      "risks": [
+        {
+          "category": "external",
+          "description": "LLM provider API outages or rate limiting could cause query failures or degraded performance",
+          "impact": "high",
+          "likelihood": "medium",
+          "mitigation": "Implement circuit breaker patterns and fallback mechanisms for each LLM provider",
+          "contingency": "Switch to alternative LLM provider tier or fall back to cached responses when API calls fail",
+          "affected_phases": [
+            1,
+            3
+          ],
+          "verification": "Assert that circuit breakers are triggered on repeated failures"
+        },
+        {
+          "category": "technical",
+          "description": "Inconsistent embedding dimensions across different providers could cause vector storage misalignment",
+          "impact": "high",
+          "likelihood": "low",
+          "mitigation": "Validate and normalize embedding dimensions at startup for all configured providers",
+          "contingency": "Fail gracefully with clear error message when dimension mismatch is detected during indexing",
+          "affected_phases": [
+            1,
+            3
+          ],
+          "verification": "Assert that EmbeddingProvider.dimensions() returns consistent values across implementations"
+        },
+        {
+          "category": "security",
+          "description": "LLM provider authentication tokens may be exposed or compromised in logs or error messages",
+          "impact": "critical",
+          "likelihood": "medium",
+          "mitigation": "Sanitize all logging and error outputs to remove sensitive auth headers before writing to logs",
+          "contingency": "Revoke compromised credentials immediately and rotate all affected tokens across providers",
+          "affected_phases": [
+            1,
+            3
+          ],
+          "verification": "Assert that get_headers() implementations do not include raw secrets in output"
+        },
+        {
+          "category": "resource",
+          "description": "High concurrent load on LLM providers may trigger usage limits or billing overages",
+          "impact": "high",
+          "likelihood": "medium",
+          "mitigation": "Implement request queuing and rate limiting with backpressure handling in the client layer",
+          "contingency": "Scale to additional provider accounts or tiers when usage thresholds are approached",
+          "affected_phases": [
+            1,
+            3
+          ],
+          "verification": "Assert that LLM requests are properly throttled based on configured limits"
+        },
+        {
+          "category": "quality",
+          "description": "Different providers may produce varying quality outputs due to model differences, leading to inconsistent user experience",
+          "impact": "medium",
+          "likelihood": "high",
+          "mitigation": "Implement provider-specific prompt engineering and output validation for each LLM tier",
+          "contingency": "Use a weighted voting system across multiple providers when available or default to most reliable tier",
+          "affected_phases": [
+            1,
+            3
+          ],
+          "verification": "Assert that answer quality metrics are consistent across provider tiers"
+        }
+      ],
+      "overall_risk_level": "high",
+      "recommended_contingencies": [
+        "Implement circuit breaker patterns and fallback mechanisms for each LLM provider",
+        "Fail gracefully with clear error message when dimension mismatch is detected during indexing",
+        "Revoke compromised credentials immediately and rotate all affected tokens across providers",
+        "Scale to additional provider accounts or tiers when usage thresholds are approached",
+        "Use a weighted voting system across multiple providers when available or default to most reliable tier"
+      ]
+    }
+  },
+  "roadmap": {
+    "phases": [
+      {
+        "number": 0,
+        "name": "Read Before Writing",
+        "objective": "Verify integration points by reading source",
+        "deliverables": [
+          "Verified: fitz_ai/llm/providers/base.py",
+          "Verified: fitz_ai/llm/providers/openai.py",
+          "Verified: fitz_ai/llm/providers/anthropic.py",
+          "Verified: fitz_ai/llm/providers/cohere.py",
+          "Verified: fitz_ai/llm/providers/ollama.py"
+        ],
+        "dependencies": [],
+        "estimated_complexity": "low",
+        "key_risks": [],
+        "verification_command": "pytest tests/llm/providers/test_base.py tests/llm/providers/test_openai.py tests/llm/providers/test_anthropic.py tests/llm/providers/test_cohere.py tests/llm/providers/test_ollama.py -v",
+        "estimated_effort": "~15 min"
+      },
+      {
+        "number": 2,
+        "name": "Provider Protocol Definition",
+        "objective": "Define standardized protocols for LLM providers including chat, embedding, reranking, and vision capabilities.",
+        "deliverables": [
+          "Base provider protocols in fitz_ai/llm/providers/base.py"
+        ],
+        "dependencies": [],
+        "estimated_complexity": "medium",
+        "key_risks": [
+          "Inconsistent API design across providers",
+          "Difficulty maintaining protocol compatibility with evolving LLM APIs"
+        ],
+        "verification_command": "pytest tests/test_llm_providers_base.py -v",
+        "estimated_effort": "~4 hours"
+      },
+      {
+        "number": 3,
+        "name": "OpenAI Provider Implementation",
+        "objective": "Implement OpenAI provider wrappers using the official SDK for chat, embedding, and vision services.",
+        "deliverables": [
+          "OpenAIChat class in fitz_ai/llm/providers/openai.py",
+          "OpenAIEmbedding class in fitz_ai/llm/providers/openai.py",
+          "OpenAIVision class in fitz_ai/llm/providers/openai.py"
+        ],
+        "dependencies": [
+          2
+        ],
+        "estimated_complexity": "high",
+        "key_risks": [
+          "SDK version compatibility issues",
+          "Rate limiting and API key management"
+        ],
+        "verification_command": "pytest tests/test_openai_provider.py -v",
+        "estimated_effort": "~6 hours"
+      },
+      {
+        "number": 4,
+        "name": "Anthropic Provider Implementation",
+        "objective": "Implement Anthropic provider wrappers using the official SDK for chat and vision services.",
+        "deliverables": [
+          "AnthropicChat class in fitz_ai/llm/providers/anthropic.py",
+          "AnthropicVision class in fitz_ai/llm/providers/anthropic.py"
+        ],
+        "dependencies": [
+          2
+        ],
+        "estimated_complexity": "high",
+        "key_risks": [
+          "System message handling differences",
+          "API rate limits and authentication"
+        ],
+        "verification_command": "pytest tests/test_anthropic_provider.py -v",
+        "estimated_effort": "~5 hours"
+      },
+      {
+        "number": 5,
+        "name": "Cohere Provider Implementation",
+        "objective": "Implement Cohere provider wrappers for chat, embedding, and reranking services.",
+        "deliverables": [
+          "CohereChat class in fitz_ai/llm/providers/cohere.py",
+          "CohereEmbedding class in fitz_ai/llm/providers/cohere.py",
+          "CohereRerank class in fitz_ai/llm/providers/cohere.py"
+        ],
+        "dependencies": [
+          2
+        ],
+        "estimated_complexity": "high",
+        "key_risks": [
+          "Input type handling for embeddings",
+          "Reranking model accuracy and performance"
+        ],
+        "verification_command": "pytest tests/test_cohere_provider.py -v",
+        "estimated_effort": "~7 hours"
+      },
+      {
+        "number": 6,
+        "name": "Ollama Provider Implementation",
+        "objective": "Implement Ollama provider wrappers using direct HTTP calls for chat, embedding, reranking, and vision services.",
+        "deliverables": [
+          "OllamaChat class in fitz_ai/llm/providers/ollama.py",
+          "OllamaEmbedding class in fitz_ai/llm/providers/ollama.py",
+          "OllamaRerank class in fitz_ai/llm/providers/ollama.py",
+          "OllamaVision class in fitz_ai/llm/providers/ollama.py"
+        ],
+        "dependencies": [
+          2
+        ],
+        "estimated_complexity": "high",
+        "key_risks": [
+          "HTTP client reliability and connection pooling",
+          "Model compatibility across different Ollama versions"
+        ],
+        "verification_command": "pytest tests/test_ollama_provider.py -v",
+        "estimated_effort": "~8 hours"
+      },
+      {
+        "number": 7,
+        "name": "Instrumentation System Integration",
+        "objective": "Integrate the instrumentation system to benchmark and cache LLM provider performance.",
+        "deliverables": [
+          "Instrumented proxy wrapper in fitz_ai/core/instrumentation.py",
+          "Benchmark hooks for all provider classes"
+        ],
+        "dependencies": [
+          2,
+          3,
+          4,
+          5,
+          6
+        ],
+        "estimated_complexity": "medium",
+        "key_risks": [
+          "Performance overhead from instrumentation",
+          "Cache invalidation strategy effectiveness"
+        ],
+        "verification_command": "pytest tests/test_instrumentation.py -v",
+        "estimated_effort": "~3 hours"
+      }
+    ],
+    "critical_path": [
+      0,
+      2,
+      3,
+      5
+    ],
+    "parallel_opportunities": [
+      [
+        4,
+        6
+      ]
+    ],
+    "total_phases": 7
+  },
+  "risk": {
+    "risks": [
+      {
+        "category": "external",
+        "description": "LLM provider API outages or rate limiting could cause query failures or degraded performance",
+        "impact": "high",
+        "likelihood": "medium",
+        "mitigation": "Implement circuit breaker patterns and fallback mechanisms for each LLM provider",
+        "contingency": "Switch to alternative LLM provider tier or fall back to cached responses when API calls fail",
+        "affected_phases": [
+          1,
+          3
+        ],
+        "verification": "Assert that circuit breakers are triggered on repeated failures"
+      },
+      {
+        "category": "technical",
+        "description": "Inconsistent embedding dimensions across different providers could cause vector storage misalignment",
+        "impact": "high",
+        "likelihood": "low",
+        "mitigation": "Validate and normalize embedding dimensions at startup for all configured providers",
+        "contingency": "Fail gracefully with clear error message when dimension mismatch is detected during indexing",
+        "affected_phases": [
+          1,
+          3
+        ],
+        "verification": "Assert that EmbeddingProvider.dimensions() returns consistent values across implementations"
+      },
+      {
+        "category": "security",
+        "description": "LLM provider authentication tokens may be exposed or compromised in logs or error messages",
+        "impact": "critical",
+        "likelihood": "medium",
+        "mitigation": "Sanitize all logging and error outputs to remove sensitive auth headers before writing to logs",
+        "contingency": "Revoke compromised credentials immediately and rotate all affected tokens across providers",
+        "affected_phases": [
+          1,
+          3
+        ],
+        "verification": "Assert that get_headers() implementations do not include raw secrets in output"
+      },
+      {
+        "category": "resource",
+        "description": "High concurrent load on LLM providers may trigger usage limits or billing overages",
+        "impact": "high",
+        "likelihood": "medium",
+        "mitigation": "Implement request queuing and rate limiting with backpressure handling in the client layer",
+        "contingency": "Scale to additional provider accounts or tiers when usage thresholds are approached",
+        "affected_phases": [
+          1,
+          3
+        ],
+        "verification": "Assert that LLM requests are properly throttled based on configured limits"
+      },
+      {
+        "category": "quality",
+        "description": "Different providers may produce varying quality outputs due to model differences, leading to inconsistent user experience",
+        "impact": "medium",
+        "likelihood": "high",
+        "mitigation": "Implement provider-specific prompt engineering and output validation for each LLM tier",
+        "contingency": "Use a weighted voting system across multiple providers when available or default to most reliable tier",
+        "affected_phases": [
+          1,
+          3
+        ],
+        "verification": "Assert that answer quality metrics are consistent across provider tiers"
+      }
+    ],
+    "overall_risk_level": "high",
+    "recommended_contingencies": [
+      "Implement circuit breaker patterns and fallback mechanisms for each LLM provider",
+      "Fail gracefully with clear error message when dimension mismatch is detected during indexing",
+      "Revoke compromised credentials immediately and rotate all affected tokens across providers",
+      "Scale to additional provider accounts or tiers when usage thresholds are approached",
+      "Use a weighted voting system across multiple providers when available or default to most reliable tier"
+    ]
+  }
+}

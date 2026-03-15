@@ -1,0 +1,16 @@
+{
+  "run": 4,
+  "elapsed_s": 359.9,
+  "success": true,
+  "recommended": "Instrumentation-Based Tracking",
+  "plan_size": 49977,
+  "stage_timings": {
+    "agent_gathering": 6.6560000000172295,
+    "implementation_check": 2.75,
+    "context": 52.515999999974156,
+    "architecture_design": 242.65600000001723,
+    "roadmap_risk": 50.60899999999674,
+    "coherence_check": 4.671999999991385
+  },
+  "error": null
+}

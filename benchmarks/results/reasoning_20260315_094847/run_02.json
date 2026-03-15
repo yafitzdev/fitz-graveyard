@@ -1,0 +1,16 @@
+{
+  "run": 2,
+  "elapsed_s": 428.0,
+  "success": true,
+  "recommended": "Protocol Extension with Optional Methods",
+  "plan_size": 96914,
+  "stage_timings": {
+    "agent_gathering": 6.25,
+    "implementation_check": 2.5780000000086147,
+    "context": 50.09399999998277,
+    "architecture_design": 299.75,
+    "roadmap_risk": 67.17199999999139,
+    "coherence_check": 2.14000000001397
+  },
+  "error": null
+}

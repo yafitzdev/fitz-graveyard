@@ -1,0 +1,997 @@
+{
+  "context": {
+    "project_description": "Implement token usage tracking for LLM queries across multiple providers (OpenAI, Anthropic, Cohere, Ollama) by adding token counting logic to provider implementations and storing the data in Answer metadata.",
+    "key_requirements": [
+      "Add token counting functionality to all LLM provider classes (OpenAIChat, AnthropicChat, CohereChat, OllamaChat)",
+      "Store input_tokens and output_tokens with each Answer's metadata for visibility",
+      "Implement provider-specific token tracking using each provider's native tokenization methods"
+    ],
+    "constraints": [
+      "Only track LLM chat calls, not embeddings/rerank/vision as specified in user request",
+      "Use existing instrumentation framework to minimize impact on current codebase",
+      "Maintain compatibility with standard ChatProvider/StreamingChatProvider protocols"
+    ],
+    "existing_context": "fitz_ai/core/instrumentation.py, fitz_ai/llm/providers/openai.py, fitz_ai/llm/providers/anthropic.py, fitz_ai/llm/providers/cohere.py, fitz_ai/llm/providers/ollama.py, fitz_ai/core/answer.py",
+    "stakeholders": [
+      "developer responsible for LLM query cost tracking",
+      "user requesting query cost visibility",
+      "system architect maintaining instrumentation framework"
+    ],
+    "scope_boundaries": {
+      "in_scope": [
+        "token usage tracking for LLM queries (chat, chat_stream)",
+        "provider-specific token counting implementations",
+        "storage of token usage in Answer.metadata"
+      ],
+      "out_of_scope": [
+        "embedding token tracking",
+        "reranking token tracking",
+        "vision model token tracking"
+      ]
+    },
+    "existing_files": [
+      "fitz_ai/core/instrumentation.py \u2014 Instrumentation system for benchmarking plugin performance",
+      "fitz_ai/llm/providers/base.py \u2014 Provider protocols for LLM clients",
+      "fitz_ai/llm/providers/openai.py \u2014 discovered by agent",
+      "fitz_ai/llm/providers/anthropic.py \u2014 discovered by agent",
+      "fitz_ai/llm/providers/cohere.py \u2014 discovered by agent",
+      "fitz_ai/llm/providers/ollama.py \u2014 discovered by agent",
+      "fitz_ai/logging/logger.py \u2014 discovered by agent",
+      "fitz_ai/logging/tags.py \u2014 discovered by agent",
+      "fitz_ai/engines/fitz_krag/engine.py \u2014 discovered by agent",
+      "fitz_ai/sdk/fitz.py \u2014 discovered by agent",
+      "fitz_ai/api/routes/query.py \u2014 discovered by agent",
+      "fitz_ai/engines/fitz_krag/ingestion/pipeline.py \u2014 discovered by agent",
+      "fitz_ai/ingestion/diff/executor.py \u2014 discovered by agent",
+      "fitz_ai/ingestion/enrichment/pipeline.py \u2014 discovered by agent",
+      "tests/integration/cloud_fixtures.py \u2014 discovered by agent",
+      "tools/governance/eval_pipeline.py \u2014 discovered by agent",
+      "tools/governance/extract_features.py \u2014 discovered by agent",
+      "fitz_ai/cli/commands/eval.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/token_provider.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/base.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/certificates.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/m2m.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/api_key.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/composite.py \u2014 discovered by agent",
+      "fitz_ai/core/paths/workspace.py \u2014 discovered by agent"
+    ],
+    "needed_artifacts": [
+      "fitz_ai/llm/token_tracker.py \u2014 Core token tracking logic with provider-specific implementations for counting tokens",
+      "fitz_ai/core/token_usage.py \u2014 Data model and interfaces for token usage information"
+    ],
+    "assumptions": [
+      {
+        "assumption": "Token tracking should be done at the provider level by instrumenting each LLM call (chat, chat_stream)",
+        "impact": "Would need to rearchitect how tokens are tracked if they're needed in different contexts",
+        "confidence": "high"
+      },
+      {
+        "assumption": "Token usage should be stored with the Answer metadata for visibility",
+        "impact": "If users want it elsewhere, would need to change how data flows",
+        "confidence": "high"
+      },
+      {
+        "assumption": "Token counting logic can be implemented per-provider since each has different methods for computing token counts",
+        "impact": "Would require a generic approach that might not work across all implementations",
+        "confidence": "high"
+      },
+      {
+        "assumption": "We only need to track LLM calls, not embeddings/rerank/vision (since the request is specifically about \"LLM queries\")",
+        "impact": "If they also want embedding token usage tracked too, would be missing functionality",
+        "confidence": "medium-high"
+      },
+      {
+        "assumption": "All LLM calls use standard protocols (ChatProvider/StreamingChatProvider), not custom methods",
+        "impact": "Would need to instrument additional pathways",
+        "confidence": "high"
+      }
+    ]
+  },
+  "architecture_design": {
+    "architecture": {
+      "approaches": [
+        {
+          "name": "Direct Provider Implementation",
+          "description": "Modify existing LLM providers (OpenAI, Anthropic, Cohere, Ollama) to implement TokenCountingProvider protocol and add count_tokens method that integrates with their native tokenizers.",
+          "pros": [
+            "Provides accurate token counting for each provider's specific model",
+            "Minimal impact on core engine logic since it's self-contained in providers"
+          ],
+          "cons": [
+            "Requires extensive changes to all 4 provider classes and their methods",
+            "Tight coupling between token counting and provider-specific implementations"
+          ],
+          "complexity": "high",
+          "best_for": [
+            "Systems where precise token accounting per-provider is critical"
+          ]
+        },
+        {
+          "name": "Instrumentation-Based Hook System",
+          "description": "Leverage existing InstrumentedProxy system to automatically wrap LLM provider calls with token counting hooks that detect TokenCountingProvider protocol compliance.",
+          "pros": [
+            "Centralized token tracking mechanism without modifying individual providers",
+            "Maintains clean separation of concerns between providers and instrumentation"
+          ],
+          "cons": [
+            "Requires all current provider classes to implement TokenCountingProvider interface (which they don't currently do)",
+            "Adds complexity to the existing instrumentation framework that isn't fully implemented in codebase"
+          ],
+          "complexity": "high",
+          "best_for": [
+            "Systems requiring cross-provider token tracking with minimal code changes to providers themselves"
+          ]
+        }
+      ],
+      "recommended": "Direct Provider Implementation",
+      "reasoning": "The Direct Provider Implementation is recommended because the instrumentation-based approach cannot work as currently designed - no LLM provider classes implement TokenCountingProvider protocol, and the instrumentation system doesn't have any mechanism for automatically detecting or applying token counting hooks. Additionally, all current providers lack count_tokens methods entirely (OpenAIChat, AnthropicChat, CohereChat, OllamaChat). The 'Direct Provider Implementation' approach correctly identifies that all provider classes must be modified to implement TokenCountingProvider protocol and add the required count_tokens method for each specific tokenizer library.",
+      "key_tradeoffs": {
+        "protocol_compliance_vs_existing_implementations": "The system assumes LLM providers implement TokenCountingProvider protocol, but existing providers lack count_tokens() method, creating a mismatch between proposed architecture and current implementation",
+        "accuracy_vs_complexity_of_token_calculation": "Using tiktoken for OpenAI models provides accurate token counting while anthropic/cohere implementations use approximations due to SDK complexity limitations"
+      },
+      "technology_considerations": [
+        "tiktoken library for OpenAI model token counting with fallback to cl100k_base encoding",
+        "anthropic Python SDK required for Anthropic token counting (currently uses approximation)",
+        "cohere Python SDK required for Cohere token counting (currently uses approximation)",
+        "dataclasses for efficient data modeling of TokenUsage structure",
+        "Protocol-based typing for provider interface consistency"
+      ],
+      "scope_statement": "Modify all LLM provider implementations (OpenAI, Anthropic, Cohere, Ollama) to support token counting by adding TokenCountingProvider protocol implementation with count_tokens methods that use their native tokenizers."
+    },
+    "design": {
+      "adrs": [
+        {
+          "title": "ADR: Token Usage Tracking for LLM Operations",
+          "context": "The system needs to track token usage for LLM operations to enable cost tracking, optimization, and observability. Current implementations lack mechanisms to capture input/output tokens from LLM calls.",
+          "decision": "Implement a TokenUsage data model with token counting utilities that can be integrated into providers through protocol-based instrumentation, while acknowledging the current provider classes don't implement required interfaces",
+          "rationale": "Token tracking is essential for cost visibility and optimization. The approach uses dataclasses for structure and protocol-based design to allow flexible provider integration. While current provider implementations lack the necessary methods (count_tokens), this ADR establishes a path forward with clear contracts that can be incrementally implemented.",
+          "consequences": [
+            "Requires modification of existing LLM provider classes to implement TokenCountingProvider protocol",
+            "Necessitates updating Answer and API response models to include token_usage fields",
+            "Creates need for instrumentation system improvements to automatically detect and apply tracking hooks",
+            "Enables cost monitoring and optimization capabilities in the system"
+          ],
+          "alternatives_considered": [
+            "Alternative 1 - Manual integration into each provider method: rejected because it would create code duplication and make maintenance difficult",
+            "Alternative 2 - Store token usage in global context manager: rejected because it introduces state coupling and makes testing harder",
+            "Alternative 3 - Use separate metrics collection without model changes: rejected because it provides limited visibility into actual LLM consumption patterns"
+          ]
+        },
+        {
+          "title": "ADR: Centralized TokenUsage Aggregation vs Distributed Token Tracking",
+          "context": "The direct provider implementation approach requires each provider (OpenAIChat, AnthropicChat, CohereChat) to independently implement token counting and report to a central TokenUsage component. This creates tight coupling between providers and the usage tracking system.",
+          "decision": "Choose centralized TokenUsage aggregation where individual providers report their token counts directly rather than having distributed token tracking across different components",
+          "rationale": "This approach ensures consistent token accounting and simplifies the interface for consumers of token usage data. It also aligns with the existing architecture pattern where providers implement specific protocols that can be easily extended.",
+          "consequences": [
+            "Providers become more tightly coupled to the TokenUsage system, making it harder to swap out provider implementations without affecting usage tracking",
+            "Centralized aggregation introduces a single point of failure for token counting functionality - if TokenUsage component fails, all providers lose token accounting capability",
+            "The approach excludes potential distributed tracing or multi-tenant token accounting scenarios where different components might want to track tokens independently"
+          ],
+          "alternatives_considered": [
+            "Distributed token tracking where each provider maintains its own local usage counters that can be aggregated later - this would reduce coupling but create consistency challenges",
+            "Event-driven token reporting through a message queue system - this could decouple providers but adds complexity and potential latency in usage reporting"
+          ]
+        }
+      ],
+      "components": [
+        {
+          "name": "TokenUsage",
+          "purpose": "Represents token usage information for LLM operations, storing input and output token counts for cost tracking and optimization.",
+          "responsibilities": [
+            "Store input and output token counts",
+            "Validate that token counts are non-negative"
+          ],
+          "interfaces": [
+            "__init__(input_tokens: int, output_tokens: int) -> None",
+            "input_tokens() -> int",
+            "output_tokens() -> int"
+          ],
+          "dependencies": []
+        },
+        {
+          "name": "TokenCountingProvider",
+          "purpose": "Protocol that providers must implement to enable token tracking for LLM operations.",
+          "responsibilities": [
+            "Define interface for counting tokens in text using provider's native tokenizer"
+          ],
+          "interfaces": [
+            "count_tokens(text: str) -> int"
+          ],
+          "dependencies": []
+        },
+        {
+          "name": "OpenAIChat",
+          "purpose": "OpenAI provider wrapper for chat completions.",
+          "responsibilities": [
+            "Handle OpenAI chat completion requests",
+            "Stream responses from OpenAI API"
+          ],
+          "interfaces": [
+            "__init__(auth: AuthProvider, model: str | None, tier: ModelTier, base_url: str | None, models: dict[ModelTier, str] | None) -> None",
+            "chat(messages: list[dict[str, Any]]) -> str",
+            "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+          ],
+          "dependencies": [
+            "AuthProvider"
+          ]
+        },
+        {
+          "name": "AnthropicChat",
+          "purpose": "Anthropic provider wrapper for chat completions.",
+          "responsibilities": [
+            "Handle Anthropic chat completion requests",
+            "Stream responses from Anthropic API"
+          ],
+          "interfaces": [
+            "__init__(auth: AuthProvider, model: str | None, tier: ModelTier, models: dict[ModelTier, str] | None) -> None",
+            "chat(messages: list[dict[str, Any]]) -> str",
+            "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+          ],
+          "dependencies": [
+            "AuthProvider"
+          ]
+        },
+        {
+          "name": "CohereChat",
+          "purpose": "Cohere provider wrapper for chat completions.",
+          "responsibilities": [
+            "Handle Cohere chat completion requests",
+            "Stream responses from Cohere API"
+          ],
+          "interfaces": [
+            "__init__(auth: AuthProvider, model: str | None, tier: ModelTier, models: dict[ModelTier, str] | None) -> None",
+            "chat(messages: list[dict[str, Any]]) -> str",
+            "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+          ],
+          "dependencies": [
+            "AuthProvider"
+          ]
+        },
+        {
+          "name": "OllamaChat",
+          "purpose": "Ollama provider wrapper for chat completions.",
+          "responsibilities": [
+            "Handle Ollama chat completion requests",
+            "Stream responses from Ollama API"
+          ],
+          "interfaces": [
+            "__init__(model: str | None, tier: ModelTier, base_url: str | None, models: dict[ModelTier, str] | None) -> None",
+            "chat(messages: list[dict[str, Any]]) -> str",
+            "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]",
+            "__del__() -> None"
+          ],
+          "dependencies": []
+        }
+      ],
+      "data_model": {
+        "TokenUsage": [
+          "input_tokens: int",
+          "output_tokens: int"
+        ]
+      },
+      "integration_points": [
+        "ExternalSystem \u2014 OpenAI API for chat, embedding, and vision capabilities",
+        "ExternalSystem \u2014 Anthropic API for chat and vision capabilities",
+        "ExternalSystem \u2014 Cohere API for chat, embedding, and reranking capabilities",
+        "ExternalSystem \u2014 Ollama API for chat, embedding, reranking, and vision capabilities"
+      ],
+      "artifacts": [
+        {
+          "filename": "fitz_ai/core/token_usage.py",
+          "content": "from dataclasses import dataclass\nfrom typing import Optional\n\n\n@dataclass\nclass TokenUsage:\n    \"\"\"\n    Represents token usage information for LLM operations.\n    \n    This model stores input and output token counts which are crucial \n    for cost tracking and optimization of LLM usage.\n    \"\"\"\n    input_tokens: int\n    output_tokens: int\n\n    def __post_init__(self):\n        if self.input_tokens < 0 or self.output_tokens < 0:\n            raise ValueError(\"Token counts cannot be negative\")\n\n\n__all__ = [\"TokenUsage\"]",
+          "purpose": "Data model to represent token usage information for LLM operations, storing input and output token counts for cost tracking and optimization"
+        },
+        {
+          "filename": "fitz_ai/llm/token_tracker.py",
+          "content": "from typing import Optional, Protocol, runtime_checkable\n\n# Import required for type hints only\ntry:\n    import tiktoken\n    HAS_TIKTOKEN = True\nexcept ImportError:\n    HAS_TIKTOKEN = False\n\n\n@runtime_checkable\nclass TokenCountingProvider(Protocol):\n    \"\"\"\n    Protocol that providers must implement to enable token tracking.\n    \n    This is used as a marker for the instrumentation system to identify \n    which providers support token counting.\n    \"\"\"\n    def count_tokens(self, text: str) -> int:\n        \"\"\"Count tokens in given text using provider's native tokenizer.\"\"\"\n        ...\n\ndef count_openai_tokens(text: str, model_name: str) -> int:\n    \"\"\"\n    Count tokens for OpenAI models using tiktoken.\n    \n    Args:\n        text (str): Text to tokenize\n        model_name (str): Name of the OpenAI model being used\n        \n    Returns:\n        int: Number of tokens in the text\n    \"\"\"\n    if not HAS_TIKTOKEN:\n        raise ImportError(\"tiktoken is required for OpenAI token counting. Install with 'pip install tiktoken'\")\n    \n    try:\n        encoding = tiktoken.encoding_for_model(model_name)  # [VERIFY] method not found in signatures\n    except KeyError:\n        # Fallback to cl100k_base if model is unknown\n        encoding = tiktoken.get_encoding(\"cl100k_base\")  # [VERIFY] method not found in signatures\n        \n    return len(encoding.encode(text))\n\n\ndef count_anthropic_tokens(text: str, model_name: str) -> int:\n    \"\"\"\n    Count tokens for Anthropic models.\n    \n    Note: This requires the anthropic Python SDK to be installed.\n    \n    Args:\n        text (str): Text to tokenize\n        model_name (str): Name of the Anthropic model being used\n        \n    Returns:\n        int: Number of tokens in the text\n    \"\"\"\n    try:\n        from anthropic import Anthropic\n        # We'll just use a simple approximation - real implementation would \n        # need access to the actual tokenizer which isn't straightforward\n        return len(text.split())  # Approximate token count\n    except ImportError:\n        raise ImportError(\"anthropic Python SDK is required for Anthropic token counting. Install with 'pip install anthropic'\")\n        \n\ndef count_cohere_tokens(text: str, model_name: str) -> int:\n    \"\"\"\n    Count tokens for Cohere models.\n    \n    Note: This requires the cohere Python SDK to be installed.\n    \n    Args:\n        text (str): Text to tokenize\n        model_name (str): Name of the Cohere model being used\n        \n    Returns:\n        int: Number of tokens in the text\n    \"\"\"\n    try:\n        import cohere\n        # Simple approximation since Coherence's tokenizer is complex \n        return len(text.split())  # Approximate token count  \n    except ImportError:\n        raise ImportError(\"cohere Python SDK is required for Cohere token counting. Install with 'pip install cohere'\")\n        \n\ndef estimate_ollama_tokens(text: str, model_name: str) -> int:\n    \"\"\"\n    Estimate tokens for Ollama models.\n    \n    Args:\n        text (str): Text to tokenize\n        model_name (str): Name of the Ollama model being used\n        \n    Returns:\n        int: Estimated number of tokens in the text  \n    \"\"\"\n    # Approximate tokenization using space and punctuation splits\n    import re\n    # Simple heuristic - split on whitespace and punctuation, count words\n    tokens = re.findall(r'\\b\\w+\\b', text)  # [VERIFY] method not found in signatures\n    return len(tokens)\n\n\ndef calculate_prompt_tokens(messages: list[dict], model_name: str) -> int:\n    \"\"\"\n    Calculate token usage for a prompt (messages).\n    \n    Args:\n        messages (list): List of message dictionaries with 'content' field\n        model_name (str): Name of the LLM being used\n        \n    Returns:\n        int: Total tokens in all messages\n    \"\"\"\n    total = 0\n    \n    # For different providers, we'll use their specific counting approach\n    for msg in messages:\n        content = str(msg.get('content', ''))\n        if model_name.startswith(\"gpt-\"):\n            total += count_openai_tokens(content, model_name)\n        elif \"claude\" in model_name.lower():\n            total += count_anthropic_tokens(content, model_name) \n        else:\n            # Default approximation\n            total += estimate_ollama_tokens(content, model_name)\n    \n    return total\n\n\ndef calculate_response_tokens(response: str, model_name: str) -> int:\n    \"\"\"\n    Calculate token usage for a response.\n    \n    Args:\n        response (str): Response text from LLM\n        model_name (str): Name of the LLM being used\n        \n    Returns:\n        int: Number of tokens in the response \n    \"\"\"\n    if not isinstance(response, str):\n        response = str(response)\n        \n    # For different providers, we'll use their specific counting approach\n    if model_name.startswith(\"gpt-\"):\n        return count_openai_tokens(response, model_name)\n    elif \"claude\" in model_name.lower():\n        return count_anthropic_tokens(response, model_name) \n    else:\n        # Default approximation  \n        return estimate_ollama_tokens(response, model_name)\n\n__all__ = [\n    \"TokenCountingProvider\",\n    \"count_openai_tokens\", \n    \"count_anthropic_tokens\",\n    \"count_cohere_tokens\",\n    \"estimate_ollama_tokens\",\n    \"calculate_prompt_tokens\",\n    \"calculate_response_tokens\"\n]",
+          "purpose": "Utility functions and protocols for token counting across different LLM providers, including OpenAI, Anthropic, Cohere, and Ollama with appropriate fallbacks"
+        }
+      ]
+    }
+  },
+  "architecture": {
+    "approaches": [
+      {
+        "name": "Direct Provider Implementation",
+        "description": "Modify existing LLM providers (OpenAI, Anthropic, Cohere, Ollama) to implement TokenCountingProvider protocol and add count_tokens method that integrates with their native tokenizers.",
+        "pros": [
+          "Provides accurate token counting for each provider's specific model",
+          "Minimal impact on core engine logic since it's self-contained in providers"
+        ],
+        "cons": [
+          "Requires extensive changes to all 4 provider classes and their methods",
+          "Tight coupling between token counting and provider-specific implementations"
+        ],
+        "complexity": "high",
+        "best_for": [
+          "Systems where precise token accounting per-provider is critical"
+        ]
+      },
+      {
+        "name": "Instrumentation-Based Hook System",
+        "description": "Leverage existing InstrumentedProxy system to automatically wrap LLM provider calls with token counting hooks that detect TokenCountingProvider protocol compliance.",
+        "pros": [
+          "Centralized token tracking mechanism without modifying individual providers",
+          "Maintains clean separation of concerns between providers and instrumentation"
+        ],
+        "cons": [
+          "Requires all current provider classes to implement TokenCountingProvider interface (which they don't currently do)",
+          "Adds complexity to the existing instrumentation framework that isn't fully implemented in codebase"
+        ],
+        "complexity": "high",
+        "best_for": [
+          "Systems requiring cross-provider token tracking with minimal code changes to providers themselves"
+        ]
+      }
+    ],
+    "recommended": "Direct Provider Implementation",
+    "reasoning": "The Direct Provider Implementation is recommended because the instrumentation-based approach cannot work as currently designed - no LLM provider classes implement TokenCountingProvider protocol, and the instrumentation system doesn't have any mechanism for automatically detecting or applying token counting hooks. Additionally, all current providers lack count_tokens methods entirely (OpenAIChat, AnthropicChat, CohereChat, OllamaChat). The 'Direct Provider Implementation' approach correctly identifies that all provider classes must be modified to implement TokenCountingProvider protocol and add the required count_tokens method for each specific tokenizer library.",
+    "key_tradeoffs": {
+      "protocol_compliance_vs_existing_implementations": "The system assumes LLM providers implement TokenCountingProvider protocol, but existing providers lack count_tokens() method, creating a mismatch between proposed architecture and current implementation",
+      "accuracy_vs_complexity_of_token_calculation": "Using tiktoken for OpenAI models provides accurate token counting while anthropic/cohere implementations use approximations due to SDK complexity limitations"
+    },
+    "technology_considerations": [
+      "tiktoken library for OpenAI model token counting with fallback to cl100k_base encoding",
+      "anthropic Python SDK required for Anthropic token counting (currently uses approximation)",
+      "cohere Python SDK required for Cohere token counting (currently uses approximation)",
+      "dataclasses for efficient data modeling of TokenUsage structure",
+      "Protocol-based typing for provider interface consistency"
+    ],
+    "scope_statement": "Modify all LLM provider implementations (OpenAI, Anthropic, Cohere, Ollama) to support token counting by adding TokenCountingProvider protocol implementation with count_tokens methods that use their native tokenizers."
+  },
+  "design": {
+    "adrs": [
+      {
+        "title": "ADR: Token Usage Tracking for LLM Operations",
+        "context": "The system needs to track token usage for LLM operations to enable cost tracking, optimization, and observability. Current implementations lack mechanisms to capture input/output tokens from LLM calls.",
+        "decision": "Implement a TokenUsage data model with token counting utilities that can be integrated into providers through protocol-based instrumentation, while acknowledging the current provider classes don't implement required interfaces",
+        "rationale": "Token tracking is essential for cost visibility and optimization. The approach uses dataclasses for structure and protocol-based design to allow flexible provider integration. While current provider implementations lack the necessary methods (count_tokens), this ADR establishes a path forward with clear contracts that can be incrementally implemented.",
+        "consequences": [
+          "Requires modification of existing LLM provider classes to implement TokenCountingProvider protocol",
+          "Necessitates updating Answer and API response models to include token_usage fields",
+          "Creates need for instrumentation system improvements to automatically detect and apply tracking hooks",
+          "Enables cost monitoring and optimization capabilities in the system"
+        ],
+        "alternatives_considered": [
+          "Alternative 1 - Manual integration into each provider method: rejected because it would create code duplication and make maintenance difficult",
+          "Alternative 2 - Store token usage in global context manager: rejected because it introduces state coupling and makes testing harder",
+          "Alternative 3 - Use separate metrics collection without model changes: rejected because it provides limited visibility into actual LLM consumption patterns"
+        ]
+      },
+      {
+        "title": "ADR: Centralized TokenUsage Aggregation vs Distributed Token Tracking",
+        "context": "The direct provider implementation approach requires each provider (OpenAIChat, AnthropicChat, CohereChat) to independently implement token counting and report to a central TokenUsage component. This creates tight coupling between providers and the usage tracking system.",
+        "decision": "Choose centralized TokenUsage aggregation where individual providers report their token counts directly rather than having distributed token tracking across different components",
+        "rationale": "This approach ensures consistent token accounting and simplifies the interface for consumers of token usage data. It also aligns with the existing architecture pattern where providers implement specific protocols that can be easily extended.",
+        "consequences": [
+          "Providers become more tightly coupled to the TokenUsage system, making it harder to swap out provider implementations without affecting usage tracking",
+          "Centralized aggregation introduces a single point of failure for token counting functionality - if TokenUsage component fails, all providers lose token accounting capability",
+          "The approach excludes potential distributed tracing or multi-tenant token accounting scenarios where different components might want to track tokens independently"
+        ],
+        "alternatives_considered": [
+          "Distributed token tracking where each provider maintains its own local usage counters that can be aggregated later - this would reduce coupling but create consistency challenges",
+          "Event-driven token reporting through a message queue system - this could decouple providers but adds complexity and potential latency in usage reporting"
+        ]
+      }
+    ],
+    "components": [
+      {
+        "name": "TokenUsage",
+        "purpose": "Represents token usage information for LLM operations, storing input and output token counts for cost tracking and optimization.",
+        "responsibilities": [
+          "Store input and output token counts",
+          "Validate that token counts are non-negative"
+        ],
+        "interfaces": [
+          "__init__(input_tokens: int, output_tokens: int) -> None",
+          "input_tokens() -> int",
+          "output_tokens() -> int"
+        ],
+        "dependencies": []
+      },
+      {
+        "name": "TokenCountingProvider",
+        "purpose": "Protocol that providers must implement to enable token tracking for LLM operations.",
+        "responsibilities": [
+          "Define interface for counting tokens in text using provider's native tokenizer"
+        ],
+        "interfaces": [
+          "count_tokens(text: str) -> int"
+        ],
+        "dependencies": []
+      },
+      {
+        "name": "OpenAIChat",
+        "purpose": "OpenAI provider wrapper for chat completions.",
+        "responsibilities": [
+          "Handle OpenAI chat completion requests",
+          "Stream responses from OpenAI API"
+        ],
+        "interfaces": [
+          "__init__(auth: AuthProvider, model: str | None, tier: ModelTier, base_url: str | None, models: dict[ModelTier, str] | None) -> None",
+          "chat(messages: list[dict[str, Any]]) -> str",
+          "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+        ],
+        "dependencies": [
+          "AuthProvider"
+        ]
+      },
+      {
+        "name": "AnthropicChat",
+        "purpose": "Anthropic provider wrapper for chat completions.",
+        "responsibilities": [
+          "Handle Anthropic chat completion requests",
+          "Stream responses from Anthropic API"
+        ],
+        "interfaces": [
+          "__init__(auth: AuthProvider, model: str | None, tier: ModelTier, models: dict[ModelTier, str] | None) -> None",
+          "chat(messages: list[dict[str, Any]]) -> str",
+          "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+        ],
+        "dependencies": [
+          "AuthProvider"
+        ]
+      },
+      {
+        "name": "CohereChat",
+        "purpose": "Cohere provider wrapper for chat completions.",
+        "responsibilities": [
+          "Handle Cohere chat completion requests",
+          "Stream responses from Cohere API"
+        ],
+        "interfaces": [
+          "__init__(auth: AuthProvider, model: str | None, tier: ModelTier, models: dict[ModelTier, str] | None) -> None",
+          "chat(messages: list[dict[str, Any]]) -> str",
+          "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+        ],
+        "dependencies": [
+          "AuthProvider"
+        ]
+      },
+      {
+        "name": "OllamaChat",
+        "purpose": "Ollama provider wrapper for chat completions.",
+        "responsibilities": [
+          "Handle Ollama chat completion requests",
+          "Stream responses from Ollama API"
+        ],
+        "interfaces": [
+          "__init__(model: str | None, tier: ModelTier, base_url: str | None, models: dict[ModelTier, str] | None) -> None",
+          "chat(messages: list[dict[str, Any]]) -> str",
+          "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]",
+          "__del__() -> None"
+        ],
+        "dependencies": []
+      }
+    ],
+    "data_model": {
+      "TokenUsage": [
+        "input_tokens: int",
+        "output_tokens: int"
+      ]
+    },
+    "integration_points": [
+      "ExternalSystem \u2014 OpenAI API for chat, embedding, and vision capabilities",
+      "ExternalSystem \u2014 Anthropic API for chat and vision capabilities",
+      "ExternalSystem \u2014 Cohere API for chat, embedding, and reranking capabilities",
+      "ExternalSystem \u2014 Ollama API for chat, embedding, reranking, and vision capabilities"
+    ],
+    "artifacts": [
+      {
+        "filename": "fitz_ai/core/token_usage.py",
+        "content": "from dataclasses import dataclass\nfrom typing import Optional\n\n\n@dataclass\nclass TokenUsage:\n    \"\"\"\n    Represents token usage information for LLM operations.\n    \n    This model stores input and output token counts which are crucial \n    for cost tracking and optimization of LLM usage.\n    \"\"\"\n    input_tokens: int\n    output_tokens: int\n\n    def __post_init__(self):\n        if self.input_tokens < 0 or self.output_tokens < 0:\n            raise ValueError(\"Token counts cannot be negative\")\n\n\n__all__ = [\"TokenUsage\"]",
+        "purpose": "Data model to represent token usage information for LLM operations, storing input and output token counts for cost tracking and optimization"
+      },
+      {
+        "filename": "fitz_ai/llm/token_tracker.py",
+        "content": "from typing import Optional, Protocol, runtime_checkable\n\n# Import required for type hints only\ntry:\n    import tiktoken\n    HAS_TIKTOKEN = True\nexcept ImportError:\n    HAS_TIKTOKEN = False\n\n\n@runtime_checkable\nclass TokenCountingProvider(Protocol):\n    \"\"\"\n    Protocol that providers must implement to enable token tracking.\n    \n    This is used as a marker for the instrumentation system to identify \n    which providers support token counting.\n    \"\"\"\n    def count_tokens(self, text: str) -> int:\n        \"\"\"Count tokens in given text using provider's native tokenizer.\"\"\"\n        ...\n\ndef count_openai_tokens(text: str, model_name: str) -> int:\n    \"\"\"\n    Count tokens for OpenAI models using tiktoken.\n    \n    Args:\n        text (str): Text to tokenize\n        model_name (str): Name of the OpenAI model being used\n        \n    Returns:\n        int: Number of tokens in the text\n    \"\"\"\n    if not HAS_TIKTOKEN:\n        raise ImportError(\"tiktoken is required for OpenAI token counting. Install with 'pip install tiktoken'\")\n    \n    try:\n        encoding = tiktoken.encoding_for_model(model_name)  # [VERIFY] method not found in signatures\n    except KeyError:\n        # Fallback to cl100k_base if model is unknown\n        encoding = tiktoken.get_encoding(\"cl100k_base\")  # [VERIFY] method not found in signatures\n        \n    return len(encoding.encode(text))\n\n\ndef count_anthropic_tokens(text: str, model_name: str) -> int:\n    \"\"\"\n    Count tokens for Anthropic models.\n    \n    Note: This requires the anthropic Python SDK to be installed.\n    \n    Args:\n        text (str): Text to tokenize\n        model_name (str): Name of the Anthropic model being used\n        \n    Returns:\n        int: Number of tokens in the text\n    \"\"\"\n    try:\n        from anthropic import Anthropic\n        # We'll just use a simple approximation - real implementation would \n        # need access to the actual tokenizer which isn't straightforward\n        return len(text.split())  # Approximate token count\n    except ImportError:\n        raise ImportError(\"anthropic Python SDK is required for Anthropic token counting. Install with 'pip install anthropic'\")\n        \n\ndef count_cohere_tokens(text: str, model_name: str) -> int:\n    \"\"\"\n    Count tokens for Cohere models.\n    \n    Note: This requires the cohere Python SDK to be installed.\n    \n    Args:\n        text (str): Text to tokenize\n        model_name (str): Name of the Cohere model being used\n        \n    Returns:\n        int: Number of tokens in the text\n    \"\"\"\n    try:\n        import cohere\n        # Simple approximation since Coherence's tokenizer is complex \n        return len(text.split())  # Approximate token count  \n    except ImportError:\n        raise ImportError(\"cohere Python SDK is required for Cohere token counting. Install with 'pip install cohere'\")\n        \n\ndef estimate_ollama_tokens(text: str, model_name: str) -> int:\n    \"\"\"\n    Estimate tokens for Ollama models.\n    \n    Args:\n        text (str): Text to tokenize\n        model_name (str): Name of the Ollama model being used\n        \n    Returns:\n        int: Estimated number of tokens in the text  \n    \"\"\"\n    # Approximate tokenization using space and punctuation splits\n    import re\n    # Simple heuristic - split on whitespace and punctuation, count words\n    tokens = re.findall(r'\\b\\w+\\b', text)  # [VERIFY] method not found in signatures\n    return len(tokens)\n\n\ndef calculate_prompt_tokens(messages: list[dict], model_name: str) -> int:\n    \"\"\"\n    Calculate token usage for a prompt (messages).\n    \n    Args:\n        messages (list): List of message dictionaries with 'content' field\n        model_name (str): Name of the LLM being used\n        \n    Returns:\n        int: Total tokens in all messages\n    \"\"\"\n    total = 0\n    \n    # For different providers, we'll use their specific counting approach\n    for msg in messages:\n        content = str(msg.get('content', ''))\n        if model_name.startswith(\"gpt-\"):\n            total += count_openai_tokens(content, model_name)\n        elif \"claude\" in model_name.lower():\n            total += count_anthropic_tokens(content, model_name) \n        else:\n            # Default approximation\n            total += estimate_ollama_tokens(content, model_name)\n    \n    return total\n\n\ndef calculate_response_tokens(response: str, model_name: str) -> int:\n    \"\"\"\n    Calculate token usage for a response.\n    \n    Args:\n        response (str): Response text from LLM\n        model_name (str): Name of the LLM being used\n        \n    Returns:\n        int: Number of tokens in the response \n    \"\"\"\n    if not isinstance(response, str):\n        response = str(response)\n        \n    # For different providers, we'll use their specific counting approach\n    if model_name.startswith(\"gpt-\"):\n        return count_openai_tokens(response, model_name)\n    elif \"claude\" in model_name.lower():\n        return count_anthropic_tokens(response, model_name) \n    else:\n        # Default approximation  \n        return estimate_ollama_tokens(response, model_name)\n\n__all__ = [\n    \"TokenCountingProvider\",\n    \"count_openai_tokens\", \n    \"count_anthropic_tokens\",\n    \"count_cohere_tokens\",\n    \"estimate_ollama_tokens\",\n    \"calculate_prompt_tokens\",\n    \"calculate_response_tokens\"\n]",
+        "purpose": "Utility functions and protocols for token counting across different LLM providers, including OpenAI, Anthropic, Cohere, and Ollama with appropriate fallbacks"
+      }
+    ]
+  },
+  "roadmap_risk": {
+    "roadmap": {
+      "phases": [
+        {
+          "number": 0,
+          "name": "Read Before Writing",
+          "objective": "Verify integration points by reading source",
+          "deliverables": [
+            "Verified: fitz_ai/llm/providers/base.py",
+            "Verified: fitz_ai/llm/providers/openai.py",
+            "Verified: fitz_ai/llm/providers/anthropic.py",
+            "Verified: fitz_ai/llm/providers/cohere.py",
+            "Verified: fitz_ai/llm/providers/ollama.py"
+          ],
+          "dependencies": [],
+          "estimated_complexity": "low",
+          "key_risks": [],
+          "verification_command": "pytest fitz_ai/llm/providers/test_base.py fitz_ai/llm/providers/test_openai.py fitz_ai/llm/providers/test_anthropic.py fitz_ai/llm/providers/test_cohere.py fitz_ai/llm/providers/test_ollama.py",
+          "estimated_effort": "~15 min"
+        },
+        {
+          "number": 2,
+          "name": "Core Token Usage Model",
+          "objective": "Create the core token usage model that will be used to track input/output tokens for LLM operations",
+          "deliverables": [
+            "TokenUsage dataclass with input_tokens and output_tokens fields",
+            "TokenCountingProvider protocol defining count_tokens method"
+          ],
+          "dependencies": [],
+          "estimated_complexity": "low",
+          "key_risks": [
+            "None"
+          ],
+          "verification_command": "python -c \"from fitz_ai.core.token_usage import TokenUsage; t = TokenUsage(50, 20); assert t.input_tokens() == 50 and t.output_tokens() == 20\"",
+          "estimated_effort": "~1 hour"
+        },
+        {
+          "number": 3,
+          "name": "Implement OpenAI Token Counting",
+          "objective": "Add count_tokens method and integrate with existing OpenAIChat class using tiktoken tokenizer",
+          "deliverables": [
+            "OpenAIChat.count_tokens() method implementation using encoding_for_model from tiktoken"
+          ],
+          "dependencies": [
+            2
+          ],
+          "estimated_complexity": "medium",
+          "key_risks": [
+            "Token counting accuracy varies by model version and OpenAI SDK behavior changes"
+          ],
+          "verification_command": "python -c \"from fitz_ai.llm.providers.openai import OpenAIChat; import inspect; print('Has count_tokens:', 'count_tokens' in dir(OpenAIChat)); print('Method signature:', inspect.signature(OpenAIChat.chat))\"",
+          "estimated_effort": "~2 hours"
+        },
+        {
+          "number": 4,
+          "name": "Implement Anthropic Token Counting",
+          "objective": "Add count_tokens method and integrate with existing AnthropicChat class using heuristic approximation",
+          "deliverables": [
+            "AnthropicChat.count_tokens() method implementation using character-based heuristic"
+          ],
+          "dependencies": [
+            2
+          ],
+          "estimated_complexity": "medium",
+          "key_risks": [
+            "Approximate token counting accuracy may vary significantly from actual Anthropic tokenization"
+          ],
+          "verification_command": "python -c \"from fitz_ai.llm.providers.anthropic import AnthropicChat; import inspect; print('Has count_tokens:', 'count_tokens' in dir(AnthropicChat))\"",
+          "estimated_effort": "~1.5 hours"
+        },
+        {
+          "number": 5,
+          "name": "Implement Cohere Token Counting",
+          "objective": "Add count_tokens method and integrate with existing CohereChat class using heuristic approximation",
+          "deliverables": [
+            "CohereChat.count_tokens() method implementation using character-based heuristic"
+          ],
+          "dependencies": [
+            2
+          ],
+          "estimated_complexity": "medium",
+          "key_risks": [
+            "Approximate token counting accuracy may vary significantly from actual Cohere tokenization"
+          ],
+          "verification_command": "python -c \"from fitz_ai.llm.providers.cohere import CohereChat; import inspect; print('Has count_tokens:', 'count_tokens' in dir(CohereChat))\"",
+          "estimated_effort": "~1.5 hours"
+        },
+        {
+          "number": 6,
+          "name": "Implement Ollama Token Counting",
+          "objective": "Add count_tokens method and integrate with existing OllamaChat class using heuristic approximation",
+          "deliverables": [
+            "OllamaChat.count_tokens() method implementation using character-based heuristic"
+          ],
+          "dependencies": [
+            2
+          ],
+          "estimated_complexity": "medium",
+          "key_risks": [
+            "Approximate token counting accuracy may vary significantly from actual Ollama tokenization"
+          ],
+          "verification_command": "python -c \"from fitz_ai.llm.providers.ollama import OllamaChat; import inspect; print('Has count_tokens:', 'count_tokens' in dir(OllamaChat))\"",
+          "estimated_effort": "~1.5 hours"
+        },
+        {
+          "number": 7,
+          "name": "Integrate Token Usage into Answer Metadata",
+          "objective": "Modify LLM providers to store token usage data in Answer metadata when chat is called",
+          "deliverables": [
+            "Modified chat() methods in all provider classes that record and include token usage in answer metadata"
+          ],
+          "dependencies": [
+            2,
+            3,
+            4,
+            5,
+            6
+          ],
+          "estimated_complexity": "high",
+          "key_risks": [
+            "Output token tracking for streaming responses will be incomplete without separate handling"
+          ],
+          "verification_command": "python -c \"from fitz_ai.core.answer import Answer; import json; a = Answer('test', metadata={'token_usage': {'input_tokens': 10, 'output_tokens': 5}}); print('Metadata contains token usage:', 'token_usage' in a.metadata)\"",
+          "estimated_effort": "~3 hours"
+        }
+      ],
+      "critical_path": [
+        0,
+        2,
+        3,
+        5
+      ],
+      "parallel_opportunities": [
+        [
+          4,
+          6
+        ]
+      ],
+      "total_phases": 7
+    },
+    "risk": {
+      "risks": [
+        {
+          "category": "technical",
+          "description": "Token counting accuracy varies by provider - OpenAI uses Tiktoken; Anthropic/Cohere/Ollama approximate or don't have direct access to real tokenizers",
+          "impact": "high",
+          "likelihood": "medium",
+          "mitigation": "Document these approximations clearly in docstrings and allow users to override logic if needed",
+          "contingency": "Implement fallback mechanisms that gracefully degrade while providing approximate costs for non-OpenAI providers",
+          "affected_phases": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "verification": "Token counting accuracy works for known OpenAI input: assert openai_provider.count_tokens(\"Hello world\") == 3"
+        },
+        {
+          "category": "technical",
+          "description": "Provider constructor signatures may change leading to breaking changes in in-place modifications",
+          "impact": "medium",
+          "likelihood": "low",
+          "mitigation": "Wrap all provider classes with a wrapper pattern that avoids in-place changes for better maintainability",
+          "contingency": "Revert to wrapping approach if future SDK updates break constructor signatures",
+          "affected_phases": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "verification": "Ensure existing constructor still works after modifications: python -c \"from fitz_ai.llm.providers.openai import OpenAIChat; print('\u2713 Constructor backward compatibility maintained')\""
+        },
+        {
+          "category": "technical",
+          "description": "Missing token usage in streaming responses due to inability to reliably count output tokens during stream processing",
+          "impact": "medium",
+          "likelihood": "high",
+          "mitigation": "Only sync chat() calls track output tokens; streaming may require a different strategy for future enhancement",
+          "contingency": "Document limitation and provide alternative approach like batch token tracking post-stream completion",
+          "affected_phases": [
+            6
+          ],
+          "verification": "Streaming response token tracking will require integration testing in real usage scenarios"
+        },
+        {
+          "category": "technical",
+          "description": "OpenAI SDK behavior changes that could break existing logic in count_tokens() method",
+          "impact": "medium",
+          "likelihood": "low",
+          "mitigation": "Wrap tokenizer access in try/except blocks with graceful fallbacks to prevent feature failure",
+          "contingency": "Ensure code gracefully handles API updates by catching exceptions and using alternative token estimation",
+          "affected_phases": [
+            2
+          ],
+          "verification": "Error handling on token counting failures: python -c \"try: provider.count_tokens(''); provider.count_tokens(None); print('\u2713 Token counting error handling works') except Exception as e: raise AssertionError(f'Unexpected exception: {e}')\""
+        },
+        {
+          "category": "quality",
+          "description": "Inconsistent token counting across model versions where different models tokenize same text differently",
+          "impact": "medium",
+          "likelihood": "low",
+          "mitigation": "Encourage users to use consistent model configurations and clearly label usage for accurate comparison",
+          "contingency": "Provide documentation guidance on standardizing model selection when comparing costs between providers",
+          "affected_phases": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "verification": "Token counting works correctly with existing known models but may vary per model"
+        },
+        {
+          "category": "performance",
+          "description": "Performance impact from token counting operations that add latency to each LLM call",
+          "impact": "low",
+          "likelihood": "medium",
+          "mitigation": "Use fast approximation methods (character-based division) unless performance is critical for specific use cases",
+          "contingency": "Monitor and optimize if performance becomes a bottleneck under high-volume usage patterns",
+          "affected_phases": [
+            6
+          ],
+          "verification": "Ensure token counting happens in background without major latency impact on LLM processing"
+        },
+        {
+          "category": "security",
+          "description": "Token counting introduces minimal DoS vector through large input texts processed for tokenization",
+          "impact": "low",
+          "likelihood": "medium",
+          "mitigation": "Bound inputs (maximum prompt length) and validate before processing to prevent abuse",
+          "contingency": "Implement rate limiting or input validation on token counting operations if DoS issues arise in production",
+          "affected_phases": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "verification": "Input size limits should be enforced during token count computation to avoid memory/CPU abuse"
+        }
+      ],
+      "overall_risk_level": "medium",
+      "recommended_contingencies": [
+        "Implement fallback mechanisms that gracefully degrade while providing approximate costs for non-OpenAI providers",
+        "Revert to wrapping approach if future SDK updates break constructor signatures in provider modifications",
+        "Document limitation and provide alternative approach like batch token tracking post-stream completion for streaming responses",
+        "Ensure code gracefully handles API updates by catching exceptions and using alternative token estimation methods",
+        "Provide documentation guidance on standardizing model selection when comparing costs between different providers"
+      ]
+    }
+  },
+  "roadmap": {
+    "phases": [
+      {
+        "number": 0,
+        "name": "Read Before Writing",
+        "objective": "Verify integration points by reading source",
+        "deliverables": [
+          "Verified: fitz_ai/llm/providers/base.py",
+          "Verified: fitz_ai/llm/providers/openai.py",
+          "Verified: fitz_ai/llm/providers/anthropic.py",
+          "Verified: fitz_ai/llm/providers/cohere.py",
+          "Verified: fitz_ai/llm/providers/ollama.py"
+        ],
+        "dependencies": [],
+        "estimated_complexity": "low",
+        "key_risks": [],
+        "verification_command": "pytest fitz_ai/llm/providers/test_base.py fitz_ai/llm/providers/test_openai.py fitz_ai/llm/providers/test_anthropic.py fitz_ai/llm/providers/test_cohere.py fitz_ai/llm/providers/test_ollama.py",
+        "estimated_effort": "~15 min"
+      },
+      {
+        "number": 2,
+        "name": "Core Token Usage Model",
+        "objective": "Create the core token usage model that will be used to track input/output tokens for LLM operations",
+        "deliverables": [
+          "TokenUsage dataclass with input_tokens and output_tokens fields",
+          "TokenCountingProvider protocol defining count_tokens method"
+        ],
+        "dependencies": [],
+        "estimated_complexity": "low",
+        "key_risks": [
+          "None"
+        ],
+        "verification_command": "python -c \"from fitz_ai.core.token_usage import TokenUsage; t = TokenUsage(50, 20); assert t.input_tokens() == 50 and t.output_tokens() == 20\"",
+        "estimated_effort": "~1 hour"
+      },
+      {
+        "number": 3,
+        "name": "Implement OpenAI Token Counting",
+        "objective": "Add count_tokens method and integrate with existing OpenAIChat class using tiktoken tokenizer",
+        "deliverables": [
+          "OpenAIChat.count_tokens() method implementation using encoding_for_model from tiktoken"
+        ],
+        "dependencies": [
+          2
+        ],
+        "estimated_complexity": "medium",
+        "key_risks": [
+          "Token counting accuracy varies by model version and OpenAI SDK behavior changes"
+        ],
+        "verification_command": "python -c \"from fitz_ai.llm.providers.openai import OpenAIChat; import inspect; print('Has count_tokens:', 'count_tokens' in dir(OpenAIChat)); print('Method signature:', inspect.signature(OpenAIChat.chat))\"",
+        "estimated_effort": "~2 hours"
+      },
+      {
+        "number": 4,
+        "name": "Implement Anthropic Token Counting",
+        "objective": "Add count_tokens method and integrate with existing AnthropicChat class using heuristic approximation",
+        "deliverables": [
+          "AnthropicChat.count_tokens() method implementation using character-based heuristic"
+        ],
+        "dependencies": [
+          2
+        ],
+        "estimated_complexity": "medium",
+        "key_risks": [
+          "Approximate token counting accuracy may vary significantly from actual Anthropic tokenization"
+        ],
+        "verification_command": "python -c \"from fitz_ai.llm.providers.anthropic import AnthropicChat; import inspect; print('Has count_tokens:', 'count_tokens' in dir(AnthropicChat))\"",
+        "estimated_effort": "~1.5 hours"
+      },
+      {
+        "number": 5,
+        "name": "Implement Cohere Token Counting",
+        "objective": "Add count_tokens method and integrate with existing CohereChat class using heuristic approximation",
+        "deliverables": [
+          "CohereChat.count_tokens() method implementation using character-based heuristic"
+        ],
+        "dependencies": [
+          2
+        ],
+        "estimated_complexity": "medium",
+        "key_risks": [
+          "Approximate token counting accuracy may vary significantly from actual Cohere tokenization"
+        ],
+        "verification_command": "python -c \"from fitz_ai.llm.providers.cohere import CohereChat; import inspect; print('Has count_tokens:', 'count_tokens' in dir(CohereChat))\"",
+        "estimated_effort": "~1.5 hours"
+      },
+      {
+        "number": 6,
+        "name": "Implement Ollama Token Counting",
+        "objective": "Add count_tokens method and integrate with existing OllamaChat class using heuristic approximation",
+        "deliverables": [
+          "OllamaChat.count_tokens() method implementation using character-based heuristic"
+        ],
+        "dependencies": [
+          2
+        ],
+        "estimated_complexity": "medium",
+        "key_risks": [
+          "Approximate token counting accuracy may vary significantly from actual Ollama tokenization"
+        ],
+        "verification_command": "python -c \"from fitz_ai.llm.providers.ollama import OllamaChat; import inspect; print('Has count_tokens:', 'count_tokens' in dir(OllamaChat))\"",
+        "estimated_effort": "~1.5 hours"
+      },
+      {
+        "number": 7,
+        "name": "Integrate Token Usage into Answer Metadata",
+        "objective": "Modify LLM providers to store token usage data in Answer metadata when chat is called",
+        "deliverables": [
+          "Modified chat() methods in all provider classes that record and include token usage in answer metadata"
+        ],
+        "dependencies": [
+          2,
+          3,
+          4,
+          5,
+          6
+        ],
+        "estimated_complexity": "high",
+        "key_risks": [
+          "Output token tracking for streaming responses will be incomplete without separate handling"
+        ],
+        "verification_command": "python -c \"from fitz_ai.core.answer import Answer; import json; a = Answer('test', metadata={'token_usage': {'input_tokens': 10, 'output_tokens': 5}}); print('Metadata contains token usage:', 'token_usage' in a.metadata)\"",
+        "estimated_effort": "~3 hours"
+      }
+    ],
+    "critical_path": [
+      0,
+      2,
+      3,
+      5
+    ],
+    "parallel_opportunities": [
+      [
+        4,
+        6
+      ]
+    ],
+    "total_phases": 7
+  },
+  "risk": {
+    "risks": [
+      {
+        "category": "technical",
+        "description": "Token counting accuracy varies by provider - OpenAI uses Tiktoken; Anthropic/Cohere/Ollama approximate or don't have direct access to real tokenizers",
+        "impact": "high",
+        "likelihood": "medium",
+        "mitigation": "Document these approximations clearly in docstrings and allow users to override logic if needed",
+        "contingency": "Implement fallback mechanisms that gracefully degrade while providing approximate costs for non-OpenAI providers",
+        "affected_phases": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "verification": "Token counting accuracy works for known OpenAI input: assert openai_provider.count_tokens(\"Hello world\") == 3"
+      },
+      {
+        "category": "technical",
+        "description": "Provider constructor signatures may change leading to breaking changes in in-place modifications",
+        "impact": "medium",
+        "likelihood": "low",
+        "mitigation": "Wrap all provider classes with a wrapper pattern that avoids in-place changes for better maintainability",
+        "contingency": "Revert to wrapping approach if future SDK updates break constructor signatures",
+        "affected_phases": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "verification": "Ensure existing constructor still works after modifications: python -c \"from fitz_ai.llm.providers.openai import OpenAIChat; print('\u2713 Constructor backward compatibility maintained')\""
+      },
+      {
+        "category": "technical",
+        "description": "Missing token usage in streaming responses due to inability to reliably count output tokens during stream processing",
+        "impact": "medium",
+        "likelihood": "high",
+        "mitigation": "Only sync chat() calls track output tokens; streaming may require a different strategy for future enhancement",
+        "contingency": "Document limitation and provide alternative approach like batch token tracking post-stream completion",
+        "affected_phases": [
+          6
+        ],
+        "verification": "Streaming response token tracking will require integration testing in real usage scenarios"
+      },
+      {
+        "category": "technical",
+        "description": "OpenAI SDK behavior changes that could break existing logic in count_tokens() method",
+        "impact": "medium",
+        "likelihood": "low",
+        "mitigation": "Wrap tokenizer access in try/except blocks with graceful fallbacks to prevent feature failure",
+        "contingency": "Ensure code gracefully handles API updates by catching exceptions and using alternative token estimation",
+        "affected_phases": [
+          2
+        ],
+        "verification": "Error handling on token counting failures: python -c \"try: provider.count_tokens(''); provider.count_tokens(None); print('\u2713 Token counting error handling works') except Exception as e: raise AssertionError(f'Unexpected exception: {e}')\""
+      },
+      {
+        "category": "quality",
+        "description": "Inconsistent token counting across model versions where different models tokenize same text differently",
+        "impact": "medium",
+        "likelihood": "low",
+        "mitigation": "Encourage users to use consistent model configurations and clearly label usage for accurate comparison",
+        "contingency": "Provide documentation guidance on standardizing model selection when comparing costs between providers",
+        "affected_phases": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "verification": "Token counting works correctly with existing known models but may vary per model"
+      },
+      {
+        "category": "performance",
+        "description": "Performance impact from token counting operations that add latency to each LLM call",
+        "impact": "low",
+        "likelihood": "medium",
+        "mitigation": "Use fast approximation methods (character-based division) unless performance is critical for specific use cases",
+        "contingency": "Monitor and optimize if performance becomes a bottleneck under high-volume usage patterns",
+        "affected_phases": [
+          6
+        ],
+        "verification": "Ensure token counting happens in background without major latency impact on LLM processing"
+      },
+      {
+        "category": "security",
+        "description": "Token counting introduces minimal DoS vector through large input texts processed for tokenization",
+        "impact": "low",
+        "likelihood": "medium",
+        "mitigation": "Bound inputs (maximum prompt length) and validate before processing to prevent abuse",
+        "contingency": "Implement rate limiting or input validation on token counting operations if DoS issues arise in production",
+        "affected_phases": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "verification": "Input size limits should be enforced during token count computation to avoid memory/CPU abuse"
+      }
+    ],
+    "overall_risk_level": "medium",
+    "recommended_contingencies": [
+      "Implement fallback mechanisms that gracefully degrade while providing approximate costs for non-OpenAI providers",
+      "Revert to wrapping approach if future SDK updates break constructor signatures in provider modifications",
+      "Document limitation and provide alternative approach like batch token tracking post-stream completion for streaming responses",
+      "Ensure code gracefully handles API updates by catching exceptions and using alternative token estimation methods",
+      "Provide documentation guidance on standardizing model selection when comparing costs between different providers"
+    ]
+  }
+}
