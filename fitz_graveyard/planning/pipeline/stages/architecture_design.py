@@ -508,12 +508,7 @@ class ArchitectureDesignStage(PipelineStage):
                 client, reasoning, job_description, krag_context=krag_context,
             )
 
-            # 5. Devil's advocate pass
-            reasoning = await self._devil_advocate(
-                client, reasoning, job_description, krag_context=krag_context,
-            )
-
-            # 6. Per-field-group extraction — compact structural overview for grounding
+            # 5. Per-field-group extraction — compact structural overview for grounding
             _CONTEXT_GROUPS = {"approaches", "adrs", "artifacts", "components", "integrations"}
             extract_context = self._get_gathered_context(prior_outputs)
 
