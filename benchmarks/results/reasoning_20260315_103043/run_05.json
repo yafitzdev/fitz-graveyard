@@ -1,0 +1,16 @@
+{
+  "run": 5,
+  "elapsed_s": 515.8,
+  "success": true,
+  "recommended": "Extend Answer Class with Token Usage Field",
+  "plan_size": 70733,
+  "stage_timings": {
+    "agent_gathering": 5.9689999999827705,
+    "implementation_check": 2.547000000020489,
+    "context": 73.88999999998487,
+    "architecture_design": 377.43799999999464,
+    "roadmap_risk": 52.76500000001397,
+    "coherence_check": 3.187999999994645
+  },
+  "error": null
+}

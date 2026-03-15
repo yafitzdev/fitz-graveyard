@@ -1,0 +1,16 @@
+{
+  "run": 4,
+  "elapsed_s": 627.8,
+  "success": true,
+  "recommended": "Extend Provider Interfaces with Token Awareness",
+  "plan_size": 88026,
+  "stage_timings": {
+    "agent_gathering": 8.655999999988126,
+    "implementation_check": 2.437999999994645,
+    "context": 52.64100000000326,
+    "architecture_design": 372.43700000000536,
+    "roadmap_risk": 188.82800000000861,
+    "coherence_check": 2.73499999998603
+  },
+  "error": null
+}

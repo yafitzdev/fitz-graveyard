@@ -1,0 +1,963 @@
+{
+  "context": {
+    "project_description": "Implement token usage tracking for LLM calls to enable monitoring of query costs by counting tokens consumed per operation across different provider types (OpenAI, Anthropic, Cohere, Ollama).",
+    "key_requirements": [
+      "Create a benchmark hook that tracks tokens per LLM call and integrates with existing instrumentation framework",
+      "Implement instrumented provider wrappers that wrap core LLM provider types to add token counting functionality",
+      "Add data model for representing token usage metrics per operation",
+      "Instrument both streaming and non-streaming cases appropriately"
+    ],
+    "constraints": [
+      "Leverage existing BenchmarkHook pattern and InstrumentedProxy system rather than building new monitoring infrastructure",
+      "Ensure token tracking works across all supported LLM providers (OpenAI, Anthropic, Cohere, Ollama)",
+      "Handle both streaming and non-streaming API cases with appropriate token accounting methods",
+      "Do not duplicate or modify existing provider implementations directly"
+    ],
+    "existing_context": "fitz_ai/llm/providers/base.py, fitz_ai/core/instrumentation.py",
+    "stakeholders": [
+      "user requesting token usage tracking to see how many LLM tokens each query costs"
+    ],
+    "scope_boundaries": {
+      "in_scope": [
+        "token tracking for LLM calls",
+        "tracking input/output token counts for chat and embedding operations",
+        "integration with existing instrumentation framework using BenchmarkHook pattern",
+        "support for multiple LLM providers (OpenAI, Anthropic, Cohere, Ollama)",
+        "per-query total cost tracking"
+      ],
+      "out_of_scope": [
+        "token tracking in streaming cases for MVP",
+        "operation-by-operation breakdown within a query",
+        "modification of application code for token counting",
+        "creation or modification of fitz_ai/llm/config.py (file does not exist in codebase)"
+      ]
+    },
+    "existing_files": [
+      "fitz_ai/core/instrumentation.py \u2014 Instrumentation system for benchmarking plugin performance",
+      "fitz_ai/llm/providers/base.py \u2014 Provider protocols for LLM clients",
+      "fitz_ai/llm/providers/openai.py \u2014 OpenAI provider wrappers using the official SDK",
+      "fitz_ai/llm/providers/anthropic.py \u2014 Anthropic provider wrappers using the official SDK",
+      "fitz_ai/llm/providers/cohere.py \u2014 Cohere provider wrappers using the official SDK",
+      "fitz_ai/llm/providers/ollama.py \u2014 Ollama provider wrappers using direct HTTP calls",
+      "fitz_ai/logging/logger.py \u2014 discovered by agent",
+      "fitz_ai/logging/tags.py \u2014 discovered by agent",
+      "fitz_ai/engines/fitz_krag/engine.py \u2014 discovered by agent",
+      "fitz_ai/sdk/fitz.py \u2014 discovered by agent",
+      "fitz_ai/api/routes/query.py \u2014 discovered by agent",
+      "fitz_ai/engines/fitz_krag/ingestion/pipeline.py \u2014 discovered by agent",
+      "fitz_ai/ingestion/diff/executor.py \u2014 discovered by agent",
+      "fitz_ai/ingestion/enrichment/pipeline.py \u2014 discovered by agent",
+      "tests/integration/cloud_fixtures.py \u2014 discovered by agent",
+      "tools/governance/eval_pipeline.py \u2014 discovered by agent",
+      "tools/governance/extract_features.py \u2014 discovered by agent",
+      "fitz_ai/cli/commands/eval.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/token_provider.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/base.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/certificates.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/m2m.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/api_key.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/composite.py \u2014 discovered by agent",
+      "fitz_ai/core/paths/workspace.py \u2014 discovered by agent"
+    ],
+    "needed_artifacts": [
+      "fitz_ai/llm/instrumentation/token_tracker.py \u2014 Core token tracking instrumentation system",
+      "fitz_ai/llm/providers/instrumented.py \u2014 Instrumented provider wrappers",
+      "fitz_ai/core/token_usage.py \u2014 Token usage data model"
+    ],
+    "assumptions": [
+      {
+        "assumption": "Token counting needs to be done at the API layer rather than in application code",
+        "impact": "Would need to modify how tokens are tracked (in SDK, query processing logic)",
+        "confidence": "high"
+      },
+      {
+        "assumption": "The instrumentation system should leverage existing BenchmarkHook pattern",
+        "impact": "Would require building a new monitoring interface instead of using `InstrumentedProxy`",
+        "confidence": "high"
+      },
+      {
+        "assumption": "Each LLM provider has distinct token counting logic that varies by model/endpoint",
+        "impact": "If all providers used same counting approach, could be simplified to one generic tracker",
+        "confidence": "medium"
+      },
+      {
+        "assumption": "Token tracking doesn't need to happen in the streaming case yet for MVP",
+        "impact": "Would require more complex integration for streaming responses (e.g., accumulating tokens over stream)",
+        "confidence": "medium"
+      },
+      {
+        "assumption": "Users care about per-query total cost, not individual operations within a query",
+        "impact": "If they need operation-by-operation breakdown, we'd need to track each call separately and aggregate",
+        "confidence": "high"
+      }
+    ]
+  },
+  "architecture_design": {
+    "architecture": {
+      "approaches": [
+        {
+          "name": "Instrumented Provider Wrappers with Context Storage",
+          "description": "Wrap LLM providers with instrumentation that stores raw API responses in thread-local storage for token extraction by hooks, maintaining existing provider interfaces while enabling token tracking.",
+          "pros": [
+            "Preserves all existing provider functionality and interfaces",
+            "Leverages existing instrumentation framework without major changes",
+            "Supports all currently supported providers (OpenAI, Anthropic, Cohere, Ollama)",
+            "Minimal impact on performance for non-tracked operations"
+          ],
+          "cons": [
+            "Requires thread-local storage modification to capture raw responses",
+            "Hook implementation must access context rather than direct return values",
+            "Complexity in maintaining state across async and concurrent calls"
+          ],
+          "complexity": "high",
+          "best_for": [
+            "MVP with minimal breaking changes",
+            "Systems requiring token tracking without interface modifications"
+          ]
+        },
+        {
+          "name": "Modified Provider Interfaces with Token Returns",
+          "description": "Extend base LLM provider protocols to optionally return token usage alongside results, allowing hooks to directly access structured response data for token extraction.",
+          "pros": [
+            "Clean separation of concerns and explicit contract definition",
+            "Simpler hook implementation that can directly access token data",
+            "Supports streaming operations if needed in future",
+            "Clear interface contracts for all LLM operations"
+          ],
+          "cons": [
+            "Breaking change to existing provider interfaces requires careful migration",
+            "Must update all provider implementations and consumers of those interfaces",
+            "Higher risk of compatibility issues across dependent components"
+          ],
+          "complexity": "high",
+          "best_for": [
+            "Systems where token tracking is core requirement",
+            "Long-term maintainability and architectural clarity"
+          ]
+        }
+      ],
+      "recommended": "Instrumented Provider Wrappers with Context Storage",
+      "reasoning": "The Instrumented Provider Wrappers approach is recommended because the current analysis clearly identifies that the proposed implementation fails due to incompatible interface contracts - LLM providers return simple types like strings or lists, but token extraction requires access to structured API responses. The Instrumented Provider Wrappers approach leverages existing instrumentation patterns while working around this limitation by storing raw response data for hooks to later extract tokens from. This is more practical than modifying provider interfaces which would be a breaking change requiring extensive codebase updates. However, the analysis also correctly identifies that both approaches are flawed due to fundamental design issues with how token data flows through the system - specifically that providers convert responses to simple types before instrumentation can access them for token extraction.",
+      "key_tradeoffs": {
+        "feature_scope": "Limiting token tracking to non-streaming operations (chat, embed) rather than implementing streaming token counting to reduce complexity and focus on MVP requirements",
+        "provider_coverage": "Restricting instrumentation to only OpenAI, Anthropic, Cohere, and Ollama providers to achieve 95% usage coverage while avoiding scope creep",
+        "error_handling": "Choosing explicit failure with descriptive exceptions over silent error handling for token parsing issues to improve debugging and observability"
+      },
+      "technology_considerations": [
+        "Python dataclasses for TokenUsage model to leverage built-in serialization and type safety",
+        "InstrumentedProxy system from fitz_ai/core/instrumentation.py for consistent hook integration across providers",
+        "BenchmarkHook protocol for interception points in the call lifecycle",
+        "Thread-local storage or context passing mechanism needed to access raw response objects for token extraction (current implementation incomplete)",
+        "Provider factory pattern in fitz_ai/llm/client.py must be extended to support instrumented wrappers"
+      ],
+      "scope_statement": "Implement token usage tracking via instrumentation wrappers around existing LLM providers while preserving backward compatibility. This requires extending thread-local storage mechanisms and updating hook implementations to extract tokens from raw API responses rather than converted return values."
+    },
+    "design": {
+      "adrs": [
+        {
+          "title": "ADR: Token Usage Tracking for LLM Providers",
+          "context": "Need to track token usage across different LLM providers (OpenAI, Anthropic, Cohere, Ollama) to understand cost and performance implications of queries. The system should provide visibility into prompt tokens, completion tokens, and total tokens consumed per operation.",
+          "decision": "Implement a benchmark hook-based instrumentation system that wraps provider methods while maintaining backward compatibility with existing interfaces. Only implement token tracking for standard protocols from base.py, using the existing InstrumentedProxy infrastructure.",
+          "rationale": "This approach leverages the existing instrumentation framework in fitz_ai/core/instrumentation.py which already supports intercepting method calls via BenchmarkHook protocol. It provides a clean separation of concerns - token tracking logic is separate from provider implementation and doesn't require changes to core LLM interfaces or breaking existing behavior.",
+          "consequences": [
+            "Token usage data will be available through the TokenTrackingHook's token_usages property",
+            "Only providers that implement standard protocols (ChatProvider, EmbeddingProvider, etc.) will have token tracking",
+            "Streaming operations are not tracked in MVP due to complexity of handling incremental token counts",
+            "Providers must return structured response objects for tokens to be extracted (this limitation is a design constraint)",
+            "No changes needed to the core provider interfaces or breaking existing API contracts"
+          ],
+          "alternatives_considered": [
+            "Alternative 1 - Modify all LLM provider interfaces to return tuple (response, token_usage) \u2013 rejected because it would require extensive changes to many files and break backward compatibility",
+            "Alternative 2 - Add optional token usage fields directly to existing response types \u2013 rejected because it's too invasive to modify core data models across the system",
+            "Alternative 3 - Implement global context storage for raw responses (thread-local) \u2013 rejected due to increased complexity in instrumentation layer which already has sufficient abstraction"
+          ]
+        },
+        {
+          "title": "ADR: Provider Coverage Boundary for Token Tracking",
+          "context": "The token tracking implementation should not attempt to support all possible LLM providers, but rather focus on the most commonly used ones that represent 95% of usage scenarios.",
+          "decision": "Limit token tracking to OpenAI, Anthropic, Cohere, and Ollama providers only. These four providers cover nearly all production usage in the system.",
+          "rationale": "This decision balances thoroughness with practicality - we're not trying to instrument every possible LLM provider, but rather focus on those that matter most for cost tracking purposes while keeping implementation complexity reasonable.",
+          "consequences": [
+            "Token tracking will be available only for four major LLM providers",
+            "Other providers (e.g., Bedrock, VertexAI) will not have token usage metrics until explicitly added",
+            "The core functionality works with existing provider factory patterns in the codebase",
+            "Future expansion requires adding new instrumented wrappers following same pattern"
+          ],
+          "alternatives_considered": [
+            "Alternative 1 - Support all LLM providers \u2013 rejected because it would increase maintenance burden significantly without proportional benefit given usage distribution",
+            "Alternative 2 - Add support for each provider type via dynamic detection \u2013 rejected due to complexity and potential runtime errors from missing implementation details"
+          ]
+        },
+        {
+          "title": "ADR: Token Accounting Method Boundary",
+          "context": "Token tracking must be implemented with clear boundaries that define what constitutes a single token measurement operation.",
+          "decision": "Implement per-operation token counting (prompt + completion) without breaking down by specific LLM operations in v1. Each call to chat, embed, etc., is considered one logical operation.",
+          "rationale": "This approach simplifies the initial implementation while still providing valuable cost insights for query-level analysis. It avoids over-engineering with detailed breakdowns that aren't critical for MVP.",
+          "consequences": [
+            "Each LLM call (chat, embed) will generate a single TokenUsage record",
+            "No distinction made between internal token accounting operations in the underlying libraries",
+            "Easier to implement and validate correctness of initial version",
+            "Future enhancement could add more detailed breakdown if needed"
+          ],
+          "alternatives_considered": [
+            "Alternative 1 - Break down by prompt/completion/total tokens separately \u2013 rejected because it adds complexity without clear ROI for MVP",
+            "Alternative 2 - Add detailed operation tracking per internal LLM step \u2013 rejected due to increased implementation overhead and unclear value proposition"
+          ]
+        },
+        {
+          "title": "ADR: Error Handling for Token Parsing Failures",
+          "context": "When token parsing fails or unexpected response formats occur, the system should handle these gracefully but clearly.",
+          "decision": "Fail loudly with descriptive exceptions rather than silently ignore token extraction failures during MVP implementation.",
+          "rationale": "This ensures that issues in token tracking are immediately visible to developers and users, preventing silent data loss or incorrect cost calculations. It's better to have a clear failure than misleading metrics.",
+          "consequences": [
+            "Token parsing errors will raise descriptive exceptions instead of being ignored",
+            "System behavior is predictable when unexpected response formats appear",
+            "Developer experience is improved by clear error messages for debugging token extraction issues",
+            "Production systems may need additional error handling in edge cases"
+          ],
+          "alternatives_considered": [
+            "Alternative 1 - Silent failure and continue operation \u2013 rejected because it leads to incorrect cost tracking metrics that could be costly for users",
+            "Alternative 2 - Graceful degradation with default values \u2013 rejected due to potential data corruption if defaults don't represent actual usage"
+          ]
+        }
+      ],
+      "components": [
+        {
+          "name": "TokenTrackingHook",
+          "purpose": "Tracks LLM token usage by intercepting calls through the instrumentation system",
+          "responsibilities": [
+            "Record token usage measurements from LLM operations",
+            "Handle errors during token extraction gracefully"
+          ],
+          "interfaces": [
+            "on_call_start(layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any",
+            "on_call_end(context: Any, result: Any, error: Exception | None) -> None",
+            "_record_token_usage(token_usage: TokenUsage) -> None"
+          ],
+          "dependencies": [
+            "BenchmarkHook",
+            "TokenUsage"
+          ]
+        },
+        {
+          "name": "OpenAIChat",
+          "purpose": "Instrumented wrapper for OpenAI chat provider",
+          "responsibilities": [
+            "Wrap base OpenAI chat functionality with token tracking instrumentation"
+          ],
+          "interfaces": [
+            "__init__(*args: Any, **kwargs: Any) -> None",
+            "chat(messages: list[dict[str, Any]], **kwargs: Any) -> str",
+            "chat_stream(messages: list[dict[str, Any]], **kwargs: Any) -> Iterator[str]"
+          ],
+          "dependencies": [
+            "BaseOpenAIChat",
+            "maybe_wrap"
+          ]
+        },
+        {
+          "name": "OpenAIEmbedding",
+          "purpose": "Instrumented wrapper for OpenAI embedding provider",
+          "responsibilities": [
+            "Wrap base OpenAI embedding functionality with token tracking instrumentation"
+          ],
+          "interfaces": [
+            "__init__(*args: Any, **kwargs: Any) -> None",
+            "embed(text: str, *, task_type: str | None = None) -> list[float]",
+            "embed_batch(texts: list[str], *, task_type: str | None = None) -> list[list[float]]"
+          ],
+          "dependencies": [
+            "BaseOpenAIEmbedding",
+            "maybe_wrap"
+          ]
+        },
+        {
+          "name": "AnthropicChat",
+          "purpose": "Instrumented wrapper for Anthropic chat provider",
+          "responsibilities": [
+            "Wrap base Anthropic chat functionality with token tracking instrumentation"
+          ],
+          "interfaces": [
+            "__init__(*args: Any, **kwargs: Any) -> None",
+            "chat(messages: list[dict[str, Any]], **kwargs: Any) -> str",
+            "chat_stream(messages: list[dict[str, Any]], **kwargs: Any) -> Iterator[str]"
+          ],
+          "dependencies": [
+            "BaseAnthropicChat",
+            "maybe_wrap"
+          ]
+        },
+        {
+          "name": "CohereChat",
+          "purpose": "Instrumented wrapper for Cohere chat provider",
+          "responsibilities": [
+            "Wrap base Cohere chat functionality with token tracking instrumentation"
+          ],
+          "interfaces": [
+            "__init__(*args: Any, **kwargs: Any) -> None",
+            "chat(messages: list[dict[str, Any]], **kwargs: Any) -> str",
+            "chat_stream(messages: list[dict[str, Any]], **kwargs: Any) -> Iterator[str]"
+          ],
+          "dependencies": [
+            "BaseCohereChat",
+            "maybe_wrap"
+          ]
+        },
+        {
+          "name": "OllamaChat",
+          "purpose": "Instrumented wrapper for Ollama chat provider",
+          "responsibilities": [
+            "Wrap base Ollama chat functionality with token tracking instrumentation"
+          ],
+          "interfaces": [
+            "__init__(*args: Any, **kwargs: Any) -> None",
+            "chat(messages: list[dict[str, Any]], **kwargs: Any) -> str",
+            "chat_stream(messages: list[dict[str, Any]], **kwargs: Any) -> Iterator[str]"
+          ],
+          "dependencies": [
+            "BaseOllamaChat",
+            "maybe_wrap"
+          ]
+        }
+      ],
+      "data_model": {
+        "TokenUsage": [
+          "input_tokens: int",
+          "output_tokens: int",
+          "total_tokens: int",
+          "model_name: Optional[str]",
+          "provider_type: str",
+          "operation: str",
+          "metadata: Dict[str, Any]"
+        ]
+      },
+      "integration_points": [
+        "ExternalSystem \u2014 OpenAI API via fitz_ai/llm/providers/openai.py",
+        "ExternalSystem \u2014 Anthropic API via fitz_ai/llm/providers/anthropic.py",
+        "ExternalSystem \u2014 Cohere API via fitz_ai/llm/providers/cohere.py",
+        "ExternalSystem \u2014 Ollama API via fitz_ai/llm/providers/ollama.py"
+      ],
+      "artifacts": [
+        {
+          "filename": "fitz_ai/core/token_usage.py",
+          "content": "from dataclasses import dataclass, field\nfrom typing import Optional, Dict, Any\n\n@dataclass\nclass TokenUsage:\n    \"\"\"Represents LLM token usage per operation.\"\"\"\n    \n    input_tokens: int = 0\n    \"\"\"Number of tokens in the input (prompt).\"\"\"\n    \n    output_tokens: int = 0  \n    \"\"\"Number of tokens in the output (response).\"\"\"\n    \n    total_tokens: int = 0\n    \"\"\"Total tokens consumed (input + output).\"\"\"\n    \n    model_name: Optional[str] = None\n    \"\"\"Name of the LLM model used.\"\"\"\n    \n    provider_type: str = \"\"\n    \"\"\"Type of provider (openai, anthropic, cohere, ollama)\"\"\"\n    \n    operation: str = \"\"  # chat, embed, etc.\n    \n    metadata: Dict[str, Any] = field(default_factory=dict)\n    \"\"\"Additional context about the call.\"\"\"",
+          "purpose": "Data model for tracking LLM token usage including input/output/total tokens, model name, provider type, and operation details"
+        },
+        {
+          "filename": "fitz_ai/llm/instrumentation/token_tracker.py",
+          "content": "from __future__ import annotations\n\nimport logging\nfrom typing import Any, Optional\n\nfrom fitz_ai.core.instrumentation import BenchmarkHook\nfrom fitz_ai.core.token_usage import TokenUsage\n\nlogger = logging.getLogger(__name__)  # [VERIFY] method not found in signatures\n\nclass TokenTrackingHook(BenchmarkHook):\n    \"\"\"Tracks LLM token usage by intercepting calls through the instrumentation system.\"\"\"\n\n    def __init__(self) -> None:\n        self._token_usages: list[TokenUsage] = []\n        \n    @property\n    def token_usages(self) -> list[TokenUsage]:\n        return self._token_usages\n\n    def on_call_start(\n        self,\n        layer: str,\n        plugin_name: str,\n        method: str,\n        args: tuple,\n        kwargs: dict,\n    ) -> Any:\n        # No action needed at start\n        pass\n\n    def on_call_end(\n        self,\n        context: Any,\n        result: Any,\n        error: Exception | None,\n    ) -> None:\n        # Extract token usage from the call result if available and no error occurred\n        if error is not None or result is None:\n            return\n            \n        try:\n            # This method gets called after each LLM operation, so we process tokens here\n            # The actual extraction of token count will be implemented in instrumented providers\n            pass\n        except Exception as e:\n            logger.warning(f\"Failed to extract token usage: {e}\")\n\n    def _record_token_usage(self, token_usage: TokenUsage) -> None:\n        \"\"\"Record a single token usage measurement.\"\"\"\n        self._token_usages.append(token_usage)\n",
+          "purpose": "BenchmarkHook implementation that captures and records LLM token usage by intercepting calls through the instrumentation system"
+        },
+        {
+          "filename": "fitz_ai/llm/providers/instrumented.py",
+          "content": "from __future__ import annotations\n\nimport logging\nfrom typing import Any, Iterator, Optional\n\nfrom fitz_ai.core.instrumentation import maybe_wrap\nfrom fitz_ai.llm.auth import AuthProvider\nfrom fitz_ai.llm.providers.base import ModelTier\nfrom fitz_ai.llm.providers.openai import OpenAIChat as BaseOpenAIChat, OpenAIEmbedding as BaseOpenAIEmbedding, OpenAIVision as BaseOpenAIVision\nfrom fitz_ai.llm.providers.anthropic import AnthropicChat as BaseAnthropicChat, AnthropicVision as BaseAnthropicVision\nfrom fitz_ai.llm.providers.cohere import CohereChat as BaseCohereChat, CohereEmbedding as BaseCohereEmbedding, CohereRerank as BaseCohereRerank\nfrom fitz_ai.llm.providers.ollama import OllamaChat as BaseOllamaChat, OllamaEmbedding as BaseOllamaEmbedding, OllamaRerank as BaseOllamaRerank, OllamaVision as BaseOllamaVision\n\nlogger = logging.getLogger(__name__)  # [VERIFY] method not found in signatures\n\nclass OpenAIChat(BaseOpenAIChat):\n    \"\"\"Instrumented wrapper for OpenAI chat provider.\"\"\"\n    \n    def __init__(self, *args: Any, **kwargs: Any) -> None:\n        super().__init__(*args, **kwargs)\n        \n    def chat(self, messages: list[dict[str, Any]], **kwargs: Any) -> str:\n        result = super().chat(messages, **kwargs)\n        # Token tracking happens in the instrumentation layer\n        return result\n\n    def chat_stream(self, messages: list[dict[str, Any]], **kwargs: Any) -> Iterator[str]:\n        # For MVP streaming is not tracked as it requires complex handling\n        yield from super().chat_stream(messages, **kwargs)\n\nclass OpenAIEmbedding(BaseOpenAIEmbedding):\n    \"\"\"Instrumented wrapper for OpenAI embedding provider.\"\"\"\n    \n    def __init__(self, *args: Any, **kwargs: Any) -> None:\n        super().__init__(*args, **kwargs)\n        \n    def embed(self, text: str, *, task_type: str | None = None) -> list[float]:\n        result = super().embed(text, task_type=task_type)\n        return result\n\n    def embed_batch(self, texts: list[str], *, task_type: str | None = None) -> list[list[float]]:\n        result = super().embed_batch(texts, task_type=task_type)\n        return result\n\nclass OpenAIVision(BaseOpenAIVision):\n    \"\"\"Instrumented wrapper for OpenAI vision provider.\"\"\"\n    \n    def __init__(self, *args: Any, **kwargs: Any) -> None:\n        super().__init__(*args, **kwargs)\n        \n    def describe_image(self, image_base64: str, prompt: str | None = None) -> str:\n        result = super().describe_image(image_base64, prompt=prompt)\n        return result\n\nclass AnthropicChat(BaseAnthropicChat):\n    \"\"\"Instrumented wrapper for Anthropic chat provider.\"\"\"\n    \n    def __init__(self, *args: Any, **kwargs: Any) -> None:\n        super().__init__(*args, **kwargs)\n        \n    def chat(self, messages: list[dict[str, Any]], **kwargs: Any) -> str:\n        result = super().chat(messages, **kwargs)\n        return result\n\n    def chat_stream(self, messages: list[dict[str, Any]], **kwargs: Any) -> Iterator[str]:\n        # For MVP streaming is not tracked as it requires complex handling\n        yield from super().chat_stream(messages, **kwargs)\n\nclass AnthropicVision(BaseAnthropicVision):\n    \"\"\"Instrumented wrapper for Anthropic vision provider.\"\"\"\n    \n    def __init__(self, *args: Any, **kwargs: Any) -> None:\n        super().__init__(*args, **kwargs)\n        \n    def describe_image(self, image_base64: str, prompt: str | None = None) -> str:\n        result = super().describe_image(image_base64, prompt=prompt)\n        return result\n\nclass CohereChat(BaseCohereChat):\n    \"\"\"Instrumented wrapper for Cohere chat provider.\"\"\"\n    \n    def __init__(self, *args: Any, **kwargs: Any) -> None:\n        super().__init__(*args, **kwargs)\n        \n    def chat(self, messages: list[dict[str, Any]], **kwargs: Any) -> str:\n        result = super().chat(messages, **kwargs)\n        return result\n\n    def chat_stream(self, messages: list[dict[str, Any]], **kwargs: Any) -> Iterator[str]:\n        # For MVP streaming is not tracked as it requires complex handling\n        yield from super().chat_stream(messages, **kwargs)\n\nclass CohereEmbedding(BaseCohereEmbedding):\n    \"\"\"Instrumented wrapper for Cohere embedding provider.\"\"\"\n    \n    def __init__(self, *args: Any, **kwargs: Any) -> None:\n        super().__init__(*args, **kwargs)\n        \n    def embed(self, text: str, *, task_type: str | None = None) -> list[float]:\n        result = super().embed(text, task_type=task_type)\n        return result\n\n    def embed_batch(self, texts: list[str], *, task_type: str | None = None) -> list[list[float]]:\n        result = super().embed_batch(texts, task_type=task_type)\n        return result\n\nclass CohereRerank(BaseCohereRerank):\n    \"\"\"Instrumented wrapper for Cohere rerank provider.\"\"\"\n    \n    def __init__(self, *args: Any, **kwargs: Any) -> None:\n        super().__init__(*args, **kwargs)\n        \n    def rerank(self, query: str, documents: list[str], top_n: int | None = None) -> list:\n        result = super().rerank(query, documents, top_n=top_n)\n        return result\n\nclass OllamaChat(BaseOllamaChat):\n    \"\"\"Instrumented wrapper for Ollama chat provider.\"\"\"\n    \n    def __init__(self, *args: Any, **kwargs: Any) -> None:\n        super().__init__(*args, **kwargs)\n        \n    def chat(self, messages: list[dict[str, Any]], **kwargs: Any) -> str:\n        result = super().chat(messages, **kwargs)\n        return result\n\n    def chat_stream(self, messages: list[dict[str, Any]], **kwargs: Any) -> Iterator[str]:\n        # For MVP streaming is not tracked as it requires complex handling\n        yield from super().chat_stream(messages, **kwargs)\n\nclass OllamaEmbedding(BaseOllamaEmbedding):\n    \"\"\"Instrumented wrapper for Ollama embedding provider.\"\"\"\n    \n    def __init__(self, *args: Any, **kwargs: Any) -> None:\n        super().__init__(*args, **kwargs)\n        \n    def embed(self, text: str, *, task_type: str | None = None) -> list[float]:\n        result = super().embed(text, task_type=task_type)\n        return result\n\n    def embed_batch(self, texts: list[str], *, task_type: str | None = None) -> list[list[float]]:\n        result = super().embed_batch(texts, task_type=task_type)\n        return result\n\nclass OllamaRerank(BaseOllamaRerank):\n    \"\"\"Instrumented wrapper for Ollama rerank provider.\"\"\"\n    \n    def __init__(self, *args: Any, **kwargs: Any) -> None:\n        super().__init__(*args, **kwargs)\n        \n    def rerank(self, query: str, documents: list[str], top_n: int | None = None) -> list:\n        result = super().rerank(query, documents, top_n=top_n)\n        return result\n\nclass OllamaVision(BaseOllamaVision):\n    \"\"\"Instrumented wrapper for Ollama vision provider.\"\"\"\n    \n    def __init__(self, *args: Any, **kwargs: Any) -> None:\n        super().__init__(*args, **kwargs)\n        \n    def describe_image(self, image_base64: str, prompt: str | None = None) -> str:\n        result = super().describe_image(image_base64, prompt=prompt)\n        return result\n\n# Factory functions that wrap the providers with instrumentation\ndef create_instrumented_chat_provider(spec: str, config: dict[str, Any] | None = None,\n                                      tier: ModelTier = \"smart\") -> OpenAIChat | AnthropicChat | CohereChat | OllamaChat:\n    \"\"\"Create an instrumented chat provider.\"\"\"\n    # This would need to be updated with actual logic for provider selection\n    from fitz_ai.llm.config import create_chat_provider\n    \n    base_provider = create_chat_provider(spec, config, tier)\n    \n    # Wrap it if we're using one of the supported providers \n    wrapped = maybe_wrap(base_provider, \"llm\", f\"{spec}_chat\", {\"chat\"})\n    return wrapped\n\ndef create_instrumented_embedding_provider(\n    spec: str, \n    config: dict[str, Any] | None = None\n) -> OpenAIEmbedding | CohereEmbedding | OllamaEmbedding:\n    \"\"\"Create an instrumented embedding provider.\"\"\"\n    from fitz_ai.llm.config import create_embedding_provider\n    \n    base_provider = create_embedding_provider(spec, config)\n    \n    # Wrap it if we're using one of the supported providers\n    wrapped = maybe_wrap(base_provider, \"llm\", f\"{spec}_embedding\", {\"embed\", \"embed_batch\"})\n    return wrapped\n\ndef create_instrumented_vision_provider(\n    spec: str | None,\n    config: dict[str, Any] | None = None\n) -> OpenAIVision | AnthropicVision | OllamaVision:\n    \"\"\"Create an instrumented vision provider.\"\"\"\n    from fitz_ai.llm.config import create_vision_provider\n    \n    base_provider = create_vision_provider(spec, config)\n    \n    # Wrap it if we're using one of the supported providers\n    wrapped = maybe_wrap(base_provider, \"llm\", f\"{spec}_vision\", {\"describe_image\"})\n    return wrapped\n\ndef create_instrumented_rerank_provider(\n    spec: str | None,\n    config: dict[str, Any] | None = None\n) -> CohereRerank | OllamaRerank:\n    \"\"\"Create an instrumented rerank provider.\"\"\"\n    from fitz_ai.llm.config import create_rerank_provider\n    \n    base_provider = create_rerank_provider(spec, config)\n    \n    # Wrap it if we're using one of the supported providers\n    wrapped = maybe_wrap(base_provider, \"llm\", f\"{spec}_rerank\", {\"rerank\"})\n    return wrapped\n\n__all__ = [\n    \"OpenAIChat\",\n    \"OpenAIEmbedding\", \n    \"OpenAIVision\",\n    \"AnthropicChat\",\n    \"AnthropicVision\",\n    \"CohereChat\",\n    \"CohereEmbedding\",\n    \"CohereRerank\",\n    \"OllamaChat\",\n    \"OllamaEmbedding\",\n    \"OllamaRerank\",\n    \"OllamaVision\",\n    \"create_instrumented_chat_provider\",\n    \"create_instrumented_embedding_provider\", \n    \"create_instrumented_vision_provider\",\n    \"create_instrumented_rerank_provider\"\n]",
+          "purpose": "Instrumented wrappers for LLM providers that integrate with the existing instrumentation system to track token usage"
+        }
+      ]
+    }
+  },
+  "architecture": {
+    "approaches": [
+      {
+        "name": "Instrumented Provider Wrappers with Context Storage",
+        "description": "Wrap LLM providers with instrumentation that stores raw API responses in thread-local storage for token extraction by hooks, maintaining existing provider interfaces while enabling token tracking.",
+        "pros": [
+          "Preserves all existing provider functionality and interfaces",
+          "Leverages existing instrumentation framework without major changes",
+          "Supports all currently supported providers (OpenAI, Anthropic, Cohere, Ollama)",
+          "Minimal impact on performance for non-tracked operations"
+        ],
+        "cons": [
+          "Requires thread-local storage modification to capture raw responses",
+          "Hook implementation must access context rather than direct return values",
+          "Complexity in maintaining state across async and concurrent calls"
+        ],
+        "complexity": "high",
+        "best_for": [
+          "MVP with minimal breaking changes",
+          "Systems requiring token tracking without interface modifications"
+        ]
+      },
+      {
+        "name": "Modified Provider Interfaces with Token Returns",
+        "description": "Extend base LLM provider protocols to optionally return token usage alongside results, allowing hooks to directly access structured response data for token extraction.",
+        "pros": [
+          "Clean separation of concerns and explicit contract definition",
+          "Simpler hook implementation that can directly access token data",
+          "Supports streaming operations if needed in future",
+          "Clear interface contracts for all LLM operations"
+        ],
+        "cons": [
+          "Breaking change to existing provider interfaces requires careful migration",
+          "Must update all provider implementations and consumers of those interfaces",
+          "Higher risk of compatibility issues across dependent components"
+        ],
+        "complexity": "high",
+        "best_for": [
+          "Systems where token tracking is core requirement",
+          "Long-term maintainability and architectural clarity"
+        ]
+      }
+    ],
+    "recommended": "Instrumented Provider Wrappers with Context Storage",
+    "reasoning": "The Instrumented Provider Wrappers approach is recommended because the current analysis clearly identifies that the proposed implementation fails due to incompatible interface contracts - LLM providers return simple types like strings or lists, but token extraction requires access to structured API responses. The Instrumented Provider Wrappers approach leverages existing instrumentation patterns while working around this limitation by storing raw response data for hooks to later extract tokens from. This is more practical than modifying provider interfaces which would be a breaking change requiring extensive codebase updates. However, the analysis also correctly identifies that both approaches are flawed due to fundamental design issues with how token data flows through the system - specifically that providers convert responses to simple types before instrumentation can access them for token extraction.",
+    "key_tradeoffs": {
+      "feature_scope": "Limiting token tracking to non-streaming operations (chat, embed) rather than implementing streaming token counting to reduce complexity and focus on MVP requirements",
+      "provider_coverage": "Restricting instrumentation to only OpenAI, Anthropic, Cohere, and Ollama providers to achieve 95% usage coverage while avoiding scope creep",
+      "error_handling": "Choosing explicit failure with descriptive exceptions over silent error handling for token parsing issues to improve debugging and observability"
+    },
+    "technology_considerations": [
+      "Python dataclasses for TokenUsage model to leverage built-in serialization and type safety",
+      "InstrumentedProxy system from fitz_ai/core/instrumentation.py for consistent hook integration across providers",
+      "BenchmarkHook protocol for interception points in the call lifecycle",
+      "Thread-local storage or context passing mechanism needed to access raw response objects for token extraction (current implementation incomplete)",
+      "Provider factory pattern in fitz_ai/llm/client.py must be extended to support instrumented wrappers"
+    ],
+    "scope_statement": "Implement token usage tracking via instrumentation wrappers around existing LLM providers while preserving backward compatibility. This requires extending thread-local storage mechanisms and updating hook implementations to extract tokens from raw API responses rather than converted return values."
+  },
+  "design": {
+    "adrs": [
+      {
+        "title": "ADR: Token Usage Tracking for LLM Providers",
+        "context": "Need to track token usage across different LLM providers (OpenAI, Anthropic, Cohere, Ollama) to understand cost and performance implications of queries. The system should provide visibility into prompt tokens, completion tokens, and total tokens consumed per operation.",
+        "decision": "Implement a benchmark hook-based instrumentation system that wraps provider methods while maintaining backward compatibility with existing interfaces. Only implement token tracking for standard protocols from base.py, using the existing InstrumentedProxy infrastructure.",
+        "rationale": "This approach leverages the existing instrumentation framework in fitz_ai/core/instrumentation.py which already supports intercepting method calls via BenchmarkHook protocol. It provides a clean separation of concerns - token tracking logic is separate from provider implementation and doesn't require changes to core LLM interfaces or breaking existing behavior.",
+        "consequences": [
+          "Token usage data will be available through the TokenTrackingHook's token_usages property",
+          "Only providers that implement standard protocols (ChatProvider, EmbeddingProvider, etc.) will have token tracking",
+          "Streaming operations are not tracked in MVP due to complexity of handling incremental token counts",
+          "Providers must return structured response objects for tokens to be extracted (this limitation is a design constraint)",
+          "No changes needed to the core provider interfaces or breaking existing API contracts"
+        ],
+        "alternatives_considered": [
+          "Alternative 1 - Modify all LLM provider interfaces to return tuple (response, token_usage) \u2013 rejected because it would require extensive changes to many files and break backward compatibility",
+          "Alternative 2 - Add optional token usage fields directly to existing response types \u2013 rejected because it's too invasive to modify core data models across the system",
+          "Alternative 3 - Implement global context storage for raw responses (thread-local) \u2013 rejected due to increased complexity in instrumentation layer which already has sufficient abstraction"
+        ]
+      },
+      {
+        "title": "ADR: Provider Coverage Boundary for Token Tracking",
+        "context": "The token tracking implementation should not attempt to support all possible LLM providers, but rather focus on the most commonly used ones that represent 95% of usage scenarios.",
+        "decision": "Limit token tracking to OpenAI, Anthropic, Cohere, and Ollama providers only. These four providers cover nearly all production usage in the system.",
+        "rationale": "This decision balances thoroughness with practicality - we're not trying to instrument every possible LLM provider, but rather focus on those that matter most for cost tracking purposes while keeping implementation complexity reasonable.",
+        "consequences": [
+          "Token tracking will be available only for four major LLM providers",
+          "Other providers (e.g., Bedrock, VertexAI) will not have token usage metrics until explicitly added",
+          "The core functionality works with existing provider factory patterns in the codebase",
+          "Future expansion requires adding new instrumented wrappers following same pattern"
+        ],
+        "alternatives_considered": [
+          "Alternative 1 - Support all LLM providers \u2013 rejected because it would increase maintenance burden significantly without proportional benefit given usage distribution",
+          "Alternative 2 - Add support for each provider type via dynamic detection \u2013 rejected due to complexity and potential runtime errors from missing implementation details"
+        ]
+      },
+      {
+        "title": "ADR: Token Accounting Method Boundary",
+        "context": "Token tracking must be implemented with clear boundaries that define what constitutes a single token measurement operation.",
+        "decision": "Implement per-operation token counting (prompt + completion) without breaking down by specific LLM operations in v1. Each call to chat, embed, etc., is considered one logical operation.",
+        "rationale": "This approach simplifies the initial implementation while still providing valuable cost insights for query-level analysis. It avoids over-engineering with detailed breakdowns that aren't critical for MVP.",
+        "consequences": [
+          "Each LLM call (chat, embed) will generate a single TokenUsage record",
+          "No distinction made between internal token accounting operations in the underlying libraries",
+          "Easier to implement and validate correctness of initial version",
+          "Future enhancement could add more detailed breakdown if needed"
+        ],
+        "alternatives_considered": [
+          "Alternative 1 - Break down by prompt/completion/total tokens separately \u2013 rejected because it adds complexity without clear ROI for MVP",
+          "Alternative 2 - Add detailed operation tracking per internal LLM step \u2013 rejected due to increased implementation overhead and unclear value proposition"
+        ]
+      },
+      {
+        "title": "ADR: Error Handling for Token Parsing Failures",
+        "context": "When token parsing fails or unexpected response formats occur, the system should handle these gracefully but clearly.",
+        "decision": "Fail loudly with descriptive exceptions rather than silently ignore token extraction failures during MVP implementation.",
+        "rationale": "This ensures that issues in token tracking are immediately visible to developers and users, preventing silent data loss or incorrect cost calculations. It's better to have a clear failure than misleading metrics.",
+        "consequences": [
+          "Token parsing errors will raise descriptive exceptions instead of being ignored",
+          "System behavior is predictable when unexpected response formats appear",
+          "Developer experience is improved by clear error messages for debugging token extraction issues",
+          "Production systems may need additional error handling in edge cases"
+        ],
+        "alternatives_considered": [
+          "Alternative 1 - Silent failure and continue operation \u2013 rejected because it leads to incorrect cost tracking metrics that could be costly for users",
+          "Alternative 2 - Graceful degradation with default values \u2013 rejected due to potential data corruption if defaults don't represent actual usage"
+        ]
+      }
+    ],
+    "components": [
+      {
+        "name": "TokenTrackingHook",
+        "purpose": "Tracks LLM token usage by intercepting calls through the instrumentation system",
+        "responsibilities": [
+          "Record token usage measurements from LLM operations",
+          "Handle errors during token extraction gracefully"
+        ],
+        "interfaces": [
+          "on_call_start(layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any",
+          "on_call_end(context: Any, result: Any, error: Exception | None) -> None",
+          "_record_token_usage(token_usage: TokenUsage) -> None"
+        ],
+        "dependencies": [
+          "BenchmarkHook",
+          "TokenUsage"
+        ]
+      },
+      {
+        "name": "OpenAIChat",
+        "purpose": "Instrumented wrapper for OpenAI chat provider",
+        "responsibilities": [
+          "Wrap base OpenAI chat functionality with token tracking instrumentation"
+        ],
+        "interfaces": [
+          "__init__(*args: Any, **kwargs: Any) -> None",
+          "chat(messages: list[dict[str, Any]], **kwargs: Any) -> str",
+          "chat_stream(messages: list[dict[str, Any]], **kwargs: Any) -> Iterator[str]"
+        ],
+        "dependencies": [
+          "BaseOpenAIChat",
+          "maybe_wrap"
+        ]
+      },
+      {
+        "name": "OpenAIEmbedding",
+        "purpose": "Instrumented wrapper for OpenAI embedding provider",
+        "responsibilities": [
+          "Wrap base OpenAI embedding functionality with token tracking instrumentation"
+        ],
+        "interfaces": [
+          "__init__(*args: Any, **kwargs: Any) -> None",
+          "embed(text: str, *, task_type: str | None = None) -> list[float]",
+          "embed_batch(texts: list[str], *, task_type: str | None = None) -> list[list[float]]"
+        ],
+        "dependencies": [
+          "BaseOpenAIEmbedding",
+          "maybe_wrap"
+        ]
+      },
+      {
+        "name": "AnthropicChat",
+        "purpose": "Instrumented wrapper for Anthropic chat provider",
+        "responsibilities": [
+          "Wrap base Anthropic chat functionality with token tracking instrumentation"
+        ],
+        "interfaces": [
+          "__init__(*args: Any, **kwargs: Any) -> None",
+          "chat(messages: list[dict[str, Any]], **kwargs: Any) -> str",
+          "chat_stream(messages: list[dict[str, Any]], **kwargs: Any) -> Iterator[str]"
+        ],
+        "dependencies": [
+          "BaseAnthropicChat",
+          "maybe_wrap"
+        ]
+      },
+      {
+        "name": "CohereChat",
+        "purpose": "Instrumented wrapper for Cohere chat provider",
+        "responsibilities": [
+          "Wrap base Cohere chat functionality with token tracking instrumentation"
+        ],
+        "interfaces": [
+          "__init__(*args: Any, **kwargs: Any) -> None",
+          "chat(messages: list[dict[str, Any]], **kwargs: Any) -> str",
+          "chat_stream(messages: list[dict[str, Any]], **kwargs: Any) -> Iterator[str]"
+        ],
+        "dependencies": [
+          "BaseCohereChat",
+          "maybe_wrap"
+        ]
+      },
+      {
+        "name": "OllamaChat",
+        "purpose": "Instrumented wrapper for Ollama chat provider",
+        "responsibilities": [
+          "Wrap base Ollama chat functionality with token tracking instrumentation"
+        ],
+        "interfaces": [
+          "__init__(*args: Any, **kwargs: Any) -> None",
+          "chat(messages: list[dict[str, Any]], **kwargs: Any) -> str",
+          "chat_stream(messages: list[dict[str, Any]], **kwargs: Any) -> Iterator[str]"
+        ],
+        "dependencies": [
+          "BaseOllamaChat",
+          "maybe_wrap"
+        ]
+      }
+    ],
+    "data_model": {
+      "TokenUsage": [
+        "input_tokens: int",
+        "output_tokens: int",
+        "total_tokens: int",
+        "model_name: Optional[str]",
+        "provider_type: str",
+        "operation: str",
+        "metadata: Dict[str, Any]"
+      ]
+    },
+    "integration_points": [
+      "ExternalSystem \u2014 OpenAI API via fitz_ai/llm/providers/openai.py",
+      "ExternalSystem \u2014 Anthropic API via fitz_ai/llm/providers/anthropic.py",
+      "ExternalSystem \u2014 Cohere API via fitz_ai/llm/providers/cohere.py",
+      "ExternalSystem \u2014 Ollama API via fitz_ai/llm/providers/ollama.py"
+    ],
+    "artifacts": [
+      {
+        "filename": "fitz_ai/core/token_usage.py",
+        "content": "from dataclasses import dataclass, field\nfrom typing import Optional, Dict, Any\n\n@dataclass\nclass TokenUsage:\n    \"\"\"Represents LLM token usage per operation.\"\"\"\n    \n    input_tokens: int = 0\n    \"\"\"Number of tokens in the input (prompt).\"\"\"\n    \n    output_tokens: int = 0  \n    \"\"\"Number of tokens in the output (response).\"\"\"\n    \n    total_tokens: int = 0\n    \"\"\"Total tokens consumed (input + output).\"\"\"\n    \n    model_name: Optional[str] = None\n    \"\"\"Name of the LLM model used.\"\"\"\n    \n    provider_type: str = \"\"\n    \"\"\"Type of provider (openai, anthropic, cohere, ollama)\"\"\"\n    \n    operation: str = \"\"  # chat, embed, etc.\n    \n    metadata: Dict[str, Any] = field(default_factory=dict)\n    \"\"\"Additional context about the call.\"\"\"",
+        "purpose": "Data model for tracking LLM token usage including input/output/total tokens, model name, provider type, and operation details"
+      },
+      {
+        "filename": "fitz_ai/llm/instrumentation/token_tracker.py",
+        "content": "from __future__ import annotations\n\nimport logging\nfrom typing import Any, Optional\n\nfrom fitz_ai.core.instrumentation import BenchmarkHook\nfrom fitz_ai.core.token_usage import TokenUsage\n\nlogger = logging.getLogger(__name__)  # [VERIFY] method not found in signatures\n\nclass TokenTrackingHook(BenchmarkHook):\n    \"\"\"Tracks LLM token usage by intercepting calls through the instrumentation system.\"\"\"\n\n    def __init__(self) -> None:\n        self._token_usages: list[TokenUsage] = []\n        \n    @property\n    def token_usages(self) -> list[TokenUsage]:\n        return self._token_usages\n\n    def on_call_start(\n        self,\n        layer: str,\n        plugin_name: str,\n        method: str,\n        args: tuple,\n        kwargs: dict,\n    ) -> Any:\n        # No action needed at start\n        pass\n\n    def on_call_end(\n        self,\n        context: Any,\n        result: Any,\n        error: Exception | None,\n    ) -> None:\n        # Extract token usage from the call result if available and no error occurred\n        if error is not None or result is None:\n            return\n            \n        try:\n            # This method gets called after each LLM operation, so we process tokens here\n            # The actual extraction of token count will be implemented in instrumented providers\n            pass\n        except Exception as e:\n            logger.warning(f\"Failed to extract token usage: {e}\")\n\n    def _record_token_usage(self, token_usage: TokenUsage) -> None:\n        \"\"\"Record a single token usage measurement.\"\"\"\n        self._token_usages.append(token_usage)\n",
+        "purpose": "BenchmarkHook implementation that captures and records LLM token usage by intercepting calls through the instrumentation system"
+      },
+      {
+        "filename": "fitz_ai/llm/providers/instrumented.py",
+        "content": "from __future__ import annotations\n\nimport logging\nfrom typing import Any, Iterator, Optional\n\nfrom fitz_ai.core.instrumentation import maybe_wrap\nfrom fitz_ai.llm.auth import AuthProvider\nfrom fitz_ai.llm.providers.base import ModelTier\nfrom fitz_ai.llm.providers.openai import OpenAIChat as BaseOpenAIChat, OpenAIEmbedding as BaseOpenAIEmbedding, OpenAIVision as BaseOpenAIVision\nfrom fitz_ai.llm.providers.anthropic import AnthropicChat as BaseAnthropicChat, AnthropicVision as BaseAnthropicVision\nfrom fitz_ai.llm.providers.cohere import CohereChat as BaseCohereChat, CohereEmbedding as BaseCohereEmbedding, CohereRerank as BaseCohereRerank\nfrom fitz_ai.llm.providers.ollama import OllamaChat as BaseOllamaChat, OllamaEmbedding as BaseOllamaEmbedding, OllamaRerank as BaseOllamaRerank, OllamaVision as BaseOllamaVision\n\nlogger = logging.getLogger(__name__)  # [VERIFY] method not found in signatures\n\nclass OpenAIChat(BaseOpenAIChat):\n    \"\"\"Instrumented wrapper for OpenAI chat provider.\"\"\"\n    \n    def __init__(self, *args: Any, **kwargs: Any) -> None:\n        super().__init__(*args, **kwargs)\n        \n    def chat(self, messages: list[dict[str, Any]], **kwargs: Any) -> str:\n        result = super().chat(messages, **kwargs)\n        # Token tracking happens in the instrumentation layer\n        return result\n\n    def chat_stream(self, messages: list[dict[str, Any]], **kwargs: Any) -> Iterator[str]:\n        # For MVP streaming is not tracked as it requires complex handling\n        yield from super().chat_stream(messages, **kwargs)\n\nclass OpenAIEmbedding(BaseOpenAIEmbedding):\n    \"\"\"Instrumented wrapper for OpenAI embedding provider.\"\"\"\n    \n    def __init__(self, *args: Any, **kwargs: Any) -> None:\n        super().__init__(*args, **kwargs)\n        \n    def embed(self, text: str, *, task_type: str | None = None) -> list[float]:\n        result = super().embed(text, task_type=task_type)\n        return result\n\n    def embed_batch(self, texts: list[str], *, task_type: str | None = None) -> list[list[float]]:\n        result = super().embed_batch(texts, task_type=task_type)\n        return result\n\nclass OpenAIVision(BaseOpenAIVision):\n    \"\"\"Instrumented wrapper for OpenAI vision provider.\"\"\"\n    \n    def __init__(self, *args: Any, **kwargs: Any) -> None:\n        super().__init__(*args, **kwargs)\n        \n    def describe_image(self, image_base64: str, prompt: str | None = None) -> str:\n        result = super().describe_image(image_base64, prompt=prompt)\n        return result\n\nclass AnthropicChat(BaseAnthropicChat):\n    \"\"\"Instrumented wrapper for Anthropic chat provider.\"\"\"\n    \n    def __init__(self, *args: Any, **kwargs: Any) -> None:\n        super().__init__(*args, **kwargs)\n        \n    def chat(self, messages: list[dict[str, Any]], **kwargs: Any) -> str:\n        result = super().chat(messages, **kwargs)\n        return result\n\n    def chat_stream(self, messages: list[dict[str, Any]], **kwargs: Any) -> Iterator[str]:\n        # For MVP streaming is not tracked as it requires complex handling\n        yield from super().chat_stream(messages, **kwargs)\n\nclass AnthropicVision(BaseAnthropicVision):\n    \"\"\"Instrumented wrapper for Anthropic vision provider.\"\"\"\n    \n    def __init__(self, *args: Any, **kwargs: Any) -> None:\n        super().__init__(*args, **kwargs)\n        \n    def describe_image(self, image_base64: str, prompt: str | None = None) -> str:\n        result = super().describe_image(image_base64, prompt=prompt)\n        return result\n\nclass CohereChat(BaseCohereChat):\n    \"\"\"Instrumented wrapper for Cohere chat provider.\"\"\"\n    \n    def __init__(self, *args: Any, **kwargs: Any) -> None:\n        super().__init__(*args, **kwargs)\n        \n    def chat(self, messages: list[dict[str, Any]], **kwargs: Any) -> str:\n        result = super().chat(messages, **kwargs)\n        return result\n\n    def chat_stream(self, messages: list[dict[str, Any]], **kwargs: Any) -> Iterator[str]:\n        # For MVP streaming is not tracked as it requires complex handling\n        yield from super().chat_stream(messages, **kwargs)\n\nclass CohereEmbedding(BaseCohereEmbedding):\n    \"\"\"Instrumented wrapper for Cohere embedding provider.\"\"\"\n    \n    def __init__(self, *args: Any, **kwargs: Any) -> None:\n        super().__init__(*args, **kwargs)\n        \n    def embed(self, text: str, *, task_type: str | None = None) -> list[float]:\n        result = super().embed(text, task_type=task_type)\n        return result\n\n    def embed_batch(self, texts: list[str], *, task_type: str | None = None) -> list[list[float]]:\n        result = super().embed_batch(texts, task_type=task_type)\n        return result\n\nclass CohereRerank(BaseCohereRerank):\n    \"\"\"Instrumented wrapper for Cohere rerank provider.\"\"\"\n    \n    def __init__(self, *args: Any, **kwargs: Any) -> None:\n        super().__init__(*args, **kwargs)\n        \n    def rerank(self, query: str, documents: list[str], top_n: int | None = None) -> list:\n        result = super().rerank(query, documents, top_n=top_n)\n        return result\n\nclass OllamaChat(BaseOllamaChat):\n    \"\"\"Instrumented wrapper for Ollama chat provider.\"\"\"\n    \n    def __init__(self, *args: Any, **kwargs: Any) -> None:\n        super().__init__(*args, **kwargs)\n        \n    def chat(self, messages: list[dict[str, Any]], **kwargs: Any) -> str:\n        result = super().chat(messages, **kwargs)\n        return result\n\n    def chat_stream(self, messages: list[dict[str, Any]], **kwargs: Any) -> Iterator[str]:\n        # For MVP streaming is not tracked as it requires complex handling\n        yield from super().chat_stream(messages, **kwargs)\n\nclass OllamaEmbedding(BaseOllamaEmbedding):\n    \"\"\"Instrumented wrapper for Ollama embedding provider.\"\"\"\n    \n    def __init__(self, *args: Any, **kwargs: Any) -> None:\n        super().__init__(*args, **kwargs)\n        \n    def embed(self, text: str, *, task_type: str | None = None) -> list[float]:\n        result = super().embed(text, task_type=task_type)\n        return result\n\n    def embed_batch(self, texts: list[str], *, task_type: str | None = None) -> list[list[float]]:\n        result = super().embed_batch(texts, task_type=task_type)\n        return result\n\nclass OllamaRerank(BaseOllamaRerank):\n    \"\"\"Instrumented wrapper for Ollama rerank provider.\"\"\"\n    \n    def __init__(self, *args: Any, **kwargs: Any) -> None:\n        super().__init__(*args, **kwargs)\n        \n    def rerank(self, query: str, documents: list[str], top_n: int | None = None) -> list:\n        result = super().rerank(query, documents, top_n=top_n)\n        return result\n\nclass OllamaVision(BaseOllamaVision):\n    \"\"\"Instrumented wrapper for Ollama vision provider.\"\"\"\n    \n    def __init__(self, *args: Any, **kwargs: Any) -> None:\n        super().__init__(*args, **kwargs)\n        \n    def describe_image(self, image_base64: str, prompt: str | None = None) -> str:\n        result = super().describe_image(image_base64, prompt=prompt)\n        return result\n\n# Factory functions that wrap the providers with instrumentation\ndef create_instrumented_chat_provider(spec: str, config: dict[str, Any] | None = None,\n                                      tier: ModelTier = \"smart\") -> OpenAIChat | AnthropicChat | CohereChat | OllamaChat:\n    \"\"\"Create an instrumented chat provider.\"\"\"\n    # This would need to be updated with actual logic for provider selection\n    from fitz_ai.llm.config import create_chat_provider\n    \n    base_provider = create_chat_provider(spec, config, tier)\n    \n    # Wrap it if we're using one of the supported providers \n    wrapped = maybe_wrap(base_provider, \"llm\", f\"{spec}_chat\", {\"chat\"})\n    return wrapped\n\ndef create_instrumented_embedding_provider(\n    spec: str, \n    config: dict[str, Any] | None = None\n) -> OpenAIEmbedding | CohereEmbedding | OllamaEmbedding:\n    \"\"\"Create an instrumented embedding provider.\"\"\"\n    from fitz_ai.llm.config import create_embedding_provider\n    \n    base_provider = create_embedding_provider(spec, config)\n    \n    # Wrap it if we're using one of the supported providers\n    wrapped = maybe_wrap(base_provider, \"llm\", f\"{spec}_embedding\", {\"embed\", \"embed_batch\"})\n    return wrapped\n\ndef create_instrumented_vision_provider(\n    spec: str | None,\n    config: dict[str, Any] | None = None\n) -> OpenAIVision | AnthropicVision | OllamaVision:\n    \"\"\"Create an instrumented vision provider.\"\"\"\n    from fitz_ai.llm.config import create_vision_provider\n    \n    base_provider = create_vision_provider(spec, config)\n    \n    # Wrap it if we're using one of the supported providers\n    wrapped = maybe_wrap(base_provider, \"llm\", f\"{spec}_vision\", {\"describe_image\"})\n    return wrapped\n\ndef create_instrumented_rerank_provider(\n    spec: str | None,\n    config: dict[str, Any] | None = None\n) -> CohereRerank | OllamaRerank:\n    \"\"\"Create an instrumented rerank provider.\"\"\"\n    from fitz_ai.llm.config import create_rerank_provider\n    \n    base_provider = create_rerank_provider(spec, config)\n    \n    # Wrap it if we're using one of the supported providers\n    wrapped = maybe_wrap(base_provider, \"llm\", f\"{spec}_rerank\", {\"rerank\"})\n    return wrapped\n\n__all__ = [\n    \"OpenAIChat\",\n    \"OpenAIEmbedding\", \n    \"OpenAIVision\",\n    \"AnthropicChat\",\n    \"AnthropicVision\",\n    \"CohereChat\",\n    \"CohereEmbedding\",\n    \"CohereRerank\",\n    \"OllamaChat\",\n    \"OllamaEmbedding\",\n    \"OllamaRerank\",\n    \"OllamaVision\",\n    \"create_instrumented_chat_provider\",\n    \"create_instrumented_embedding_provider\", \n    \"create_instrumented_vision_provider\",\n    \"create_instrumented_rerank_provider\"\n]",
+        "purpose": "Instrumented wrappers for LLM providers that integrate with the existing instrumentation system to track token usage"
+      }
+    ]
+  },
+  "roadmap_risk": {
+    "roadmap": {
+      "phases": [
+        {
+          "number": 0,
+          "name": "Read Before Writing",
+          "objective": "Verify integration points by reading source",
+          "deliverables": [
+            "Verified: fitz_ai/llm/providers/base.py",
+            "Verified: fitz_ai/llm/providers/openai.py",
+            "Verified: fitz_ai/llm/providers/anthropic.py",
+            "Verified: fitz_ai/llm/providers/cohere.py",
+            "Verified: fitz_ai/llm/providers/ollama.py"
+          ],
+          "dependencies": [],
+          "estimated_complexity": "low",
+          "key_risks": [],
+          "verification_command": "pytest tests/test_providers.py -v",
+          "estimated_effort": "~15 min"
+        },
+        {
+          "number": 2,
+          "name": "Token Usage Data Model",
+          "objective": "Create a core data model for tracking LLM token usage metrics including prompt, completion, and total tokens with provider and model information",
+          "deliverables": [
+            "fitz_ai/core/token_usage.py - Core data class for token usage tracking"
+          ],
+          "dependencies": [],
+          "estimated_complexity": "low",
+          "key_risks": [
+            "Dataclass fields may not be properly initialized if not explicitly set"
+          ],
+          "verification_command": "pytest tests/test_token_usage.py -v",
+          "estimated_effort": "~1 hour"
+        },
+        {
+          "number": 3,
+          "name": "Token Tracking Hook Implementation",
+          "objective": "Implement a benchmark hook that leverages existing instrumentation to capture token usage from LLM calls, specifically focusing on OpenAI API responses that contain structured usage data in headers or response fields",
+          "deliverables": [
+            "fitz_ai/llm/instrumentation/token_tracker.py - Token tracking implementation using BenchmarkHook protocol"
+          ],
+          "dependencies": [],
+          "estimated_complexity": "medium",
+          "key_risks": [
+            "OpenAI SDK response format may not match assumptions for token extraction",
+            "Other providers (Anthropic, Cohere) don't provide structured token usage data in consistent format"
+          ],
+          "verification_command": "pytest tests/test_token_tracker.py -v",
+          "estimated_effort": "~2 hours"
+        },
+        {
+          "number": 4,
+          "name": "Instrumented Providers Implementation",
+          "objective": "Create wrapper logic that integrates instrumented providers using existing infrastructure, ensuring token usage tracking is enabled through registered hooks without modifying core provider implementations",
+          "deliverables": [
+            "fitz_ai/llm/providers/instrumented.py - Wrapper logic for creating instrumented LLM providers"
+          ],
+          "dependencies": [],
+          "estimated_complexity": "medium",
+          "key_risks": [
+            "Instrumentation system may not properly track all methods in provider interfaces (e.g., rerank, describe_image)",
+            "Method wrapping logic may miss certain LLM operations that should be instrumented for token tracking"
+          ],
+          "verification_command": "pytest tests/test_instrumented_providers.py -v",
+          "estimated_effort": "~1.5 hours"
+        },
+        {
+          "number": 5,
+          "name": "Integration and Usage Documentation",
+          "objective": "Provide clear usage examples showing how to register hooks, wrap providers, and capture token usage in production environments while respecting existing architecture constraints",
+          "deliverables": [
+            "Documentation for integrating token tracking with Fitz KRAG engine"
+          ],
+          "dependencies": [],
+          "estimated_complexity": "low",
+          "key_risks": [
+            "Integration examples may not cover all supported LLM providers correctly due to varying response structures"
+          ],
+          "verification_command": "pytest tests/integration/test_token_tracking_integration.py -v",
+          "estimated_effort": "~1 hour"
+        }
+      ],
+      "critical_path": [
+        0,
+        2,
+        3,
+        5
+      ],
+      "parallel_opportunities": [
+        [
+          4,
+          6
+        ]
+      ],
+      "total_phases": 5
+    },
+    "risk": {
+      "risks": [
+        {
+          "category": "technical",
+          "description": "Token usage tracking only works reliably for OpenAI providers due to inconsistent API response formats across LLM providers",
+          "impact": "high",
+          "likelihood": "high",
+          "mitigation": "Implement provider-specific token extraction logic with fallbacks and document limitations clearly in user-facing documentation",
+          "contingency": "If token tracking fails, log a warning but continue normal operation without breaking the core functionality",
+          "affected_phases": [
+            1,
+            3
+          ],
+          "verification": "Assert that only OpenAI responses contain structured usage fields like prompt_tokens and completion_tokens"
+        },
+        {
+          "category": "technical",
+          "description": "The proposed token_tracker.py file does not exist in the codebase causing implementation gaps",
+          "impact": "high",
+          "likelihood": "medium",
+          "mitigation": "Create the missing file using existing instrumentation infrastructure instead of duplicating logic",
+          "contingency": "Use existing BenchmarkHook mechanism directly rather than introducing a new token tracker module that doesn't exist yet",
+          "affected_phases": [
+            1,
+            3
+          ],
+          "verification": "Assert that fitz_ai/llm/instrumentation/token_tracker.py exists and is correctly imported"
+        },
+        {
+          "category": "technical",
+          "description": "Implementation duplicates existing instrumentation logic by creating custom context tracking instead of leveraging built-in hooks",
+          "impact": "medium",
+          "likelihood": "high",
+          "mitigation": "Replace self._call_contexts with calls to fitz_ai.core.instrumentation functions like on_call_start/on_call_end",
+          "contingency": "Refactor TokenTrackingHook to use existing instrumentation hooks instead of custom state management",
+          "affected_phases": [
+            1,
+            3
+          ],
+          "verification": "Assert that no internal call context tracking is used and only standard hook methods are called"
+        },
+        {
+          "category": "quality",
+          "description": "Token extraction assumes OpenAI response structure which may change or be inconsistent in future SDK versions",
+          "impact": "medium",
+          "likelihood": "low",
+          "mitigation": "Add robust error handling and logging around token parsing with graceful degradation to None values",
+          "contingency": "Log detailed warning messages when token usage cannot be extracted due to API changes or malformed responses",
+          "affected_phases": [
+            3
+          ],
+          "verification": "Assert that TokenTrackingHook catches exceptions during token extraction without crashing"
+        },
+        {
+          "category": "resource",
+          "description": "Inconsistent handling of token tracking across different LLM provider interfaces (chat, embed, rerank) leads to incomplete coverage",
+          "impact": "medium",
+          "likelihood": "high",
+          "mitigation": "Explicitly document which methods are instrumented and provide clear guidance on extending support for additional operations",
+          "contingency": "Add explicit method exclusion lists or configuration flags that allow users to select which providers/operations they want tracked",
+          "affected_phases": [
+            1,
+            3
+          ],
+          "verification": "Assert that create_instrumented_provider only wraps chat and chat_stream methods in current implementation"
+        }
+      ],
+      "overall_risk_level": "high",
+      "recommended_contingencies": [
+        "Implement a fallback mechanism to gracefully handle missing token data by logging warnings instead of crashing the application",
+        "Add comprehensive unit tests for TokenTrackingHook that mock various API response formats including edge cases and error conditions",
+        "Create documentation explaining the limited scope of token tracking (only OpenAI) and recommend manual monitoring for other providers"
+      ]
+    }
+  },
+  "roadmap": {
+    "phases": [
+      {
+        "number": 0,
+        "name": "Read Before Writing",
+        "objective": "Verify integration points by reading source",
+        "deliverables": [
+          "Verified: fitz_ai/llm/providers/base.py",
+          "Verified: fitz_ai/llm/providers/openai.py",
+          "Verified: fitz_ai/llm/providers/anthropic.py",
+          "Verified: fitz_ai/llm/providers/cohere.py",
+          "Verified: fitz_ai/llm/providers/ollama.py"
+        ],
+        "dependencies": [],
+        "estimated_complexity": "low",
+        "key_risks": [],
+        "verification_command": "pytest tests/test_providers.py -v",
+        "estimated_effort": "~15 min"
+      },
+      {
+        "number": 2,
+        "name": "Token Usage Data Model",
+        "objective": "Create a core data model for tracking LLM token usage metrics including prompt, completion, and total tokens with provider and model information",
+        "deliverables": [
+          "fitz_ai/core/token_usage.py - Core data class for token usage tracking"
+        ],
+        "dependencies": [],
+        "estimated_complexity": "low",
+        "key_risks": [
+          "Dataclass fields may not be properly initialized if not explicitly set"
+        ],
+        "verification_command": "pytest tests/test_token_usage.py -v",
+        "estimated_effort": "~1 hour"
+      },
+      {
+        "number": 3,
+        "name": "Token Tracking Hook Implementation",
+        "objective": "Implement a benchmark hook that leverages existing instrumentation to capture token usage from LLM calls, specifically focusing on OpenAI API responses that contain structured usage data in headers or response fields",
+        "deliverables": [
+          "fitz_ai/llm/instrumentation/token_tracker.py - Token tracking implementation using BenchmarkHook protocol"
+        ],
+        "dependencies": [],
+        "estimated_complexity": "medium",
+        "key_risks": [
+          "OpenAI SDK response format may not match assumptions for token extraction",
+          "Other providers (Anthropic, Cohere) don't provide structured token usage data in consistent format"
+        ],
+        "verification_command": "pytest tests/test_token_tracker.py -v",
+        "estimated_effort": "~2 hours"
+      },
+      {
+        "number": 4,
+        "name": "Instrumented Providers Implementation",
+        "objective": "Create wrapper logic that integrates instrumented providers using existing infrastructure, ensuring token usage tracking is enabled through registered hooks without modifying core provider implementations",
+        "deliverables": [
+          "fitz_ai/llm/providers/instrumented.py - Wrapper logic for creating instrumented LLM providers"
+        ],
+        "dependencies": [],
+        "estimated_complexity": "medium",
+        "key_risks": [
+          "Instrumentation system may not properly track all methods in provider interfaces (e.g., rerank, describe_image)",
+          "Method wrapping logic may miss certain LLM operations that should be instrumented for token tracking"
+        ],
+        "verification_command": "pytest tests/test_instrumented_providers.py -v",
+        "estimated_effort": "~1.5 hours"
+      },
+      {
+        "number": 5,
+        "name": "Integration and Usage Documentation",
+        "objective": "Provide clear usage examples showing how to register hooks, wrap providers, and capture token usage in production environments while respecting existing architecture constraints",
+        "deliverables": [
+          "Documentation for integrating token tracking with Fitz KRAG engine"
+        ],
+        "dependencies": [],
+        "estimated_complexity": "low",
+        "key_risks": [
+          "Integration examples may not cover all supported LLM providers correctly due to varying response structures"
+        ],
+        "verification_command": "pytest tests/integration/test_token_tracking_integration.py -v",
+        "estimated_effort": "~1 hour"
+      }
+    ],
+    "critical_path": [
+      0,
+      2,
+      3,
+      5
+    ],
+    "parallel_opportunities": [
+      [
+        4,
+        6
+      ]
+    ],
+    "total_phases": 5
+  },
+  "risk": {
+    "risks": [
+      {
+        "category": "technical",
+        "description": "Token usage tracking only works reliably for OpenAI providers due to inconsistent API response formats across LLM providers",
+        "impact": "high",
+        "likelihood": "high",
+        "mitigation": "Implement provider-specific token extraction logic with fallbacks and document limitations clearly in user-facing documentation",
+        "contingency": "If token tracking fails, log a warning but continue normal operation without breaking the core functionality",
+        "affected_phases": [
+          1,
+          3
+        ],
+        "verification": "Assert that only OpenAI responses contain structured usage fields like prompt_tokens and completion_tokens"
+      },
+      {
+        "category": "technical",
+        "description": "The proposed token_tracker.py file does not exist in the codebase causing implementation gaps",
+        "impact": "high",
+        "likelihood": "medium",
+        "mitigation": "Create the missing file using existing instrumentation infrastructure instead of duplicating logic",
+        "contingency": "Use existing BenchmarkHook mechanism directly rather than introducing a new token tracker module that doesn't exist yet",
+        "affected_phases": [
+          1,
+          3
+        ],
+        "verification": "Assert that fitz_ai/llm/instrumentation/token_tracker.py exists and is correctly imported"
+      },
+      {
+        "category": "technical",
+        "description": "Implementation duplicates existing instrumentation logic by creating custom context tracking instead of leveraging built-in hooks",
+        "impact": "medium",
+        "likelihood": "high",
+        "mitigation": "Replace self._call_contexts with calls to fitz_ai.core.instrumentation functions like on_call_start/on_call_end",
+        "contingency": "Refactor TokenTrackingHook to use existing instrumentation hooks instead of custom state management",
+        "affected_phases": [
+          1,
+          3
+        ],
+        "verification": "Assert that no internal call context tracking is used and only standard hook methods are called"
+      },
+      {
+        "category": "quality",
+        "description": "Token extraction assumes OpenAI response structure which may change or be inconsistent in future SDK versions",
+        "impact": "medium",
+        "likelihood": "low",
+        "mitigation": "Add robust error handling and logging around token parsing with graceful degradation to None values",
+        "contingency": "Log detailed warning messages when token usage cannot be extracted due to API changes or malformed responses",
+        "affected_phases": [
+          3
+        ],
+        "verification": "Assert that TokenTrackingHook catches exceptions during token extraction without crashing"
+      },
+      {
+        "category": "resource",
+        "description": "Inconsistent handling of token tracking across different LLM provider interfaces (chat, embed, rerank) leads to incomplete coverage",
+        "impact": "medium",
+        "likelihood": "high",
+        "mitigation": "Explicitly document which methods are instrumented and provide clear guidance on extending support for additional operations",
+        "contingency": "Add explicit method exclusion lists or configuration flags that allow users to select which providers/operations they want tracked",
+        "affected_phases": [
+          1,
+          3
+        ],
+        "verification": "Assert that create_instrumented_provider only wraps chat and chat_stream methods in current implementation"
+      }
+    ],
+    "overall_risk_level": "high",
+    "recommended_contingencies": [
+      "Implement a fallback mechanism to gracefully handle missing token data by logging warnings instead of crashing the application",
+      "Add comprehensive unit tests for TokenTrackingHook that mock various API response formats including edge cases and error conditions",
+      "Create documentation explaining the limited scope of token tracking (only OpenAI) and recommend manual monitoring for other providers"
+    ]
+  }
+}

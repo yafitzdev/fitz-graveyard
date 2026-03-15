@@ -1,0 +1,16 @@
+{
+  "run": 3,
+  "elapsed_s": 609.2,
+  "success": true,
+  "recommended": "Instrumentation Hook with Provider Interface Extension",
+  "plan_size": 50112,
+  "stage_timings": {
+    "agent_gathering": 9.421999999991385,
+    "implementation_check": 2.6089999999967404,
+    "context": 71.11000000001513,
+    "architecture_design": 453.01499999998487,
+    "roadmap_risk": 69.5,
+    "coherence_check": 3.422000000020489
+  },
+  "error": null
+}

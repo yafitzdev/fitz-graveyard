@@ -1,0 +1,16 @@
+{
+  "run": 2,
+  "elapsed_s": 678.9,
+  "success": true,
+  "recommended": "Instrumented Provider Wrappers with Context Storage",
+  "plan_size": 80603,
+  "stage_timings": {
+    "agent_gathering": 9.0,
+    "implementation_check": 2.5939999999827705,
+    "context": 60.40600000001723,
+    "architecture_design": 485.60999999998603,
+    "roadmap_risk": 119.75,
+    "coherence_check": 1.4530000000086147
+  },
+  "error": null
+}

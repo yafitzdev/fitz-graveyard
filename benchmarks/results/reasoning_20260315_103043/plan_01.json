@@ -1,0 +1,1016 @@
+{
+  "context": {
+    "project_description": "Add LLM token usage tracking to monitor query costs across OpenAI, Anthropic, Cohere, and Ollama providers by instrumenting LLM calls and exposing usage data via Answer metadata.",
+    "key_requirements": [
+      "Track input/output tokens separately for chat and embedding operations",
+      "Expose token usage data through Answer metadata in SDK responses",
+      "Work with existing LLM provider protocols (ChatProvider, EmbeddingProvider) without API changes",
+      "Integrate with existing instrumentation system for hook-based tracking"
+    ],
+    "constraints": [
+      "Must work with current LLM provider protocols (ChatProvider, EmbeddingProvider)",
+      "Cannot change public API interfaces significantly",
+      "Should leverage existing instrumentation system in fitz_ai/core/instrumentation.py",
+      "All provider types (chat, embed) must be covered consistently"
+    ],
+    "existing_context": "fitz_ai/llm/providers/base.py, fitz_ai/llm/providers/openai.py, fitz_ai/llm/providers/anthropic.py, fitz_ai/llm/providers/cohere.py, fitz_ai/llm/providers/ollama.py, fitz_ai/core/instrumentation.py, fitz_ai/core/answer.py",
+    "stakeholders": [
+      "Developers who need insight into which queries are most expensive",
+      "Product Teams who require data for budgeting and pricing model decisions",
+      "Operations team who wants monitoring of LLM spend across services"
+    ],
+    "scope_boundaries": {
+      "in_scope": [
+        "Add instrumentation hooks for LLM calls",
+        "Track input/output tokens in provider implementations",
+        "Expose usage data via Answer metadata (for SDK users)"
+      ],
+      "out_of_scope": [
+        "Real-time cost calculation with pricing tiers",
+        "Dashboard/API endpoint for usage analytics",
+        "Streaming token tracking"
+      ]
+    },
+    "existing_files": [
+      "fitz_ai/core/instrumentation.py \u2014 Instrumentation system for benchmarking plugin performance",
+      "fitz_ai/llm/providers/base.py \u2014 Provider protocols for LLM clients",
+      "fitz_ai/llm/providers/openai.py \u2014 OpenAI provider wrappers using the official SDK",
+      "fitz_ai/llm/providers/anthropic.py \u2014 Anthropic provider wrappers using the official SDK",
+      "fitz_ai/llm/providers/cohere.py \u2014 Cohere provider wrappers using the official SDK",
+      "fitz_ai/llm/providers/ollama.py \u2014 Ollama provider wrappers using direct HTTP calls",
+      "fitz_ai/core/answer.py \u2014 Answer - paradigm-agnostic answer representation",
+      "fitz_ai/logging/logger.py \u2014 discovered by agent",
+      "fitz_ai/logging/tags.py \u2014 discovered by agent",
+      "fitz_ai/engines/fitz_krag/engine.py \u2014 discovered by agent",
+      "fitz_ai/sdk/fitz.py \u2014 discovered by agent",
+      "fitz_ai/api/routes/query.py \u2014 discovered by agent",
+      "fitz_ai/engines/fitz_krag/ingestion/pipeline.py \u2014 discovered by agent",
+      "fitz_ai/ingestion/diff/executor.py \u2014 discovered by agent",
+      "fitz_ai/ingestion/enrichment/pipeline.py \u2014 discovered by agent",
+      "tests/integration/cloud_fixtures.py \u2014 discovered by agent",
+      "tools/governance/eval_pipeline.py \u2014 discovered by agent",
+      "tools/governance/extract_features.py \u2014 discovered by agent",
+      "fitz_ai/cli/commands/eval.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/token_provider.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/base.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/certificates.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/m2m.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/api_key.py \u2014 discovered by agent",
+      "fitz_ai/llm/auth/composite.py \u2014 discovered by agent"
+    ],
+    "needed_artifacts": [
+      "fitz_ai/llm/instrumentation/token_tracking.py \u2014 Core tracking logic and hook implementation",
+      "fitz_ai/core/token_usage.py \u2014 Token usage data model"
+    ],
+    "assumptions": [
+      {
+        "assumption": "Tracking via Instrumentation System",
+        "impact": "Adding complexity if not well-integrated, potentially breaking existing benchmarking functionality",
+        "confidence": "high"
+      },
+      {
+        "assumption": "Data Exposure Through Answer Metadata",
+        "impact": "API compatibility issues if users don't expect this data in SDK responses",
+        "confidence": "high"
+      },
+      {
+        "assumption": "Token Counting Implementation Varies by Provider",
+        "impact": "Inaccurate counts could mislead users if not properly marked, especially for Ollama/local models requiring heuristic estimation",
+        "confidence": "medium"
+      },
+      {
+        "assumption": "Streaming Calls Need Separate Handling",
+        "impact": "Missed intermediate tracking without special handling could result in incomplete token usage data for streaming responses",
+        "confidence": "medium"
+      },
+      {
+        "assumption": "SDK Integration via Metadata Only",
+        "impact": "Users may not be satisfied with metadata-only exposure unless prominently documented, potentially requiring additional API mechanisms later",
+        "confidence": "low"
+      },
+      {
+        "assumption": "Users Want Detailed Breakdown by Provider Type",
+        "impact": "May require more complex reporting structures if users prefer provider-specific metrics over unified totals",
+        "confidence": "low"
+      }
+    ]
+  },
+  "architecture_design": {
+    "architecture": {
+      "approaches": [
+        {
+          "name": "Instrumentation-Based Tracking",
+          "description": "Extend the existing instrumentation system to capture token usage metadata from LLM provider calls using BenchmarkHook interface modifications.",
+          "pros": [
+            "Leverages existing infrastructure without major architectural changes",
+            "Minimal impact on core logic and interfaces",
+            "Provides consistent tracking across all LLM providers"
+          ],
+          "cons": [
+            "Requires modifying 5+ LLM provider implementations to return structured results with usage data",
+            "Instrumentation system needs enhancement to handle metadata aggregation",
+            "May introduce slight overhead in method call wrapping"
+          ],
+          "complexity": "high",
+          "best_for": [
+            "Projects wanting minimal disruption to existing codebase structure"
+          ]
+        },
+        {
+          "name": "Direct Provider Modification Approach",
+          "description": "Modify all LLM provider interfaces and implementations to return structured results including token usage data, then aggregate at the engine level.",
+          "pros": [
+            "Clean separation of concerns with explicit token tracking in each provider",
+            "Easier debugging and direct access to per-call usage information",
+            "Clear API contract for token consumption"
+          ],
+          "cons": [
+            "Requires extensive changes across multiple files (5+ LLM providers)",
+            "Breaking change if not done carefully with backward compatibility layers",
+            "More complex implementation due to interface modifications"
+          ],
+          "complexity": "high",
+          "best_for": [
+            "Projects needing robust token usage tracking and full visibility into consumption per method call"
+          ]
+        }
+      ],
+      "recommended": "Instrumentation-Based Tracking",
+      "reasoning": "The Instrumentation-Based Tracking approach is recommended because it leverages the existing, well-established instrumentation framework which already handles benchmarking and tracing. This approach minimizes disruption to core components while extending functionality through hooks rather than rewriting interfaces. It follows the pattern of using existing mechanisms (InstrumentedProxy, BenchmarkHook) for cross-cutting concerns like telemetry. The second approach would require extensive interface changes across 5+ provider files and risk breaking backward compatibility. Since the codebase already has Instrumentation system in place with hooks for timing/calls, extending it to capture token usage metadata is more maintainable than modifying all LLM providers' return types.",
+      "key_tradeoffs": {
+        "backward_compatibility_vs_feature_enhancement": "Adding optional token_usage fields maintains backward compatibility but requires careful implementation to avoid breaking changes in existing APIs",
+        "instrumentation_complexity_vs_tracking_accuracy": "Extending the hook system to capture metadata adds complexity but ensures accurate aggregation of usage across method calls",
+        "modular_extension_vs_system_overhaul": "Leveraging existing instrumentation framework avoids rebuilding from scratch while maintaining consistency with established patterns"
+      },
+      "technology_considerations": [
+        "Python dataclasses for structured Answer model with optional token_usage field",
+        "TypedDict for standardized result types (ChatResult, EmbeddingResult) to ensure consistent metadata handling across LLM providers",
+        "Instrumentation system extension using BenchmarkHook interface for capturing usage metadata without disrupting existing timing/call tracking",
+        "Protocol-based interfaces in LLM provider implementations to enforce structured return types while maintaining flexibility",
+        "Optional fields with None defaults in API response models (QueryResponse, ChatResponse) to preserve backward compatibility"
+      ],
+      "scope_statement": "Extend existing instrumentation framework to capture and aggregate LLM token consumption across chat, embed, rerank, and vision operations. Requires modifications to Answer class, provider interfaces, and API response models while maintaining backward compatibility."
+    },
+    "design": {
+      "adrs": [
+        {
+          "title": "ADR: Token Usage Tracking in LLM Calls",
+          "context": "The system needs to track and expose token usage from all LLM API calls (chat, embed, rerank, vision) so users can understand the cost of each query. This requires modifications across multiple components to capture, aggregate, and expose this information.",
+          "decision": "Extend Answer class with optional token_usage field, update provider interfaces to return structured results including usage data, enhance instrumentation system to capture metadata, modify API response models, and update SDK methods to propagate usage back to callers.",
+          "rationale": "This approach leverages existing architectural patterns (dataclasses, protocols, instrumentation) while maintaining backward compatibility through optional fields. It follows the established codebase conventions for extending functionality without breaking changes.",
+          "consequences": [
+            "All LLM provider implementations must be updated to return structured results with usage data",
+            "Instrumentation system requires extension to capture and aggregate token usage metadata",
+            "API response models need modification to include token_usage in responses",
+            "SDK interfaces will need updates to propagate usage information back to clients",
+            "Answer class changes are backward compatible due to optional field"
+          ],
+          "alternatives_considered": [
+            "Create separate tracking service instead of extending Answer - rejected because it would require additional coordination and break existing patterns",
+            "Modify provider methods to return tuples with usage data - rejected because it breaks established protocols and is less maintainable than structured results",
+            "Add global token counter without method-level granularity - rejected because it doesn't provide detailed cost visibility needed by users"
+          ]
+        },
+        {
+          "title": "ADR: Centralized Token Usage Tracking vs. Distributed Metric Collection",
+          "context": "Instrumentation-Based Tracking relies on a central TokenUsageHook to aggregate token usage across all operations, whereas an alternative approach could distribute token counting to individual components that know their own usage patterns.",
+          "decision": "Use centralized TokenUsageHook in InstrumentedProxy rather than distributed token tracking within each component",
+          "rationale": "This decision maintains consistency with existing instrumentation patterns and reduces the risk of double-counting or missed measurements. The central hook ensures all operations are tracked uniformly without requiring changes to individual components.",
+          "consequences": [
+            "Single point of failure for token tracking - if TokenUsageHook fails, token data may be lost",
+            "Increased coupling between core components (FitzKragEngine) and instrumentation layer (InstrumentedProxy)",
+            "Potential performance bottleneck during high-throughput operations due to centralized processing"
+          ],
+          "alternatives_considered": [
+            "Distributed approach where each component maintains its own token usage counters and reports them via existing telemetry hooks",
+            "Hybrid model that uses distributed counting but central aggregation for final reporting"
+          ]
+        }
+      ],
+      "components": [
+        {
+          "name": "Answer",
+          "purpose": "Paradigm-agnostic answer representation with optional token usage tracking",
+          "responsibilities": [
+            "Store text response from LLM queries",
+            "Maintain provenance information for source attribution",
+            "Optionally track token consumption across LLM operations"
+          ],
+          "interfaces": [
+            "__post_init__()"
+          ],
+          "dependencies": []
+        },
+        {
+          "name": "FitzKragEngine",
+          "purpose": "Knowledge Routing Augmented Generation engine that answers queries with token usage tracking",
+          "responsibilities": [
+            "Load collections and initialize components",
+            "Execute query processing pipeline including LLM calls",
+            "Aggregate token usage data from all operations in the pipeline",
+            "Return Answer objects containing both results and usage metrics"
+          ],
+          "interfaces": [
+            "__init__(config: FitzKragConfig)",
+            "answer(query: Query) -> Answer",
+            "_check_cloud_cache(query_text: str, addresses: list) -> Answer | None",
+            "_store_cloud_cache(query_text: str, addresses: list, answer: Answer) -> None"
+          ],
+          "dependencies": [
+            "Answer",
+            "ChatProvider",
+            "EmbeddingProvider",
+            "RerankProvider",
+            "VisionProvider"
+          ]
+        },
+        {
+          "name": "InstrumentedProxy",
+          "purpose": "Wrapper that adds instrumentation to track method calls including token usage metadata",
+          "responsibilities": [
+            "Wrap LLM provider objects with timing and usage tracking hooks",
+            "Capture call start/end events for benchmarking purposes",
+            "Collect and aggregate token consumption data from wrapped methods"
+          ],
+          "interfaces": [
+            "__init__(target: Any, layer: str, plugin_name: str, methods_to_track: set[str] | None)",
+            "_wrap_method(method: Callable, method_name: str) -> Callable"
+          ],
+          "dependencies": [
+            "BenchmarkHook",
+            "CachingHook"
+          ]
+        },
+        {
+          "name": "TokenUsageHook",
+          "purpose": "Instrumentation hook that captures and aggregates token usage from LLM calls",
+          "responsibilities": [
+            "Track method call start events with context information",
+            "Capture result metadata including token usage when available",
+            "Aggregate usage data by method name for reporting"
+          ],
+          "interfaces": [
+            "on_call_start(layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any",
+            "on_call_end(context: Any, result: Any, error: Exception | None) -> None"
+          ],
+          "dependencies": []
+        },
+        {
+          "name": "ChatProvider",
+          "purpose": "Protocol for chat completion LLM providers with token usage support",
+          "responsibilities": [
+            "Provide chat interface that returns structured results including token usage data"
+          ],
+          "interfaces": [
+            "chat(messages: list[dict[str, Any]]) -> ChatResult"
+          ],
+          "dependencies": []
+        },
+        {
+          "name": "EmbeddingProvider",
+          "purpose": "Protocol for embedding generation LLM providers with token usage support",
+          "responsibilities": [
+            "Provide embedding interface that returns structured results including token usage data"
+          ],
+          "interfaces": [
+            "embed(text: str) -> EmbeddingResult",
+            "embed_batch(texts: list[str]) -> list[EmbeddingResult]"
+          ],
+          "dependencies": []
+        },
+        {
+          "name": "RerankProvider",
+          "purpose": "Protocol for document reranking LLM providers with token usage support",
+          "responsibilities": [
+            "Provide reranking interface that returns structured results including token usage data"
+          ],
+          "interfaces": [
+            "rerank(query: str, documents: list[str], top_n: int | None) -> list[RerankResult]"
+          ],
+          "dependencies": []
+        },
+        {
+          "name": "VisionProvider",
+          "purpose": "Protocol for image description LLM providers with token usage support",
+          "responsibilities": [
+            "Provide vision interface that returns structured results including token usage data"
+          ],
+          "interfaces": [
+            "describe_image(image_base64: str, prompt: str | None) -> VisionResult"
+          ],
+          "dependencies": []
+        },
+        {
+          "name": "fitz",
+          "purpose": "Stateful SDK for the Fitz KRAG framework with token usage support in responses",
+          "responsibilities": [
+            "Provide user-facing API for querying knowledge bases",
+            "Return Answer objects that may include token usage information",
+            "Handle collection management and configuration"
+          ],
+          "interfaces": [
+            "__init__(collection: str, config_path: Optional[Union[str, Path]], auto_init: bool) -> None",
+            "ask(question: str, top_k: Optional[int], conversation_context: Optional['ConversationContext']) -> Answer",
+            "query(question: str, conversation_context: Optional['ConversationContext']) -> Answer"
+          ],
+          "dependencies": [
+            "FitzKragEngine",
+            "Answer"
+          ]
+        }
+      ],
+      "data_model": {
+        "Answer": [
+          "text: str",
+          "provenance: list[Provenance]",
+          "constraints: list[str] | None = None",
+          "token_usage: dict[str, int] | None = None"
+        ],
+        "ChatResult": [
+          "text: str",
+          "token_usage: dict[str, int]"
+        ],
+        "EmbeddingResult": [
+          "embeddings: list[float]",
+          "token_usage: dict[str, int]"
+        ],
+        "RerankResult": [
+          "document_index: int",
+          "relevance_score: float"
+        ],
+        "VisionResult": [
+          "description: str",
+          "token_usage: dict[str, int]"
+        ],
+        "QueryResponse": [
+          "answer: Answer",
+          "token_usage: dict[str, int] | None = None"
+        ],
+        "ChatResponse": [
+          "answer: Answer",
+          "token_usage: dict[str, int] | None = None"
+        ]
+      },
+      "integration_points": [
+        "ExternalSystem \u2014 OpenAI API calls for chat, embedding, and vision services",
+        "ExternalSystem \u2014 Anthropic API calls for chat and vision services",
+        "ExternalSystem \u2014 Cohere API calls for chat, embedding, and reranking services",
+        "ExternalSystem \u2014 Ollama API calls for chat, embedding, reranking, and vision services"
+      ],
+      "artifacts": [
+        {
+          "filename": "fitz_ai/core/answer.py",
+          "content": "from dataclasses import dataclass\nfrom typing import List, Optional\n\nfrom fitz_ai.core.answer_mode import AnswerMode\nfrom fitz_ai.core.provenance import Provenance\n\ndef _validate_answer_mode(mode: AnswerMode) -> None:\n    # Remove the `defined` check since it's not used and always True\n    pass\n\n@dataclass\nclass Answer:\n    text: str\n    provenance: List[Provenance]\n    constraints: Optional[List[str]] = None\n    token_usage: Optional[dict[str, int]] = None\n\n    def __post_init__(self):\n        _validate_answer_mode(AnswerMode.TEXT)",
+          "purpose": "Extends the Answer dataclass to include optional token_usage field for tracking LLM token consumption"
+        },
+        {
+          "filename": "fitz_ai/llm/providers/base.py",
+          "content": "from __future__ import annotations\nfrom dataclasses import dataclass\nfrom typing import Iterator, List, Protocol, Any, TypedDict\n\nclass RerankResult(TypedDict):\n    document: str\n    relevance_score: float\n\nclass ChatResult(TypedDict):\n    text: str\n    token_usage: dict[str, int]\n\nclass EmbeddingResult(TypedDict):\n    embeddings: list[float]\n    token_usage: dict[str, int]\n\nclass ChatProvider(Protocol):\n    def chat(self, messages: list[dict[str, Any]]) -> ChatResult:\n        ...\n\nclass StreamingChatProvider(Protocol):\n    def chat_stream(self, messages: list[dict[str, Any]]) -> Iterator[str]:\n        ...\n\nclass EmbeddingProvider(Protocol):\n    def embed(self, text: str) -> EmbeddingResult:\n        ...\n    def embed_batch(self, texts: list[str]) -> list[EmbeddingResult]:\n        ...\n    def dimensions(self) -> int:\n        ...\n\nclass RerankProvider(Protocol):\n    def rerank(self, query: str, documents: list[str], top_n: int | None) -> list[RerankResult]:\n        ...\n\nclass VisionProvider(Protocol):\n    def describe_image(self, image_base64: str, prompt: str | None) -> str:\n        ...\n",
+          "purpose": "Updates LLM provider protocols to return structured results with token usage metadata instead of simple types"
+        },
+        {
+          "filename": "fitz_ai/core/instrumentation.py",
+          "content": "from __future__ import annotations\nimport functools\nimport logging\nimport threading\nfrom typing import Any, Callable, Dict, List, Optional, Set, Tuple, TypeVar, Union\n\nclass BenchmarkHook(Protocol):\n    def on_call_start(self, layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any:\n        ...\n    def on_call_end(self, context: Any, result: Any, error: Exception | None) -> None:\n        ...\n\nclass CachingHook(Protocol):\n    def get_cached_result(self, layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any:\n        ...\n    def cache_result(self, layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict, result: Any) -> None:\n        ...\n\nclass TokenUsageHook(BenchmarkHook):\n    def __init__(self):\n        self.usage_by_method: Dict[str, List[dict[str, int]]] = {}\n\n    def on_call_start(self, layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any:\n        return {\"method\": method}\n\n    def on_call_end(self, context: Any, result: Any, error: Exception | None) -> None:\n        if hasattr(result, 'token_usage') and result.token_usage is not None:\n            method_name = context.get('method', 'unknown')\n            self.usage_by_method.setdefault(method_name, []).append(result.token_usage)\n\nregister_hook: Callable[[BenchmarkHook], None]\nunregister_hook: Callable[[BenchmarkHook], None]\nclear_hooks: Callable[[], None]\nhas_hooks: Callable[[], bool]\nget_hooks: Callable[[], list[BenchmarkHook]]\n\n# Existing InstrumentedProxy class definition remains unchanged",
+          "purpose": "Enhances the instrumentation system with a TokenUsageHook to capture and aggregate token usage metadata from LLM calls"
+        },
+        {
+          "filename": "fitz_ai/engines/fitz_krag/engine.py",
+          "content": "# ... existing imports ...\nfrom fitz_ai.core.answer import Answer\n# ... rest of imports unchanged ...\n\ndef _report_timings(progress: Callable[[str], None], timings: list[tuple[str, float]], pipeline_start: float) -> None:\n    # ... existing implementation unchanged ...\n\nclass FitzKragEngine:\n    def __init__(self, config: FitzKragConfig):\n        # ... existing init logic ...\n\n    def answer(self, query: Query) -> Answer:\n        total_usage: dict[str, int] = {}\n        \n        # Throughout pipeline execution, collect token_usage from all LLM calls\n        # This would be done by instrumented wrappers or direct tracking\n        \n        return Answer(\n            text=final_text,\n            provenance=provenance_list,\n            constraints=constraint_list,\n            token_usage=total_usage if total_usage else None\n        )\n    # ... rest of class unchanged ...",
+          "purpose": "Modifies FitzKragEngine.answer() to accumulate and return token usage data in Answer objects"
+        },
+        {
+          "filename": "fitz_ai/sdk/fitz.py",
+          "content": "# ... existing imports ...\nfrom fitz_ai.core.answer import Answer\n# ... rest of imports unchanged ...\n\nclass fitz:\n    def __init__(self, collection: str, config_path: Optional[Union[str, Path]], auto_init: bool) -> None:\n        # ... existing init logic ...\n\n    def ask(self, question: str, top_k: Optional[int], conversation_context: Optional['ConversationContext']) -> Answer:\n        # ... existing logic ...\n        \n        engine_result = self.engine.answer(Query(text=question, context=conversation_context))\n        return engine_result  # Already includes token_usage after changes\n    \n    def query(self, question: str, conversation_context: Optional['ConversationContext']) -> Answer:\n        # ... existing logic ...\n        \n        engine_result = self.engine.answer(Query(text=question, context=conversation_context))\n        return engine_result  # Already includes token_usage after changes\n    # ... rest of class unchanged ...",
+          "purpose": "Updates SDK methods to return Answer objects that now include token usage data"
+        }
+      ]
+    }
+  },
+  "architecture": {
+    "approaches": [
+      {
+        "name": "Instrumentation-Based Tracking",
+        "description": "Extend the existing instrumentation system to capture token usage metadata from LLM provider calls using BenchmarkHook interface modifications.",
+        "pros": [
+          "Leverages existing infrastructure without major architectural changes",
+          "Minimal impact on core logic and interfaces",
+          "Provides consistent tracking across all LLM providers"
+        ],
+        "cons": [
+          "Requires modifying 5+ LLM provider implementations to return structured results with usage data",
+          "Instrumentation system needs enhancement to handle metadata aggregation",
+          "May introduce slight overhead in method call wrapping"
+        ],
+        "complexity": "high",
+        "best_for": [
+          "Projects wanting minimal disruption to existing codebase structure"
+        ]
+      },
+      {
+        "name": "Direct Provider Modification Approach",
+        "description": "Modify all LLM provider interfaces and implementations to return structured results including token usage data, then aggregate at the engine level.",
+        "pros": [
+          "Clean separation of concerns with explicit token tracking in each provider",
+          "Easier debugging and direct access to per-call usage information",
+          "Clear API contract for token consumption"
+        ],
+        "cons": [
+          "Requires extensive changes across multiple files (5+ LLM providers)",
+          "Breaking change if not done carefully with backward compatibility layers",
+          "More complex implementation due to interface modifications"
+        ],
+        "complexity": "high",
+        "best_for": [
+          "Projects needing robust token usage tracking and full visibility into consumption per method call"
+        ]
+      }
+    ],
+    "recommended": "Instrumentation-Based Tracking",
+    "reasoning": "The Instrumentation-Based Tracking approach is recommended because it leverages the existing, well-established instrumentation framework which already handles benchmarking and tracing. This approach minimizes disruption to core components while extending functionality through hooks rather than rewriting interfaces. It follows the pattern of using existing mechanisms (InstrumentedProxy, BenchmarkHook) for cross-cutting concerns like telemetry. The second approach would require extensive interface changes across 5+ provider files and risk breaking backward compatibility. Since the codebase already has Instrumentation system in place with hooks for timing/calls, extending it to capture token usage metadata is more maintainable than modifying all LLM providers' return types.",
+    "key_tradeoffs": {
+      "backward_compatibility_vs_feature_enhancement": "Adding optional token_usage fields maintains backward compatibility but requires careful implementation to avoid breaking changes in existing APIs",
+      "instrumentation_complexity_vs_tracking_accuracy": "Extending the hook system to capture metadata adds complexity but ensures accurate aggregation of usage across method calls",
+      "modular_extension_vs_system_overhaul": "Leveraging existing instrumentation framework avoids rebuilding from scratch while maintaining consistency with established patterns"
+    },
+    "technology_considerations": [
+      "Python dataclasses for structured Answer model with optional token_usage field",
+      "TypedDict for standardized result types (ChatResult, EmbeddingResult) to ensure consistent metadata handling across LLM providers",
+      "Instrumentation system extension using BenchmarkHook interface for capturing usage metadata without disrupting existing timing/call tracking",
+      "Protocol-based interfaces in LLM provider implementations to enforce structured return types while maintaining flexibility",
+      "Optional fields with None defaults in API response models (QueryResponse, ChatResponse) to preserve backward compatibility"
+    ],
+    "scope_statement": "Extend existing instrumentation framework to capture and aggregate LLM token consumption across chat, embed, rerank, and vision operations. Requires modifications to Answer class, provider interfaces, and API response models while maintaining backward compatibility."
+  },
+  "design": {
+    "adrs": [
+      {
+        "title": "ADR: Token Usage Tracking in LLM Calls",
+        "context": "The system needs to track and expose token usage from all LLM API calls (chat, embed, rerank, vision) so users can understand the cost of each query. This requires modifications across multiple components to capture, aggregate, and expose this information.",
+        "decision": "Extend Answer class with optional token_usage field, update provider interfaces to return structured results including usage data, enhance instrumentation system to capture metadata, modify API response models, and update SDK methods to propagate usage back to callers.",
+        "rationale": "This approach leverages existing architectural patterns (dataclasses, protocols, instrumentation) while maintaining backward compatibility through optional fields. It follows the established codebase conventions for extending functionality without breaking changes.",
+        "consequences": [
+          "All LLM provider implementations must be updated to return structured results with usage data",
+          "Instrumentation system requires extension to capture and aggregate token usage metadata",
+          "API response models need modification to include token_usage in responses",
+          "SDK interfaces will need updates to propagate usage information back to clients",
+          "Answer class changes are backward compatible due to optional field"
+        ],
+        "alternatives_considered": [
+          "Create separate tracking service instead of extending Answer - rejected because it would require additional coordination and break existing patterns",
+          "Modify provider methods to return tuples with usage data - rejected because it breaks established protocols and is less maintainable than structured results",
+          "Add global token counter without method-level granularity - rejected because it doesn't provide detailed cost visibility needed by users"
+        ]
+      },
+      {
+        "title": "ADR: Centralized Token Usage Tracking vs. Distributed Metric Collection",
+        "context": "Instrumentation-Based Tracking relies on a central TokenUsageHook to aggregate token usage across all operations, whereas an alternative approach could distribute token counting to individual components that know their own usage patterns.",
+        "decision": "Use centralized TokenUsageHook in InstrumentedProxy rather than distributed token tracking within each component",
+        "rationale": "This decision maintains consistency with existing instrumentation patterns and reduces the risk of double-counting or missed measurements. The central hook ensures all operations are tracked uniformly without requiring changes to individual components.",
+        "consequences": [
+          "Single point of failure for token tracking - if TokenUsageHook fails, token data may be lost",
+          "Increased coupling between core components (FitzKragEngine) and instrumentation layer (InstrumentedProxy)",
+          "Potential performance bottleneck during high-throughput operations due to centralized processing"
+        ],
+        "alternatives_considered": [
+          "Distributed approach where each component maintains its own token usage counters and reports them via existing telemetry hooks",
+          "Hybrid model that uses distributed counting but central aggregation for final reporting"
+        ]
+      }
+    ],
+    "components": [
+      {
+        "name": "Answer",
+        "purpose": "Paradigm-agnostic answer representation with optional token usage tracking",
+        "responsibilities": [
+          "Store text response from LLM queries",
+          "Maintain provenance information for source attribution",
+          "Optionally track token consumption across LLM operations"
+        ],
+        "interfaces": [
+          "__post_init__()"
+        ],
+        "dependencies": []
+      },
+      {
+        "name": "FitzKragEngine",
+        "purpose": "Knowledge Routing Augmented Generation engine that answers queries with token usage tracking",
+        "responsibilities": [
+          "Load collections and initialize components",
+          "Execute query processing pipeline including LLM calls",
+          "Aggregate token usage data from all operations in the pipeline",
+          "Return Answer objects containing both results and usage metrics"
+        ],
+        "interfaces": [
+          "__init__(config: FitzKragConfig)",
+          "answer(query: Query) -> Answer",
+          "_check_cloud_cache(query_text: str, addresses: list) -> Answer | None",
+          "_store_cloud_cache(query_text: str, addresses: list, answer: Answer) -> None"
+        ],
+        "dependencies": [
+          "Answer",
+          "ChatProvider",
+          "EmbeddingProvider",
+          "RerankProvider",
+          "VisionProvider"
+        ]
+      },
+      {
+        "name": "InstrumentedProxy",
+        "purpose": "Wrapper that adds instrumentation to track method calls including token usage metadata",
+        "responsibilities": [
+          "Wrap LLM provider objects with timing and usage tracking hooks",
+          "Capture call start/end events for benchmarking purposes",
+          "Collect and aggregate token consumption data from wrapped methods"
+        ],
+        "interfaces": [
+          "__init__(target: Any, layer: str, plugin_name: str, methods_to_track: set[str] | None)",
+          "_wrap_method(method: Callable, method_name: str) -> Callable"
+        ],
+        "dependencies": [
+          "BenchmarkHook",
+          "CachingHook"
+        ]
+      },
+      {
+        "name": "TokenUsageHook",
+        "purpose": "Instrumentation hook that captures and aggregates token usage from LLM calls",
+        "responsibilities": [
+          "Track method call start events with context information",
+          "Capture result metadata including token usage when available",
+          "Aggregate usage data by method name for reporting"
+        ],
+        "interfaces": [
+          "on_call_start(layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any",
+          "on_call_end(context: Any, result: Any, error: Exception | None) -> None"
+        ],
+        "dependencies": []
+      },
+      {
+        "name": "ChatProvider",
+        "purpose": "Protocol for chat completion LLM providers with token usage support",
+        "responsibilities": [
+          "Provide chat interface that returns structured results including token usage data"
+        ],
+        "interfaces": [
+          "chat(messages: list[dict[str, Any]]) -> ChatResult"
+        ],
+        "dependencies": []
+      },
+      {
+        "name": "EmbeddingProvider",
+        "purpose": "Protocol for embedding generation LLM providers with token usage support",
+        "responsibilities": [
+          "Provide embedding interface that returns structured results including token usage data"
+        ],
+        "interfaces": [
+          "embed(text: str) -> EmbeddingResult",
+          "embed_batch(texts: list[str]) -> list[EmbeddingResult]"
+        ],
+        "dependencies": []
+      },
+      {
+        "name": "RerankProvider",
+        "purpose": "Protocol for document reranking LLM providers with token usage support",
+        "responsibilities": [
+          "Provide reranking interface that returns structured results including token usage data"
+        ],
+        "interfaces": [
+          "rerank(query: str, documents: list[str], top_n: int | None) -> list[RerankResult]"
+        ],
+        "dependencies": []
+      },
+      {
+        "name": "VisionProvider",
+        "purpose": "Protocol for image description LLM providers with token usage support",
+        "responsibilities": [
+          "Provide vision interface that returns structured results including token usage data"
+        ],
+        "interfaces": [
+          "describe_image(image_base64: str, prompt: str | None) -> VisionResult"
+        ],
+        "dependencies": []
+      },
+      {
+        "name": "fitz",
+        "purpose": "Stateful SDK for the Fitz KRAG framework with token usage support in responses",
+        "responsibilities": [
+          "Provide user-facing API for querying knowledge bases",
+          "Return Answer objects that may include token usage information",
+          "Handle collection management and configuration"
+        ],
+        "interfaces": [
+          "__init__(collection: str, config_path: Optional[Union[str, Path]], auto_init: bool) -> None",
+          "ask(question: str, top_k: Optional[int], conversation_context: Optional['ConversationContext']) -> Answer",
+          "query(question: str, conversation_context: Optional['ConversationContext']) -> Answer"
+        ],
+        "dependencies": [
+          "FitzKragEngine",
+          "Answer"
+        ]
+      }
+    ],
+    "data_model": {
+      "Answer": [
+        "text: str",
+        "provenance: list[Provenance]",
+        "constraints: list[str] | None = None",
+        "token_usage: dict[str, int] | None = None"
+      ],
+      "ChatResult": [
+        "text: str",
+        "token_usage: dict[str, int]"
+      ],
+      "EmbeddingResult": [
+        "embeddings: list[float]",
+        "token_usage: dict[str, int]"
+      ],
+      "RerankResult": [
+        "document_index: int",
+        "relevance_score: float"
+      ],
+      "VisionResult": [
+        "description: str",
+        "token_usage: dict[str, int]"
+      ],
+      "QueryResponse": [
+        "answer: Answer",
+        "token_usage: dict[str, int] | None = None"
+      ],
+      "ChatResponse": [
+        "answer: Answer",
+        "token_usage: dict[str, int] | None = None"
+      ]
+    },
+    "integration_points": [
+      "ExternalSystem \u2014 OpenAI API calls for chat, embedding, and vision services",
+      "ExternalSystem \u2014 Anthropic API calls for chat and vision services",
+      "ExternalSystem \u2014 Cohere API calls for chat, embedding, and reranking services",
+      "ExternalSystem \u2014 Ollama API calls for chat, embedding, reranking, and vision services"
+    ],
+    "artifacts": [
+      {
+        "filename": "fitz_ai/core/answer.py",
+        "content": "from dataclasses import dataclass\nfrom typing import List, Optional\n\nfrom fitz_ai.core.answer_mode import AnswerMode\nfrom fitz_ai.core.provenance import Provenance\n\ndef _validate_answer_mode(mode: AnswerMode) -> None:\n    # Remove the `defined` check since it's not used and always True\n    pass\n\n@dataclass\nclass Answer:\n    text: str\n    provenance: List[Provenance]\n    constraints: Optional[List[str]] = None\n    token_usage: Optional[dict[str, int]] = None\n\n    def __post_init__(self):\n        _validate_answer_mode(AnswerMode.TEXT)",
+        "purpose": "Extends the Answer dataclass to include optional token_usage field for tracking LLM token consumption"
+      },
+      {
+        "filename": "fitz_ai/llm/providers/base.py",
+        "content": "from __future__ import annotations\nfrom dataclasses import dataclass\nfrom typing import Iterator, List, Protocol, Any, TypedDict\n\nclass RerankResult(TypedDict):\n    document: str\n    relevance_score: float\n\nclass ChatResult(TypedDict):\n    text: str\n    token_usage: dict[str, int]\n\nclass EmbeddingResult(TypedDict):\n    embeddings: list[float]\n    token_usage: dict[str, int]\n\nclass ChatProvider(Protocol):\n    def chat(self, messages: list[dict[str, Any]]) -> ChatResult:\n        ...\n\nclass StreamingChatProvider(Protocol):\n    def chat_stream(self, messages: list[dict[str, Any]]) -> Iterator[str]:\n        ...\n\nclass EmbeddingProvider(Protocol):\n    def embed(self, text: str) -> EmbeddingResult:\n        ...\n    def embed_batch(self, texts: list[str]) -> list[EmbeddingResult]:\n        ...\n    def dimensions(self) -> int:\n        ...\n\nclass RerankProvider(Protocol):\n    def rerank(self, query: str, documents: list[str], top_n: int | None) -> list[RerankResult]:\n        ...\n\nclass VisionProvider(Protocol):\n    def describe_image(self, image_base64: str, prompt: str | None) -> str:\n        ...\n",
+        "purpose": "Updates LLM provider protocols to return structured results with token usage metadata instead of simple types"
+      },
+      {
+        "filename": "fitz_ai/core/instrumentation.py",
+        "content": "from __future__ import annotations\nimport functools\nimport logging\nimport threading\nfrom typing import Any, Callable, Dict, List, Optional, Set, Tuple, TypeVar, Union\n\nclass BenchmarkHook(Protocol):\n    def on_call_start(self, layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any:\n        ...\n    def on_call_end(self, context: Any, result: Any, error: Exception | None) -> None:\n        ...\n\nclass CachingHook(Protocol):\n    def get_cached_result(self, layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any:\n        ...\n    def cache_result(self, layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict, result: Any) -> None:\n        ...\n\nclass TokenUsageHook(BenchmarkHook):\n    def __init__(self):\n        self.usage_by_method: Dict[str, List[dict[str, int]]] = {}\n\n    def on_call_start(self, layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any:\n        return {\"method\": method}\n\n    def on_call_end(self, context: Any, result: Any, error: Exception | None) -> None:\n        if hasattr(result, 'token_usage') and result.token_usage is not None:\n            method_name = context.get('method', 'unknown')\n            self.usage_by_method.setdefault(method_name, []).append(result.token_usage)\n\nregister_hook: Callable[[BenchmarkHook], None]\nunregister_hook: Callable[[BenchmarkHook], None]\nclear_hooks: Callable[[], None]\nhas_hooks: Callable[[], bool]\nget_hooks: Callable[[], list[BenchmarkHook]]\n\n# Existing InstrumentedProxy class definition remains unchanged",
+        "purpose": "Enhances the instrumentation system with a TokenUsageHook to capture and aggregate token usage metadata from LLM calls"
+      },
+      {
+        "filename": "fitz_ai/engines/fitz_krag/engine.py",
+        "content": "# ... existing imports ...\nfrom fitz_ai.core.answer import Answer\n# ... rest of imports unchanged ...\n\ndef _report_timings(progress: Callable[[str], None], timings: list[tuple[str, float]], pipeline_start: float) -> None:\n    # ... existing implementation unchanged ...\n\nclass FitzKragEngine:\n    def __init__(self, config: FitzKragConfig):\n        # ... existing init logic ...\n\n    def answer(self, query: Query) -> Answer:\n        total_usage: dict[str, int] = {}\n        \n        # Throughout pipeline execution, collect token_usage from all LLM calls\n        # This would be done by instrumented wrappers or direct tracking\n        \n        return Answer(\n            text=final_text,\n            provenance=provenance_list,\n            constraints=constraint_list,\n            token_usage=total_usage if total_usage else None\n        )\n    # ... rest of class unchanged ...",
+        "purpose": "Modifies FitzKragEngine.answer() to accumulate and return token usage data in Answer objects"
+      },
+      {
+        "filename": "fitz_ai/sdk/fitz.py",
+        "content": "# ... existing imports ...\nfrom fitz_ai.core.answer import Answer\n# ... rest of imports unchanged ...\n\nclass fitz:\n    def __init__(self, collection: str, config_path: Optional[Union[str, Path]], auto_init: bool) -> None:\n        # ... existing init logic ...\n\n    def ask(self, question: str, top_k: Optional[int], conversation_context: Optional['ConversationContext']) -> Answer:\n        # ... existing logic ...\n        \n        engine_result = self.engine.answer(Query(text=question, context=conversation_context))\n        return engine_result  # Already includes token_usage after changes\n    \n    def query(self, question: str, conversation_context: Optional['ConversationContext']) -> Answer:\n        # ... existing logic ...\n        \n        engine_result = self.engine.answer(Query(text=question, context=conversation_context))\n        return engine_result  # Already includes token_usage after changes\n    # ... rest of class unchanged ...",
+        "purpose": "Updates SDK methods to return Answer objects that now include token usage data"
+      }
+    ]
+  },
+  "roadmap_risk": {
+    "roadmap": {
+      "phases": [
+        {
+          "number": 0,
+          "name": "Read Before Writing",
+          "objective": "Verify integration points by reading source",
+          "deliverables": [
+            "Verified: fitz_ai/llm/providers/base.py",
+            "Verified: fitz_ai/llm/providers/openai.py",
+            "Verified: fitz_ai/llm/providers/anthropic.py",
+            "Verified: fitz_ai/llm/providers/cohere.py",
+            "Verified: fitz_ai/llm/providers/ollama.py"
+          ],
+          "dependencies": [],
+          "estimated_complexity": "low",
+          "key_risks": [],
+          "verification_command": "pytest tests/llm/providers/test_base.py tests/llm/providers/test_openai.py tests/llm/providers/test_anthropic.py tests/llm/providers/test_cohere.py tests/llm/providers/test_ollama.py -v",
+          "estimated_effort": "~15 min"
+        },
+        {
+          "number": 2,
+          "name": "Create TokenUsage Data Model",
+          "objective": "Implement a data model to represent token usage information for LLM operations",
+          "deliverables": [
+            "New file fitz_ai/core/token_usage.py with TokenUsage dataclass"
+          ],
+          "dependencies": [],
+          "estimated_complexity": "low",
+          "key_risks": [
+            "Data model may not be extensible enough for all provider formats"
+          ],
+          "verification_command": "python -c \"from fitz_ai.core.token_usage import TokenUsage; t = TokenUsage(100, 200); print(t.to_dict())\"",
+          "estimated_effort": "~1 hour"
+        },
+        {
+          "number": 3,
+          "name": "Implement Instrumentation Hook for Token Tracking",
+          "objective": "Create a hook that captures token usage metadata during LLM calls through the existing instrumentation system",
+          "deliverables": [
+            "New file fitz_ai/core/token_tracking.py with TokenUsageHook class and utility functions"
+          ],
+          "dependencies": [
+            2
+          ],
+          "estimated_complexity": "medium",
+          "key_risks": [
+            "Provider response formats vary significantly across LLM providers",
+            "Hook may not correctly extract token usage from all provider responses"
+          ],
+          "verification_command": "python -c \"from fitz_ai.core.token_tracking import TokenUsageHook; h = TokenUsageHook(); print('Hook created successfully')\"",
+          "estimated_effort": "~2 hours"
+        },
+        {
+          "number": 4,
+          "name": "Modify Answer Class to Support Token Usage",
+          "objective": "Extend the Answer class to handle token usage data in its metadata field",
+          "deliverables": [
+            "Modified fitz_ai/core/answer.py with add_token_usage method"
+          ],
+          "dependencies": [
+            2
+          ],
+          "estimated_complexity": "low",
+          "key_risks": [
+            "Metadata aggregation logic may not handle edge cases properly"
+          ],
+          "verification_command": "python -c \"from fitz_ai.core.answer import Answer; from fitz_ai.core.token_usage import TokenUsage; a = Answer('test'); t = TokenUsage(10, 20); a.add_token_usage(t); print(a.metadata['token_usage'])\"",
+          "estimated_effort": "~1 hour"
+        },
+        {
+          "number": 5,
+          "name": "Update SDK Interface to Attach Token Usage",
+          "objective": "Modify the SDK's ask/query methods to consume token usage data from hooks and attach it to answers",
+          "deliverables": [
+            "Updated fitz_ai/sdk/fitz.py with token usage attachment logic"
+          ],
+          "dependencies": [
+            3,
+            4
+          ],
+          "estimated_complexity": "medium",
+          "key_risks": [
+            "Integration may not work properly if hooks aren't registered correctly",
+            "Performance impact from hook processing in hot path"
+          ],
+          "verification_command": "pytest tests/test_sdk.py -v",
+          "estimated_effort": "~2 hours"
+        }
+      ],
+      "critical_path": [
+        0,
+        2,
+        3,
+        5
+      ],
+      "parallel_opportunities": [
+        [
+          4,
+          6
+        ]
+      ],
+      "total_phases": 5
+    },
+    "risk": {
+      "risks": [
+        {
+          "category": "technical",
+          "description": "Token tracking hook may not correctly extract token usage from all provider response formats",
+          "impact": "high",
+          "likelihood": "medium",
+          "mitigation": "Implement comprehensive fallback strategies in _extract_tokens_from_response to handle various LLM provider response structures",
+          "contingency": "Log extraction failures and fall back to zero token tracking with warning messages",
+          "affected_phases": [
+            1,
+            2,
+            3
+          ],
+          "verification": "Test with OpenAI, Cohere, Anthropic responses using mock data"
+        },
+        {
+          "category": "resource",
+          "description": "Instrumentation hooks may impact performance due to metadata collection overhead during LLM calls",
+          "impact": "medium",
+          "likelihood": "high",
+          "mitigation": "Use lazy initialization and conditional hook registration based on feature flags",
+          "contingency": "Implement optional token tracking via configuration flag with default disabled",
+          "affected_phases": [
+            1,
+            2,
+            3
+          ],
+          "verification": "Benchmark execution time differences when hooks enabled vs disabled"
+        },
+        {
+          "category": "quality",
+          "description": "Token aggregation logic may not properly handle multiple LLM calls in a single query flow",
+          "impact": "medium",
+          "likelihood": "high",
+          "mitigation": "Implement proper token key generation using layer/plugin/method combinations to distinguish different LLM operations",
+          "contingency": "Add unit tests for multi-call scenarios and verify correct aggregation via test fixtures",
+          "affected_phases": [
+            1,
+            2,
+            3
+          ],
+          "verification": "Write integration tests covering multiple LLM calls within a single ask() invocation"
+        },
+        {
+          "category": "external",
+          "description": "Some LLM providers might not expose token usage in response objects causing silent failures",
+          "impact": "high",
+          "likelihood": "medium",
+          "mitigation": "Implement robust error handling and graceful degradation with empty tokens when extraction fails",
+          "contingency": "Create fallback mechanism to estimate token counts based on text length if actual token data unavailable",
+          "affected_phases": [
+            1,
+            2
+          ],
+          "verification": "Verify all major provider types (OpenAI/Cohere/Anthropic/Ollama) handle gracefully"
+        }
+      ],
+      "overall_risk_level": "high",
+      "recommended_contingencies": [
+        "Add configuration flag to disable token tracking when performance is critical",
+        "Implement fallback estimation logic for token counts based on text length if provider doesn't supply usage data",
+        "Create comprehensive unit and integration tests covering all supported LLM providers' response formats"
+      ]
+    }
+  },
+  "roadmap": {
+    "phases": [
+      {
+        "number": 0,
+        "name": "Read Before Writing",
+        "objective": "Verify integration points by reading source",
+        "deliverables": [
+          "Verified: fitz_ai/llm/providers/base.py",
+          "Verified: fitz_ai/llm/providers/openai.py",
+          "Verified: fitz_ai/llm/providers/anthropic.py",
+          "Verified: fitz_ai/llm/providers/cohere.py",
+          "Verified: fitz_ai/llm/providers/ollama.py"
+        ],
+        "dependencies": [],
+        "estimated_complexity": "low",
+        "key_risks": [],
+        "verification_command": "pytest tests/llm/providers/test_base.py tests/llm/providers/test_openai.py tests/llm/providers/test_anthropic.py tests/llm/providers/test_cohere.py tests/llm/providers/test_ollama.py -v",
+        "estimated_effort": "~15 min"
+      },
+      {
+        "number": 2,
+        "name": "Create TokenUsage Data Model",
+        "objective": "Implement a data model to represent token usage information for LLM operations",
+        "deliverables": [
+          "New file fitz_ai/core/token_usage.py with TokenUsage dataclass"
+        ],
+        "dependencies": [],
+        "estimated_complexity": "low",
+        "key_risks": [
+          "Data model may not be extensible enough for all provider formats"
+        ],
+        "verification_command": "python -c \"from fitz_ai.core.token_usage import TokenUsage; t = TokenUsage(100, 200); print(t.to_dict())\"",
+        "estimated_effort": "~1 hour"
+      },
+      {
+        "number": 3,
+        "name": "Implement Instrumentation Hook for Token Tracking",
+        "objective": "Create a hook that captures token usage metadata during LLM calls through the existing instrumentation system",
+        "deliverables": [
+          "New file fitz_ai/core/token_tracking.py with TokenUsageHook class and utility functions"
+        ],
+        "dependencies": [
+          2
+        ],
+        "estimated_complexity": "medium",
+        "key_risks": [
+          "Provider response formats vary significantly across LLM providers",
+          "Hook may not correctly extract token usage from all provider responses"
+        ],
+        "verification_command": "python -c \"from fitz_ai.core.token_tracking import TokenUsageHook; h = TokenUsageHook(); print('Hook created successfully')\"",
+        "estimated_effort": "~2 hours"
+      },
+      {
+        "number": 4,
+        "name": "Modify Answer Class to Support Token Usage",
+        "objective": "Extend the Answer class to handle token usage data in its metadata field",
+        "deliverables": [
+          "Modified fitz_ai/core/answer.py with add_token_usage method"
+        ],
+        "dependencies": [
+          2
+        ],
+        "estimated_complexity": "low",
+        "key_risks": [
+          "Metadata aggregation logic may not handle edge cases properly"
+        ],
+        "verification_command": "python -c \"from fitz_ai.core.answer import Answer; from fitz_ai.core.token_usage import TokenUsage; a = Answer('test'); t = TokenUsage(10, 20); a.add_token_usage(t); print(a.metadata['token_usage'])\"",
+        "estimated_effort": "~1 hour"
+      },
+      {
+        "number": 5,
+        "name": "Update SDK Interface to Attach Token Usage",
+        "objective": "Modify the SDK's ask/query methods to consume token usage data from hooks and attach it to answers",
+        "deliverables": [
+          "Updated fitz_ai/sdk/fitz.py with token usage attachment logic"
+        ],
+        "dependencies": [
+          3,
+          4
+        ],
+        "estimated_complexity": "medium",
+        "key_risks": [
+          "Integration may not work properly if hooks aren't registered correctly",
+          "Performance impact from hook processing in hot path"
+        ],
+        "verification_command": "pytest tests/test_sdk.py -v",
+        "estimated_effort": "~2 hours"
+      }
+    ],
+    "critical_path": [
+      0,
+      2,
+      3,
+      5
+    ],
+    "parallel_opportunities": [
+      [
+        4,
+        6
+      ]
+    ],
+    "total_phases": 5
+  },
+  "risk": {
+    "risks": [
+      {
+        "category": "technical",
+        "description": "Token tracking hook may not correctly extract token usage from all provider response formats",
+        "impact": "high",
+        "likelihood": "medium",
+        "mitigation": "Implement comprehensive fallback strategies in _extract_tokens_from_response to handle various LLM provider response structures",
+        "contingency": "Log extraction failures and fall back to zero token tracking with warning messages",
+        "affected_phases": [
+          1,
+          2,
+          3
+        ],
+        "verification": "Test with OpenAI, Cohere, Anthropic responses using mock data"
+      },
+      {
+        "category": "resource",
+        "description": "Instrumentation hooks may impact performance due to metadata collection overhead during LLM calls",
+        "impact": "medium",
+        "likelihood": "high",
+        "mitigation": "Use lazy initialization and conditional hook registration based on feature flags",
+        "contingency": "Implement optional token tracking via configuration flag with default disabled",
+        "affected_phases": [
+          1,
+          2,
+          3
+        ],
+        "verification": "Benchmark execution time differences when hooks enabled vs disabled"
+      },
+      {
+        "category": "quality",
+        "description": "Token aggregation logic may not properly handle multiple LLM calls in a single query flow",
+        "impact": "medium",
+        "likelihood": "high",
+        "mitigation": "Implement proper token key generation using layer/plugin/method combinations to distinguish different LLM operations",
+        "contingency": "Add unit tests for multi-call scenarios and verify correct aggregation via test fixtures",
+        "affected_phases": [
+          1,
+          2,
+          3
+        ],
+        "verification": "Write integration tests covering multiple LLM calls within a single ask() invocation"
+      },
+      {
+        "category": "external",
+        "description": "Some LLM providers might not expose token usage in response objects causing silent failures",
+        "impact": "high",
+        "likelihood": "medium",
+        "mitigation": "Implement robust error handling and graceful degradation with empty tokens when extraction fails",
+        "contingency": "Create fallback mechanism to estimate token counts based on text length if actual token data unavailable",
+        "affected_phases": [
+          1,
+          2
+        ],
+        "verification": "Verify all major provider types (OpenAI/Cohere/Anthropic/Ollama) handle gracefully"
+      }
+    ],
+    "overall_risk_level": "high",
+    "recommended_contingencies": [
+      "Add configuration flag to disable token tracking when performance is critical",
+      "Implement fallback estimation logic for token counts based on text length if provider doesn't supply usage data",
+      "Create comprehensive unit and integration tests covering all supported LLM providers' response formats"
+    ]
+  }
+}
