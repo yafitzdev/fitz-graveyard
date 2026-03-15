@@ -92,7 +92,14 @@ class BackgroundWorker:
                 return
 
             # Create pipeline with stages
-            stages = create_stages()
+            # Auto-enable split reasoning for small context windows
+            split = False
+            if self._config and hasattr(self._config, 'lm_studio'):
+                ctx_len = getattr(self._config.lm_studio, 'context_length', 65536)
+                if ctx_len < 32768:
+                    split = True
+                    logger.info(f"Split reasoning enabled (context_length={ctx_len})")
+            stages = create_stages(split_reasoning=split)
             self._pipeline = PlanningPipeline(stages, self._checkpoint_mgr)
 
             # Create plan renderer

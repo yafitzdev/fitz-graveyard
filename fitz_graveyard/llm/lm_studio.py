@@ -157,12 +157,10 @@ class LMStudioClient:
             return
         await self._load_model_via_cli()
 
-    # Minimum context window in tokens.  Derived from the pipeline's largest
-    # prompt: arch+design reasoning can send up to _REASONING_KRAG_BUDGET_CHARS
-    # (200K chars ≈ 50K tokens) of codebase context plus prompt template
-    # overhead (~2K tokens) plus max_tokens output (16K).  Stages that exceed
-    # the model's context will crash mid-pipeline with cryptic CUDA errors.
-    _MIN_CONTEXT_TOKENS = 32_768
+    # Minimum context window in tokens.  With split reasoning (auto-enabled
+    # when context_length < 32K), each call fits in ~8K tokens.  The minimum
+    # is set to allow split mode on 16K context models.
+    _MIN_CONTEXT_TOKENS = 8_192
 
     async def health_check(self) -> bool:
         """Check LM Studio is reachable and load the configured model.
