@@ -28,13 +28,14 @@ fitz-graveyard get 1 # full architectural plan in the morning
 
 ---
 
-### About 🧑‍🌾
+### About
 
 Solo project by Yan Fitzner ([LinkedIn](https://www.linkedin.com/in/yan-fitzner/), [GitHub](https://github.com/yafitzdev)).
 
-- ~7k lines of Python
-- 400+ tests (402)
+- ~8k lines of Python
+- 550+ tests
 - Zero LangChain/LlamaIndex dependencies — built from scratch
+- Code retrieval powered by [fitz-ai](https://github.com/yafitzdev/fitz-ai)
 
 ---
 
@@ -46,7 +47,7 @@ What if the planning phase could run on local hardware instead? What if you coul
 
 ---
 
-### The Insight 💡
+### The Insight
 
 Running LLMs locally means balancing three things: **tokens per second**, **quantization quality**, and **model intelligence**. A 70B model at high quant gives you excellent reasoning but crawls at 2-5 tok/s on consumer hardware. That feels unusable — until you realize planning doesn't need to be interactive.
 
@@ -66,63 +67,68 @@ And the best part: **as local models improve, your plans improve for free.**
 
 ### Why fitz-graveyard?
 
-**Runs on modest hardware 🖥️**
-> A 35B model at Q6 on a single GPU produces plans in ~15 minutes. A 70B model in RAM takes a few hours. You don't need a datacenter — you need patience and a machine that can stay on overnight.
+**Hybrid model pipeline**
+> Use a small model (Qwen3.5-4B) for fast code retrieval and a larger model (Qwen3-Coder-30B or dense Qwen3.5-27B) for architectural reasoning. The orchestrator auto-switches between models via LM Studio CLI. Split reasoning mode breaks large LLM calls into ~8K-token pieces, enabling dense 27B models at 32K context.
 
-**Reads your codebase first 🔍**
-> An agent builds a structural index of your codebase (classes, functions, imports), navigates it using keyword extraction to pick task-relevant files, summarizes them, and synthesizes a context document. An implementation check then verifies whether the task is already built before planning begins. Every planning stage sees your actual code, not a hallucinated version of it.
+**Reads your codebase first**
+> An agent builds a structural index of your codebase (classes, functions, imports), selects relevant files via LLM scan, expands through import chains and `__init__.py` facades, and auto-includes architectural hub files (files importing many subsystems). Every planning stage sees your actual code with tool access to read more on demand.
 
-**Per-field extraction that small models can handle 🧩**
+**Per-field extraction that small models can handle**
 > Each stage does 1 reasoning pass + 1 self-critique + N tiny JSON extractions (<2000 chars each). Even a 3B model can reliably produce structured output at this scale. Failed extractions get Pydantic defaults instead of crashing the stage — partial plan > no plan.
 
-**Crash recovery built in 🔄**
+**Crash recovery built in**
 > Jobs checkpoint to SQLite. Machine crashes mid-plan? `retry` picks up from the last checkpoint. Power goes out overnight? Resume in the morning.
 
-**Claude where it counts, local everywhere else 🎯**
-> The local model does the heavy lifting — 95% of the tokens. But the pipeline knows what it's uncertain about. Per-section confidence scoring flags weak spots, and those sections can pause for an Anthropic API review pass before the plan finalizes. You get Claude-grade quality on the parts that matter, at a fraction of the token cost. Fully optional — off by default, zero API calls unless you opt in.
+**Claude where it counts, local everywhere else**
+> The local model does the heavy lifting — 95% of the tokens. But the pipeline knows what it's uncertain about. Per-section confidence scoring flags weak spots, and those sections can pause for an Anthropic API review pass before the plan finalizes. Fully optional — off by default, zero API calls unless you opt in.
 
-**Two interfaces, same engine 🔌**
+**Two interfaces, same engine**
 > CLI for background job queues, MCP server for Claude Code / Claude Desktop integration. Both wrap the same `tools/` service layer and SQLite job store.
 
-**Other features at a glance 🃏**
-> 1. [x] **Two LLM providers.** Ollama (with OOM fallback to smaller model) or LM Studio (OpenAI-compatible API).
-> 2. [x] **Cross-stage coherence check.** Post-pipeline pass verifies context → architecture → roadmap consistency.
-> 3. [x] **Section-specific confidence scoring.** Each section type (context, architecture, design, roadmap, risk) scored against its own criteria with 1-10 granularity.
-> 4. [x] **Implementation detection.** Surgical check prevents planning to build what already exists.
+**Other features at a glance**
+> 1. [x] **Three LLM providers.** Ollama (with OOM fallback), LM Studio (OpenAI-compatible API), or llama.cpp (managed subprocess with flash attention and configurable KV cache).
+> 2. [x] **Split reasoning.** Architecture and design as separate calls, roadmap and risk as separate calls. Reduces peak context from ~29K to ~8K tokens per call.
+> 3. [x] **Hub + facade retrieval signals.** Deterministic file selection that doesn't depend on LLM judgment — auto-includes orchestration files and `__init__.py` re-exports.
+> 4. [x] **Cross-stage coherence check.** Post-pipeline pass verifies context -> architecture -> roadmap consistency.
+> 5. [x] **Section-specific confidence scoring.** Each section type scored against its own criteria with 1-10 granularity.
+> 6. [x] **Implementation detection.** Surgical check prevents planning to build what already exists.
+> 7. [x] **5 post-reasoning verification agents.** Contract extraction, data flow tracing, pattern matching, type boundary auditing, and assumption surfacing.
 
 ---
 
 ### How It Works
 
-An agent pre-stage followed by 3 merged planning stages. Each stage uses per-field extraction: one reasoning prompt produces analysis, a self-critique pass catches scope inflation and hallucinated files, then small JSON extractions pull structured data from the reasoning.
+A retrieval agent pre-stage followed by 3 planning stages. Split reasoning mode breaks architecture+design and roadmap+risk into separate LLM calls for smaller context models. Each stage uses per-field extraction: one reasoning prompt produces analysis, a self-critique pass catches scope inflation and hallucinated files, then small JSON extractions pull structured data from the reasoning.
 
 <br>
 
 ```
-  [Agent]    map file tree → build structural index → navigate by keywords → summarize → synthesize
+  [Agent]    structural index → LLM scan → import expand → facade expand → hub auto-include
                  |
                  v
   [Check]    implementation check — is this task already built?
                  |
                  v
   [Stage 1]  Context — requirements, constraints, assumptions (4 field groups)
-  [Stage 2]  Architecture + Design — merged stage (6 field groups)
-  [Stage 3]  Roadmap + Risk — merged stage (3 field groups)
+  [Stage 2]  Architecture + Design — split or combined (6 field groups)
+               Split mode: architecture reasoning → design reasoning (each ~8K tokens)
+  [Stage 3]  Roadmap + Risk — split or combined (3 field groups)
+               Split mode: roadmap reasoning → risk reasoning (each ~8K tokens)
                  |
                  v
-  [Post]     coherence check → confidence scoring (section-specific criteria) → optional API review → render markdown
+  [Post]     coherence check → confidence scoring → optional API review → render markdown
 ```
 
 <br>
 
 > [!NOTE]
-> The pipeline decomposes a problem that would overwhelm a small model into pieces it can handle reliably. Each JSON extraction is <2000 chars — small enough for a 3B quantized model to produce valid output.
+> The pipeline decomposes a problem that would overwhelm a small model into pieces it can handle reliably. Each JSON extraction is <2000 chars — small enough for a 3B quantized model to produce valid output. Split reasoning auto-enables when `context_length < 32768`, letting dense 27B models run the full pipeline.
 
 ---
 
 <details>
 
-<summary><strong>📦 Quick Start</strong></summary>
+<summary><strong>Quick Start</strong></summary>
 
 <br>
 
@@ -152,7 +158,8 @@ pip install "fitz-graveyard[dev]"          # pytest, build tools
 
 **Prerequisites:**
 - Python 3.10+
-- [Ollama](https://ollama.com) installed and running, or [LM Studio](https://lmstudio.ai) with a loaded model
+- [Ollama](https://ollama.com), [LM Studio](https://lmstudio.ai), or [llama.cpp](https://github.com/ggerganov/llama.cpp) with a loaded model
+- [fitz-ai](https://github.com/yafitzdev/fitz-ai) for code retrieval
 
 </details>
 
@@ -160,7 +167,7 @@ pip install "fitz-graveyard[dev]"          # pytest, build tools
 
 <details>
 
-<summary><strong>📦 CLI Reference</strong></summary>
+<summary><strong>CLI Reference</strong></summary>
 
 <br>
 
@@ -178,9 +185,9 @@ fitz-graveyard serve                # Start MCP server
 
 **Job lifecycle:**
 ```
-QUEUED → RUNNING → COMPLETE
-                 → AWAITING_REVIEW → QUEUED (confirm) / COMPLETE (cancel)
-                 → FAILED / INTERRUPTED (both retryable)
+QUEUED -> RUNNING -> COMPLETE
+                  -> AWAITING_REVIEW -> QUEUED (confirm) / COMPLETE (cancel)
+                  -> FAILED / INTERRUPTED (both retryable)
 ```
 
 </details>
@@ -189,7 +196,7 @@ QUEUED → RUNNING → COMPLETE
 
 <details>
 
-<summary><strong>📦 MCP Server</strong></summary>
+<summary><strong>MCP Server</strong></summary>
 
 <br>
 
@@ -224,7 +231,7 @@ Plug into Claude Code or Claude Desktop:
 
 <details>
 
-<summary><strong>📦 Configuration</strong></summary>
+<summary><strong>Configuration</strong></summary>
 
 <br>
 
@@ -239,8 +246,16 @@ Auto-created on first run:
 Database (`jobs.db`) lives in the same directory.
 
 ```yaml
-# LLM provider: "ollama" or "lm_studio"
-provider: ollama
+# LLM provider: "ollama", "lm_studio", or "llama_cpp"
+provider: lm_studio
+
+lm_studio:
+  base_url: http://localhost:1234/v1
+  model: qwen3-coder-30b-a3b-instruct    # planning model
+  smart_model: qwen3.5-4b                 # retrieval model (null = use model)
+  fast_model: null                         # screening model (null = use model)
+  timeout: 600
+  context_length: 65536                    # split reasoning auto-enables below 32768
 
 ollama:
   base_url: http://localhost:11434
@@ -249,15 +264,23 @@ ollama:
   timeout: 300
   memory_threshold: 80.0  # RAM % threshold to abort
 
-lm_studio:
-  base_url: http://localhost:1234/v1
-  model: local-model
-  timeout: 300
+llama_cpp:
+  server_path: /path/to/llama-server
+  models_dir: /path/to/models
+  port: 8012
+  fast_model:
+    path: model.gguf
+    context_size: 65536
+    gpu_layers: -1
+    flash_attention: true
+    cache_type_k: q8_0
+    cache_type_v: q8_0
 
 agent:
   enabled: true
-  max_summary_files: 15
-  source_dir: null  # null = cwd at runtime
+  max_file_bytes: 50000
+  max_seed_files: 30    # files included inline in prompt (rest via tool-use)
+  source_dir: null      # null = cwd at runtime
 
 confidence:
   default_threshold: 0.7
@@ -278,13 +301,13 @@ output:
 
 <details>
 
-<summary><strong>📦 Architecture</strong></summary>
+<summary><strong>Architecture</strong></summary>
 
 <br>
 
 ```
-CLI (typer)   ──→ tools/ ──→ SQLiteJobStore ←── BackgroundWorker ──→ PlanningPipeline
-MCP (fastmcp) ──→ tools/ ──→ SQLiteJobStore
+CLI (typer)   --> tools/ --> SQLiteJobStore <-- BackgroundWorker --> PlanningPipeline
+MCP (fastmcp) --> tools/ --> SQLiteJobStore
 ```
 
 ```
@@ -295,10 +318,10 @@ fitz_graveyard/
 ├── tools/                     # Service layer
 ├── models/                    # JobStore ABC, SQLiteJobStore, JobRecord
 ├── background/                # BackgroundWorker, signal handling
-├── llm/                       # LLM clients (Ollama, LM Studio), retry, memory monitor
+├── llm/                       # LLM clients (Ollama, LM Studio, llama.cpp), retry
 ├── planning/
-│   ├── pipeline/stages/       # 3 merged stages + orchestrator + checkpoints
-│   ├── agent/                 # Multi-pass codebase context gatherer
+│   ├── pipeline/stages/       # 3 stages (split or combined) + orchestrator + checkpoints
+│   ├── agent/                 # Code retrieval bridge to fitz-ai
 │   ├── prompts/               # Externalized .txt prompt templates
 │   └── confidence/            # Per-section confidence scoring
 ├── api_review/                # Anthropic review client + cost calculator
@@ -312,7 +335,7 @@ fitz_graveyard/
 
 <details>
 
-<summary><strong>📦 Development</strong></summary>
+<summary><strong>Development</strong></summary>
 
 <br>
 
@@ -320,7 +343,17 @@ fitz_graveyard/
 git clone https://github.com/yafitzdev/fitz-graveyard.git
 cd fitz-graveyard
 pip install -e ".[dev]"  # editable install for development
-pytest  # 400 tests
+pytest  # 550+ tests
+```
+
+**Benchmark factory** for A/B testing pipeline changes:
+```bash
+# Retrieval benchmarks (~12s/run)
+python -m benchmarks.plan_factory retrieval --runs 10 --source-dir ../your-project
+
+# Reasoning benchmarks with fixed retrieval
+python -m benchmarks.plan_factory reasoning --runs 5 --source-dir ../your-project \
+  --context-file benchmarks/ideal_context.json --split --max-seeds 5
 ```
 
 </details>
@@ -337,3 +370,4 @@ MIT
 
 - [GitHub](https://github.com/yafitzdev/fitz-graveyard)
 - [PyPI](https://pypi.org/project/fitz-graveyard/)
+- [Changelog](CHANGELOG.md)
