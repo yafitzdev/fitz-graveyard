@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.4.0] - 2026-03-15
+
+### 🎉 Highlights
+
+**fitz-ai Powered Retrieval** — Code retrieval now delegates to fitz-ai's `CodeRetriever`, replacing the internal retrieval implementation. Single maintained retrieval mechanism across both projects.
+
+**Hybrid Model Pipeline** — Qwen3.5-4B for code retrieval, Qwen3-Coder-30B for planning. The orchestrator auto-switches between models via LM Studio CLI (`lms load`/`lms unload`). Smart model switching checks what's already loaded to avoid CUDA context destruction on consumer GPUs.
+
+**Hub + Facade Retrieval Signals** — Two new deterministic signals that don't depend on LLM judgment. Hub files (>5 forward imports) are auto-included as architectural orchestrators. Facade expansion follows `__init__.py` re-exports to reach actual definitions. Combined with a relative import resolution fix, `engine.py` and `answer.py` discovery went from 0% to 100% across 10 benchmark runs.
+
+**Benchmark Factory** — Rapid A/B testing of pipeline changes. Retrieval benchmarks (~12s/run) and reasoning benchmarks with fixed file lists via `override_files`. Used to systematically evaluate 4 optimization candidates across 25 runs.
+
+**Devil's Advocate Removal** — Benchmarked across 5 runs: removing the devil's advocate pass improved architecture quality from 60% to 100% correct decisions. The pass was over-correcting, pushing the model toward protocol-breaking "cleaner" solutions.
+
+### 🚀 Added
+
+- LM Studio model tier support: `fast_model`, `smart_model` config fields (`ba61ffe9`)
+- Auto model switching in orchestrator between agent (Qwen3.5-4B) and planning (Qwen3-Coder-30B) stages (`ba61ffe9`)
+- `switch_model()` on LMStudioClient with loaded-model check (`b3b6a9c1`)
+- `get_loaded_model()` parses `lms ps` output for specific model identification (`b3b6a9c1`)
+- Hub file auto-inclusion in retrieval: files with >5 forward imports always selected (`dcf1f1c0`)
+- Hub hint in LLM scan prompt for architectural awareness (`dcf1f1c0`)
+- Facade expansion: `__init__.py` re-exports followed to actual definitions (`dcf1f1c0`)
+- `"hub"` and `"facade"` origin signals in file provenance tracking (`dcf1f1c0`)
+- Benchmark factory: `python -m benchmarks.plan_factory retrieval/reasoning` (`dcf1f1c0`)
+- `override_files` param on `AgentContextGatherer.gather()` for fixed-retrieval benchmarks (`335dda72`)
+- `_bench_override_files` param on orchestrator for benchmark integration (`335dda72`)
+- 5 post-reasoning verification sub-agents in arch+design stage (`45bd0f70`)
+- Type boundary audit agent (`4a275ebe`)
+- Plan diagnostics section with stage timings and file provenance (`5293e03e`)
+
+### 🔄 Changed
+
+- Investigations use `gathered_context` (32K cap) instead of `raw_summaries` (100K+) — 70% input reduction per call (`23ca676a`)
+- Health check loads `smart_model` first when configured, avoiding redundant model switches (`c7ba836e`)
+- Critique length threshold uses absolute floor (2000 chars) for focused critiques (`ba61ffe9`)
+- Replaced internal retrieval with fitz-ai `CodeRetriever` — single maintained retrieval mechanism (`a47f11b3`)
+
+### 🗑️ Removed
+
+- Devil's advocate pass from arch+design stage — benchmarked as harmful to quality (`304f8f6c`)
+
+### 🐛 Fixed
+
+- Relative imports (`from .X import Y`) now resolved in import graph — previously silently dropped (`fitz-ai 0e7ed8b`)
+- `switch_model` no longer unloads a model that's already the target (`b3b6a9c1`)
+- Health check no longer loads the wrong model first when hybrid setup is configured (`c7ba836e`)
+
+---
+
 ## [0.3.0] - 2026-03-11
 
 ### 🎉 Highlights
@@ -143,7 +193,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - 391 tests
 
-[Unreleased]: https://github.com/yafitzdev/fitz-graveyard/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/yafitzdev/fitz-graveyard/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/yafitzdev/fitz-graveyard/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/yafitzdev/fitz-graveyard/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/yafitzdev/fitz-graveyard/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/yafitzdev/fitz-graveyard/releases/tag/v0.1.0
