@@ -255,6 +255,9 @@ async def _run_reasoning_once(
     context: dict,
     run_id: int,
     out_dir: Path,
+    *,
+    split_reasoning: bool = False,
+    max_seed_files: int | None = None,
 ) -> dict:
     """Run the real planning pipeline with fixed retrieval files.
 
@@ -266,9 +269,9 @@ async def _run_reasoning_once(
     from fitz_graveyard.config import load_config
     from fitz_graveyard.llm.factory import create_llm_client
     from fitz_graveyard.planning.agent import AgentContextGatherer
-    from fitz_graveyard.planning.pipeline.checkpoint import CheckpointManager
     from fitz_graveyard.planning.pipeline.orchestrator import PlanningPipeline
-    from fitz_graveyard.planning.pipeline.stages import DEFAULT_STAGES
+    from fitz_graveyard.planning.pipeline.stages import ContextStage, RoadmapRiskStage
+    from fitz_graveyard.planning.pipeline.stages.architecture_design import ArchitectureDesignStage
 
     config = load_config()
     client = create_llm_client(config)
@@ -283,10 +286,19 @@ async def _run_reasoning_once(
         if loaded != client.model:
             await client.switch_model(client.model)
 
+    stages = [
+        ContextStage(),
+        ArchitectureDesignStage(split_reasoning=split_reasoning),
+        RoadmapRiskStage(),
+    ]
     pipeline = PlanningPipeline(
-        stages=DEFAULT_STAGES, checkpoint_manager=_NullCheckpointManager(),
+        stages=stages, checkpoint_manager=_NullCheckpointManager(),
     )
     job_id = f"bench_{run_id:03d}"
+
+    # Override max_seed_files if requested
+    if max_seed_files is not None:
+        config.agent.max_seed_files = max_seed_files
 
     # Create agent with override_files — skips LLM retrieval,
     # runs identical post-processing as the real pipeline
@@ -342,11 +354,22 @@ def reasoning(
         "Add token usage tracking so I can see how many LLM tokens each query costs",
         help="Job description / query",
     ),
+    split: bool = typer.Option(False, help="Split arch+design into two reasoning calls"),
+    max_seeds: int = typer.Option(None, help="Override max_seed_files (default: config value)"),
 ):
     """Run reasoning-only benchmarks with fixed retrieval context."""
     context = json.loads(Path(context_file).read_text())
-    out_dir = _results_dir("reasoning")
+    label = "reasoning"
+    if split:
+        label += "_split"
+    if max_seeds is not None:
+        label += f"_seeds{max_seeds}"
+    out_dir = _results_dir(label)
     logger.info(f"Running {runs} reasoning benchmarks -> {out_dir}")
+    if split:
+        logger.info("Split reasoning mode: architecture + design as separate calls")
+    if max_seeds is not None:
+        logger.info(f"Max seed files: {max_seeds}")
 
     all_results = []
 
@@ -355,6 +378,8 @@ def reasoning(
             logger.info(f"--- Reasoning run {i + 1}/{runs} ---")
             result = await _run_reasoning_once(
                 source_dir, query, context, i + 1, out_dir,
+                split_reasoning=split,
+                max_seed_files=max_seeds,
             )
             all_results.append(result)
 
