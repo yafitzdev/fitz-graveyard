@@ -1,0 +1,16 @@
+{
+  "run": 2,
+  "elapsed_s": 626.7,
+  "success": true,
+  "recommended": "Instrumentation Hook with Thread-Local Storage",
+  "plan_size": 78233,
+  "stage_timings": {
+    "agent_gathering": 15.265999999974156,
+    "implementation_check": 3.672000000020489,
+    "context": 66.68700000000536,
+    "architecture_design": 495.85999999998603,
+    "roadmap_risk": 43.453000000008615,
+    "coherence_check": 1.6559999999881256
+  },
+  "error": null
+}

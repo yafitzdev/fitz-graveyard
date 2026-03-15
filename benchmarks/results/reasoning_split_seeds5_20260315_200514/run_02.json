@@ -1,0 +1,16 @@
+{
+  "run": 2,
+  "elapsed_s": 839.3,
+  "success": true,
+  "recommended": "Approach 1: Direct Hook Integration with Response Parsing",
+  "plan_size": 55918,
+  "stage_timings": {
+    "agent_gathering": 14.96899999998277,
+    "implementation_check": 3.2030000000086147,
+    "context": 50.578000000008615,
+    "architecture_design": 652.2030000000086,
+    "roadmap_risk": 114.60999999998603,
+    "coherence_check": 3.64000000001397
+  },
+  "error": null
+}

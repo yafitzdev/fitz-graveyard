@@ -1,0 +1,606 @@
+{
+  "context": {
+    "project_description": "Implement token usage tracking for LLM queries by instrumenting existing provider methods to count tokens during chat, embedding, and other LLM operations.",
+    "key_requirements": [
+      "Instrument key LLM methods (chat, embed, etc.) in all providers using the existing instrumentation hooks framework",
+      "Integrate token counting logic that works with OpenAI-compatible models using tiktoken and handles other providers with fallbacks",
+      "Store and log token usage data through structured logging for cost estimation and observability"
+    ],
+    "constraints": [
+      "Do not introduce new files or dependencies beyond existing instrumentation system",
+      "Leverage the existing BenchmarkHook protocol and InstrumentedProxy infrastructure",
+      "Avoid scope inflation by making minimal assumptions about token counting behavior"
+    ],
+    "existing_context": "fitz_ai/core/instrumentation.py, fitz_ai/llm/providers/base.py, fitz_ai/llm/providers/openai.py, fitz_ai/llm/providers/anthropic.py, fitz_ai/llm/providers/cohere.py, fitz_ai/llm/providers/ollama.py",
+    "stakeholders": [
+      "developer responsible for implementing token usage tracking",
+      "system architect overseeing integration with existing instrumentation hooks",
+      "product manager concerned with cost estimation and visibility into LLM usage"
+    ],
+    "scope_boundaries": {
+      "in_scope": [
+        "instrumentation of chat, chat_stream, embed, embed_batch methods in LLM providers using existing fitz_ai/core/instrumentation.py framework",
+        "token counting logic for OpenAI-compatible models using tiktoken tokenizer",
+        "logging token usage data via structured logs in fitz_ai/logging/logger.py"
+      ],
+      "out_of_scope": [
+        "creation of new utility files like fitz_ai/utils/__init__.py or fitz_ai/utils/tokenization.py",
+        "implementation of token tracking for non-OpenAI providers beyond basic estimation",
+        "integration with external metrics systems (Prometheus, OpenTelemetry) for real-time dashboards"
+      ]
+    },
+    "existing_files": [
+      "fitz_ai/core/instrumentation.py \u2014 Instrumentation system for benchmarking plugin performance",
+      "fitz_ai/llm/providers/base.py \u2014 Provider protocols for LLM clients",
+      "fitz_ai/llm/providers/openai.py \u2014 OpenAI provider wrappers using the official SDK",
+      "fitz_ai/llm/providers/anthropic.py \u2014 Anthropic provider wrappers using the official SDK",
+      "fitz_ai/llm/providers/cohere.py \u2014 Cohere provider wrappers using the official SDK",
+      "fitz_ai/llm/providers/ollama.py \u2014 Ollama provider wrappers using direct HTTP calls",
+      "fitz_ai/logging/logger.py \u2014 Unified logging setup for the entire Fitz project"
+    ],
+    "needed_artifacts": [
+      "fitz_ai/core/token_tracking.py \u2014 InstrumentedTokenTracker class that implements BenchmarkHook protocol to compute and log token usage during LLM method calls",
+      "fitz_ai/llm/providers/openai.py \u2014 Update OpenAIChat constructor to wrap chat/chat_stream methods with token tracking",
+      "fitz_ai/llm/providers/anthropic.py \u2014 Update AnthropicChat constructor to wrap chat/chat_stream methods with token tracking",
+      "fitz_ai/llm/providers/cohere.py \u2014 Update CohereChat constructor to wrap chat/chat_stream methods with token tracking",
+      "fitz_ai/llm/providers/ollama.py \u2014 Update OllamaChat constructor to wrap chat/chat_stream methods with token tracking"
+    ],
+    "assumptions": [
+      {
+        "assumption": "The request for token usage tracking does not specify how tokens should be counted (e.g., per provider, total across all providers)",
+        "impact": "This could lead to scope inflation if a specific counting mechanism is assumed without clarification, potentially requiring changes to the implementation approach",
+        "confidence": "high"
+      },
+      {
+        "assumption": "Token usage data needs to be stored and surfaced via console logs or metrics systems",
+        "impact": "If this assumption is incorrect (e.g., if it should go into a database instead), then all implementation choices about logging and storage would need revision",
+        "confidence": "high"
+      },
+      {
+        "assumption": "The existing instrumentation hook system (`fitz_ai/core/instrumentation.py`) can be leveraged without duplication of functionality or introduction of new complex dependencies",
+        "impact": "If the hooks framework cannot support required behavior (e.g., attaching metadata to method calls), then more invasive changes may be needed, increasing risk and complexity",
+        "confidence": "medium"
+      },
+      {
+        "assumption": "LLM providers like OpenAI-compatible models use a tokenizer such as `tiktoken` for accurate token counting",
+        "impact": "If different or custom tokenization logic is required per provider, the current approach may not work and will need to be adjusted accordingly",
+        "confidence": "medium"
+      },
+      {
+        "assumption": "Token usage should be logged at INFO level by default with optional exposure via metrics collectors",
+        "impact": "If more granular or different logging behavior is expected (e.g., debug-level logs, error tracking), this could affect how token data is surfaced and monitored",
+        "confidence": "medium"
+      }
+    ]
+  },
+  "architecture_design": {
+    "architecture": {
+      "approaches": [
+        {
+          "name": "Extend Provider Interfaces with Structured Responses",
+          "description": "Modify base LLM provider protocols to return structured responses that include token usage metadata alongside text content. This requires updating all concrete implementations (OpenAI, Anthropic, Cohere, Ollama) to capture and expose their respective SDK response metadata.",
+          "pros": [
+            "Provides complete token tracking capability across all providers",
+            "Maintains type safety and clear interface contracts",
+            "Enables aggregation of usage metrics at engine level"
+          ],
+          "cons": [
+            "Requires major refactoring of existing provider implementations",
+            "Breaks backward compatibility with current API consumers",
+            "High development effort and risk of introducing bugs"
+          ],
+          "complexity": "high",
+          "best_for": [
+            "Systems requiring comprehensive token tracking for billing or optimization",
+            "Applications where precise usage metrics are critical for decision making"
+          ]
+        },
+        {
+          "name": "Instrumentation-Based Metadata Extraction",
+          "description": "Enhance the existing instrumentation framework to capture LLM-specific metadata by wrapping provider calls with custom logic that extracts response headers, SDK objects, or other provider-specific information. This approach leverages existing hook infrastructure but requires significant customization of proxy behavior.",
+          "pros": [
+            "Leverages existing instrumentation patterns in the codebase",
+            "Doesn't require changing public interfaces",
+            "Can be implemented incrementally per provider"
+          ],
+          "cons": [
+            "Current InstrumentedProxy system lacks capability to inspect response metadata",
+            "Provider-specific custom extraction logic required for each backend",
+            "Complexity of hook implementations and potential performance overhead"
+          ],
+          "complexity": "high",
+          "best_for": [
+            "Systems that already heavily rely on instrumentation for observability",
+            "Projects where minimal interface changes are preferred over major refactorings"
+          ]
+        }
+      ],
+      "recommended": "Extend Provider Interfaces with Structured Responses",
+      "reasoning": "The current architecture fundamentally cannot support token tracking because all LLM provider interfaces return simple strings rather than structured responses containing metadata. The AnthropicChat.chat() method signature (def chat(self, messages: list[dict[str, Any]]) -> str) explicitly returns a string without any token usage information. Additionally, the Answer data structure lacks a field for storing this information, and there's no mechanism in the instrumentation hooks to extract metadata from responses that are only strings. The 'Instrumentation-Based Metadata Extraction' approach is theoretically possible but would require extensive modifications to InstrumentedProxy to support custom post-processing logic capable of extracting response headers or SDK objects, which isn't currently supported. Given that both approaches face significant implementation challenges and architectural barriers, I recommend the first approach as it addresses all root causes - by updating interfaces we ensure token data flows through the entire system correctly, though at the cost of major refactoring.",
+      "key_tradeoffs": {
+        "provider_interface_consistency_vs_token_tracking": "Extending LLM provider interfaces to include token usage would break backward compatibility with existing implementations, requiring a major refactoring of all providers (OpenAI, Anthropic, Cohere, Ollama) while maintaining interface consistency.",
+        "instrumentation_framework_reuse_vs_metadata_extraction": "Leveraging the existing instrumentation framework for token tracking conflicts with its current design which only tracks method calls and timing rather than parsing LLM API responses for metadata like token counts."
+      },
+      "technology_considerations": [
+        "AnthropicChat.chat() returns str instead of structured response containing usage metadata, making direct extraction impossible without breaking interface contracts",
+        "OpenAI providers support token counting in their SDK responses but current wrappers don't expose this through the standardized interfaces",
+        "The existing InstrumentedProxy system cannot extract LLM-specific response fields like token counts because it's designed for call tracking not content inspection",
+        "Answer data structure lacks a field to store token usage information, preventing any aggregation or reporting of consumption metrics",
+        "Streaming chat providers return Iterator[str] which loses metadata at each chunk boundary, requiring protocol changes to support metadata inclusion"
+      ],
+      "scope_statement": "Refactor LLM provider protocols to support structured responses including token usage metadata, extend Answer structure to store these metrics, and update concrete implementations (OpenAI, Anthropic, Cohere, Ollama) to capture and expose their respective SDK response data."
+    },
+    "design": {
+      "adrs": [
+        {
+          "title": "ADR: Extend LLM Provider Interfaces for Token Usage Tracking",
+          "context": "Current LLM provider interfaces in fitz_ai only return raw string responses, making it impossible to track token usage from API calls. The system needs a way to capture and aggregate token consumption across different LLM providers for observability and cost monitoring.",
+          "decision": "Modify the base LLM provider protocols (ChatProvider, StreamingChatProvider) to support returning structured response objects that include token usage metadata, while maintaining backward compatibility through optional extensions or adapter patterns.",
+          "rationale": "The current architecture assumes token tracking can be added as cross-cutting concern via instrumentation hooks, but all provider interfaces return simple string types without any mechanism for exposing LLM-specific metadata like token counts. The fundamental issue is that providers don't expose usage information in their method signatures, and the Answer structure lacks a field to store this data.",
+          "consequences": [
+            "Breaking change: All existing LLM provider implementations (OpenAI, Anthropic, Cohere, Ollama) will need modification or adapter patterns",
+            "New protocol extensions required for providers that support usage metadata natively",
+            "Answer structure must be extended to include token_usage field to store aggregated data",
+            "Instrumentation system needs enhancement to capture and extract metadata from response objects"
+          ],
+          "alternatives_considered": [
+            "Alternative 1: Create separate instrumentation hooks specifically for token tracking - rejected because existing BenchmarkHook doesn't support extracting LLM response metadata, and the current wrapper approach cannot introspect API responses",
+            "Alternative 2: Modify Answer class only without changing provider interfaces - rejected because there's no way to collect token usage data at all without modifying providers first since they don't expose it in their return types",
+            "Alternative 3: Use optional parameters or side-channel mechanisms for tracking - rejected because this approach is fragile and doesn't integrate well with the existing contract-based architecture that requires explicit method signatures"
+          ]
+        },
+        {
+          "title": "ADR: Return Simple Strings vs Structured Responses in Provider Interfaces",
+          "context": "Current LLM provider interfaces (AnthropicChat, OpenAIChat, etc.) return simple strings rather than structured responses containing metadata like token usage information. This fundamentally prevents token tracking and observability capabilities.",
+          "decision": "Accept that provider interfaces will continue to return simple strings for backward compatibility while adding structured response wrappers at the application layer",
+          "rationale": "This approach maintains existing API contracts and avoids breaking changes, but introduces a tradeoff where metadata must be extracted through side channels rather than being part of the core interface. The v1 excludes proper token tracking capabilities and rich observability.",
+          "consequences": [
+            "Provider interfaces remain simple but lose ability to expose token usage data directly",
+            "Application layer must implement custom wrappers or middleware to extract metadata",
+            "Token tracking requires additional instrumentation hooks that may be error-prone",
+            "Backward compatibility is preserved at the cost of reduced observability"
+          ],
+          "alternatives_considered": [
+            "Modify all provider interfaces to return structured responses (breaks existing contracts)",
+            "Add optional metadata parameters to existing methods while keeping string returns (complex parameter handling)",
+            "Introduce separate metadata extraction methods in providers (fragments the API)"
+          ]
+        }
+      ],
+      "components": [
+        {
+          "name": "AnthropicChat",
+          "purpose": "Anthropic provider wrapper using the official SDK for chat completion",
+          "responsibilities": [
+            "Process chat messages through Anthropic SDK",
+            "Handle synchronous chat completion requests"
+          ],
+          "interfaces": [
+            "chat(messages: list[dict[str, Any]]) -> str",
+            "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+          ],
+          "dependencies": [
+            "AuthProvider",
+            "Anthropic"
+          ]
+        },
+        {
+          "name": "OpenAIChat",
+          "purpose": "OpenAI provider wrapper using the official SDK for chat completion",
+          "responsibilities": [
+            "Process chat messages through OpenAI SDK",
+            "Handle synchronous chat completion requests"
+          ],
+          "interfaces": [
+            "chat(messages: list[dict[str, Any]]) -> str",
+            "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+          ],
+          "dependencies": [
+            "AuthProvider",
+            "OpenAI"
+          ]
+        },
+        {
+          "name": "CohereChat",
+          "purpose": "Cohere provider wrapper using the official SDK for chat completion",
+          "responsibilities": [
+            "Process chat messages through Cohere SDK",
+            "Handle synchronous chat completion requests"
+          ],
+          "interfaces": [
+            "chat(messages: list[dict[str, Any]]) -> str",
+            "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+          ],
+          "dependencies": [
+            "AuthProvider",
+            "Cohere"
+          ]
+        },
+        {
+          "name": "OllamaChat",
+          "purpose": "Ollama provider wrapper using direct HTTP calls for chat completion",
+          "responsibilities": [
+            "Process chat messages through Ollama HTTP API",
+            "Handle synchronous chat completion requests"
+          ],
+          "interfaces": [
+            "chat(messages: list[dict[str, Any]]) -> str",
+            "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+          ],
+          "dependencies": [
+            "httpx",
+            "Ollama"
+          ]
+        },
+        {
+          "name": "FitzKragEngine",
+          "purpose": "Knowledge Routing Augmented Generation engine",
+          "responsibilities": [
+            "Process queries through KRAG pipeline",
+            "Manage component initialization and orchestration",
+            "Handle answer generation with context awareness"
+          ],
+          "interfaces": [
+            "answer(query: Query) -> Answer",
+            "config() -> FitzKragConfig"
+          ],
+          "dependencies": [
+            "ChatProvider",
+            "EmbeddingProvider",
+            "RerankProvider",
+            "VisionProvider"
+          ]
+        },
+        {
+          "name": "fitz",
+          "purpose": "Stateful SDK for the Fitz KRAG framework",
+          "responsibilities": [
+            "Provide high-level interface to KRAG engine",
+            "Handle collection management and configuration"
+          ],
+          "interfaces": [
+            "ask(question: str, top_k: Optional[int], conversation_context: Optional['ConversationContext']) -> Answer",
+            "query(question: str, conversation_context: Optional['ConversationContext']) -> Answer"
+          ],
+          "dependencies": [
+            "FitzKragEngine"
+          ]
+        }
+      ],
+      "data_model": {
+        "Answer": [
+          "text: str",
+          "provenance: Provenance"
+        ],
+        "Query": [
+          "text: str",
+          "context: ConversationContext | None"
+        ],
+        "ConversationContext": [
+          "messages: list[ChatMessage]"
+        ],
+        "ChatMessage": [
+          "role: str",
+          "content: str"
+        ]
+      },
+      "integration_points": [
+        "AnthropicChat \u2014 chat method calls anthropic SDK which returns token usage data but this is not exposed through the provider interface",
+        "OpenAIChat \u2014 chat method calls OpenAI SDK which includes token usage in response but current wrapper doesn't expose it",
+        "CohereChat \u2014 chat method calls Cohere SDK which has token usage but not exposed through current provider interface",
+        "OllamaChat \u2014 chat method makes HTTP call but does not include token usage tracking in responses"
+      ],
+      "artifacts": [
+        {
+          "filename": "fitz_ai/llm/providers/anthropic.py",
+          "content": "\"\"\"\nAnthropic provider wrappers using the official SDK.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport anthropic\nfrom fitz_ai.llm.auth import AuthProvider\nfrom fitz_ai.llm.auth.httpx_auth import HttpxAuthAdapter\nfrom fitz_ai.llm.providers.base import ChatProvider, StreamingChatProvider, VisionProvider\nfrom httpx import HTTPStatusError\nimport logging\nfrom typing import Any, Iterator, Optional\n\nCHAT_MODELS = {\n    \"standard\": \"claude-3-haiku\",\n    \"fast\": \"claude-3-haiku\",\n    \"smart\": \"claude-3-sonnet\",\n}\nVISION_MODEL = \"claude-3-opus\"\n\n\ndef _extract_system_message(messages: list[dict[str, Any]]) -> tuple[Optional[str], list[dict[str, Any]]]:\n    system_messages = [msg for msg in messages if msg.get(\"role\") == \"system\"]\n    non_system_messages = [msg for msg in messages if msg.get(\"role\") != \"system\"]\n\n    # For Anthropic, we want to extract the first system message as a system prompt,\n    # and leave the rest of the messages as-is.\n    system_message = system_messages[0][\"content\"] if system_messages else None\n    return system_message, non_system_messages\n\n\nclass AnthropicChat(ChatProvider, StreamingChatProvider):\n    def __init__(self, auth: AuthProvider, model: str | None, tier: str) -> None:\n        self.auth = auth\n        self.model = model or CHAT_MODELS.get(tier, \"claude-3-haiku\")\n        # Initialize Anthropic client with authentication and base URL if needed\n        headers = self.auth.get_headers()  # [VERIFY] method not found in signatures\n        kwargs = self.auth.get_request_kwargs()  # [VERIFY] method not found in signatures\n        base_url = kwargs.pop(\"base_url\", None)\n        self.client = anthropic.Anthropic(  # [VERIFY] method not found in signatures\n            api_key=headers.get(\"Authorization\", \"\"),\n            base_url=base_url,\n            **kwargs\n        )\n\n    def chat(self, messages: list[dict[str, Any]]) -> str:\n        system_message, non_system_messages = _extract_system_message(messages)\n        try:\n            response = self.client.messages.create(  # [VERIFY] method not found in signatures\n                model=self.model,\n                max_tokens=1024,\n                temperature=0.5,\n                system=system_message,\n                messages=non_system_messages\n            )\n            return response.content[0].text\n        except HTTPStatusError as e:\n            logging.error(f\"Anthropic API error: {e.response.status_code} - {e.response.text}\")\n            raise\n\n    def chat_stream(self, messages: list[dict[str, Any]]) -> Iterator[str]:\n        system_message, non_system_messages = _extract_system_message(messages)\n        try:\n            with self.client.messages.stream(  # [VERIFY] method not found in signatures\n                model=self.model,\n                max_tokens=1024,\n                temperature=0.5,\n                system=system_message,\n                messages=non_system_messages\n            ) as stream:\n                for text in stream.text_stream:\n                    yield text\n        except HTTPStatusError as e:\n            logging.error(f\"Anthropic API error: {e.response.status_code} - {e.response.text}\")\n            raise\n\n\nclass AnthropicVision(VisionProvider):\n    def __init__(self, auth: AuthProvider, model: str | None) -> None:\n        self.auth = auth\n        self.model = model or VISION_MODEL\n        # Initialize Anthropic client with authentication and base URL if needed\n        headers = self.auth.get_headers()  # [VERIFY] method not found in signatures\n        kwargs = self.auth.get_request_kwargs()  # [VERIFY] method not found in signatures\n        base_url = kwargs.pop(\"base_url\", None)\n        self.client = anthropic.Anthropic(  # [VERIFY] method not found in signatures\n            api_key=headers.get(\"Authorization\", \"\"),\n            base_url=base_url,\n            **kwargs\n        )\n\n    def describe_image(self, image_base64: str, prompt: str | None) -> str:\n        try:\n            response = self.client.messages.create(  # [VERIFY] method not found in signatures\n                model=self.model,\n                max_tokens=1024,\n                messages=[{\n                    \"role\": \"user\",\n                    \"content\": [\n                        {\n                            \"type\": \"image\",\n                            \"source\": {\n                                \"type\": \"base64\",\n                                \"media_type\": \"image/jpeg\",\n                                \"data\": image_base64\n                            }\n                        },\n                        {\"role\": \"user\", \"content\": prompt or \"Describe this image.\"}\n                    ]\n                }]\n            )\n            return response.content[0].text\n        except HTTPStatusError as e:\n            logging.error(f\"Anthropic Vision API error: {e.response.status_code} - {e.response.text}\")\n            raise",
+          "purpose": "Provider implementations for Anthropic LLMs with synchronous and streaming chat capabilities, along with vision support"
+        }
+      ]
+    }
+  },
+  "architecture": {
+    "approaches": [
+      {
+        "name": "Extend Provider Interfaces with Structured Responses",
+        "description": "Modify base LLM provider protocols to return structured responses that include token usage metadata alongside text content. This requires updating all concrete implementations (OpenAI, Anthropic, Cohere, Ollama) to capture and expose their respective SDK response metadata.",
+        "pros": [
+          "Provides complete token tracking capability across all providers",
+          "Maintains type safety and clear interface contracts",
+          "Enables aggregation of usage metrics at engine level"
+        ],
+        "cons": [
+          "Requires major refactoring of existing provider implementations",
+          "Breaks backward compatibility with current API consumers",
+          "High development effort and risk of introducing bugs"
+        ],
+        "complexity": "high",
+        "best_for": [
+          "Systems requiring comprehensive token tracking for billing or optimization",
+          "Applications where precise usage metrics are critical for decision making"
+        ]
+      },
+      {
+        "name": "Instrumentation-Based Metadata Extraction",
+        "description": "Enhance the existing instrumentation framework to capture LLM-specific metadata by wrapping provider calls with custom logic that extracts response headers, SDK objects, or other provider-specific information. This approach leverages existing hook infrastructure but requires significant customization of proxy behavior.",
+        "pros": [
+          "Leverages existing instrumentation patterns in the codebase",
+          "Doesn't require changing public interfaces",
+          "Can be implemented incrementally per provider"
+        ],
+        "cons": [
+          "Current InstrumentedProxy system lacks capability to inspect response metadata",
+          "Provider-specific custom extraction logic required for each backend",
+          "Complexity of hook implementations and potential performance overhead"
+        ],
+        "complexity": "high",
+        "best_for": [
+          "Systems that already heavily rely on instrumentation for observability",
+          "Projects where minimal interface changes are preferred over major refactorings"
+        ]
+      }
+    ],
+    "recommended": "Extend Provider Interfaces with Structured Responses",
+    "reasoning": "The current architecture fundamentally cannot support token tracking because all LLM provider interfaces return simple strings rather than structured responses containing metadata. The AnthropicChat.chat() method signature (def chat(self, messages: list[dict[str, Any]]) -> str) explicitly returns a string without any token usage information. Additionally, the Answer data structure lacks a field for storing this information, and there's no mechanism in the instrumentation hooks to extract metadata from responses that are only strings. The 'Instrumentation-Based Metadata Extraction' approach is theoretically possible but would require extensive modifications to InstrumentedProxy to support custom post-processing logic capable of extracting response headers or SDK objects, which isn't currently supported. Given that both approaches face significant implementation challenges and architectural barriers, I recommend the first approach as it addresses all root causes - by updating interfaces we ensure token data flows through the entire system correctly, though at the cost of major refactoring.",
+    "key_tradeoffs": {
+      "provider_interface_consistency_vs_token_tracking": "Extending LLM provider interfaces to include token usage would break backward compatibility with existing implementations, requiring a major refactoring of all providers (OpenAI, Anthropic, Cohere, Ollama) while maintaining interface consistency.",
+      "instrumentation_framework_reuse_vs_metadata_extraction": "Leveraging the existing instrumentation framework for token tracking conflicts with its current design which only tracks method calls and timing rather than parsing LLM API responses for metadata like token counts."
+    },
+    "technology_considerations": [
+      "AnthropicChat.chat() returns str instead of structured response containing usage metadata, making direct extraction impossible without breaking interface contracts",
+      "OpenAI providers support token counting in their SDK responses but current wrappers don't expose this through the standardized interfaces",
+      "The existing InstrumentedProxy system cannot extract LLM-specific response fields like token counts because it's designed for call tracking not content inspection",
+      "Answer data structure lacks a field to store token usage information, preventing any aggregation or reporting of consumption metrics",
+      "Streaming chat providers return Iterator[str] which loses metadata at each chunk boundary, requiring protocol changes to support metadata inclusion"
+    ],
+    "scope_statement": "Refactor LLM provider protocols to support structured responses including token usage metadata, extend Answer structure to store these metrics, and update concrete implementations (OpenAI, Anthropic, Cohere, Ollama) to capture and expose their respective SDK response data."
+  },
+  "design": {
+    "adrs": [
+      {
+        "title": "ADR: Extend LLM Provider Interfaces for Token Usage Tracking",
+        "context": "Current LLM provider interfaces in fitz_ai only return raw string responses, making it impossible to track token usage from API calls. The system needs a way to capture and aggregate token consumption across different LLM providers for observability and cost monitoring.",
+        "decision": "Modify the base LLM provider protocols (ChatProvider, StreamingChatProvider) to support returning structured response objects that include token usage metadata, while maintaining backward compatibility through optional extensions or adapter patterns.",
+        "rationale": "The current architecture assumes token tracking can be added as cross-cutting concern via instrumentation hooks, but all provider interfaces return simple string types without any mechanism for exposing LLM-specific metadata like token counts. The fundamental issue is that providers don't expose usage information in their method signatures, and the Answer structure lacks a field to store this data.",
+        "consequences": [
+          "Breaking change: All existing LLM provider implementations (OpenAI, Anthropic, Cohere, Ollama) will need modification or adapter patterns",
+          "New protocol extensions required for providers that support usage metadata natively",
+          "Answer structure must be extended to include token_usage field to store aggregated data",
+          "Instrumentation system needs enhancement to capture and extract metadata from response objects"
+        ],
+        "alternatives_considered": [
+          "Alternative 1: Create separate instrumentation hooks specifically for token tracking - rejected because existing BenchmarkHook doesn't support extracting LLM response metadata, and the current wrapper approach cannot introspect API responses",
+          "Alternative 2: Modify Answer class only without changing provider interfaces - rejected because there's no way to collect token usage data at all without modifying providers first since they don't expose it in their return types",
+          "Alternative 3: Use optional parameters or side-channel mechanisms for tracking - rejected because this approach is fragile and doesn't integrate well with the existing contract-based architecture that requires explicit method signatures"
+        ]
+      },
+      {
+        "title": "ADR: Return Simple Strings vs Structured Responses in Provider Interfaces",
+        "context": "Current LLM provider interfaces (AnthropicChat, OpenAIChat, etc.) return simple strings rather than structured responses containing metadata like token usage information. This fundamentally prevents token tracking and observability capabilities.",
+        "decision": "Accept that provider interfaces will continue to return simple strings for backward compatibility while adding structured response wrappers at the application layer",
+        "rationale": "This approach maintains existing API contracts and avoids breaking changes, but introduces a tradeoff where metadata must be extracted through side channels rather than being part of the core interface. The v1 excludes proper token tracking capabilities and rich observability.",
+        "consequences": [
+          "Provider interfaces remain simple but lose ability to expose token usage data directly",
+          "Application layer must implement custom wrappers or middleware to extract metadata",
+          "Token tracking requires additional instrumentation hooks that may be error-prone",
+          "Backward compatibility is preserved at the cost of reduced observability"
+        ],
+        "alternatives_considered": [
+          "Modify all provider interfaces to return structured responses (breaks existing contracts)",
+          "Add optional metadata parameters to existing methods while keeping string returns (complex parameter handling)",
+          "Introduce separate metadata extraction methods in providers (fragments the API)"
+        ]
+      }
+    ],
+    "components": [
+      {
+        "name": "AnthropicChat",
+        "purpose": "Anthropic provider wrapper using the official SDK for chat completion",
+        "responsibilities": [
+          "Process chat messages through Anthropic SDK",
+          "Handle synchronous chat completion requests"
+        ],
+        "interfaces": [
+          "chat(messages: list[dict[str, Any]]) -> str",
+          "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+        ],
+        "dependencies": [
+          "AuthProvider",
+          "Anthropic"
+        ]
+      },
+      {
+        "name": "OpenAIChat",
+        "purpose": "OpenAI provider wrapper using the official SDK for chat completion",
+        "responsibilities": [
+          "Process chat messages through OpenAI SDK",
+          "Handle synchronous chat completion requests"
+        ],
+        "interfaces": [
+          "chat(messages: list[dict[str, Any]]) -> str",
+          "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+        ],
+        "dependencies": [
+          "AuthProvider",
+          "OpenAI"
+        ]
+      },
+      {
+        "name": "CohereChat",
+        "purpose": "Cohere provider wrapper using the official SDK for chat completion",
+        "responsibilities": [
+          "Process chat messages through Cohere SDK",
+          "Handle synchronous chat completion requests"
+        ],
+        "interfaces": [
+          "chat(messages: list[dict[str, Any]]) -> str",
+          "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+        ],
+        "dependencies": [
+          "AuthProvider",
+          "Cohere"
+        ]
+      },
+      {
+        "name": "OllamaChat",
+        "purpose": "Ollama provider wrapper using direct HTTP calls for chat completion",
+        "responsibilities": [
+          "Process chat messages through Ollama HTTP API",
+          "Handle synchronous chat completion requests"
+        ],
+        "interfaces": [
+          "chat(messages: list[dict[str, Any]]) -> str",
+          "chat_stream(messages: list[dict[str, Any]]) -> Iterator[str]"
+        ],
+        "dependencies": [
+          "httpx",
+          "Ollama"
+        ]
+      },
+      {
+        "name": "FitzKragEngine",
+        "purpose": "Knowledge Routing Augmented Generation engine",
+        "responsibilities": [
+          "Process queries through KRAG pipeline",
+          "Manage component initialization and orchestration",
+          "Handle answer generation with context awareness"
+        ],
+        "interfaces": [
+          "answer(query: Query) -> Answer",
+          "config() -> FitzKragConfig"
+        ],
+        "dependencies": [
+          "ChatProvider",
+          "EmbeddingProvider",
+          "RerankProvider",
+          "VisionProvider"
+        ]
+      },
+      {
+        "name": "fitz",
+        "purpose": "Stateful SDK for the Fitz KRAG framework",
+        "responsibilities": [
+          "Provide high-level interface to KRAG engine",
+          "Handle collection management and configuration"
+        ],
+        "interfaces": [
+          "ask(question: str, top_k: Optional[int], conversation_context: Optional['ConversationContext']) -> Answer",
+          "query(question: str, conversation_context: Optional['ConversationContext']) -> Answer"
+        ],
+        "dependencies": [
+          "FitzKragEngine"
+        ]
+      }
+    ],
+    "data_model": {
+      "Answer": [
+        "text: str",
+        "provenance: Provenance"
+      ],
+      "Query": [
+        "text: str",
+        "context: ConversationContext | None"
+      ],
+      "ConversationContext": [
+        "messages: list[ChatMessage]"
+      ],
+      "ChatMessage": [
+        "role: str",
+        "content: str"
+      ]
+    },
+    "integration_points": [
+      "AnthropicChat \u2014 chat method calls anthropic SDK which returns token usage data but this is not exposed through the provider interface",
+      "OpenAIChat \u2014 chat method calls OpenAI SDK which includes token usage in response but current wrapper doesn't expose it",
+      "CohereChat \u2014 chat method calls Cohere SDK which has token usage but not exposed through current provider interface",
+      "OllamaChat \u2014 chat method makes HTTP call but does not include token usage tracking in responses"
+    ],
+    "artifacts": [
+      {
+        "filename": "fitz_ai/llm/providers/anthropic.py",
+        "content": "\"\"\"\nAnthropic provider wrappers using the official SDK.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport anthropic\nfrom fitz_ai.llm.auth import AuthProvider\nfrom fitz_ai.llm.auth.httpx_auth import HttpxAuthAdapter\nfrom fitz_ai.llm.providers.base import ChatProvider, StreamingChatProvider, VisionProvider\nfrom httpx import HTTPStatusError\nimport logging\nfrom typing import Any, Iterator, Optional\n\nCHAT_MODELS = {\n    \"standard\": \"claude-3-haiku\",\n    \"fast\": \"claude-3-haiku\",\n    \"smart\": \"claude-3-sonnet\",\n}\nVISION_MODEL = \"claude-3-opus\"\n\n\ndef _extract_system_message(messages: list[dict[str, Any]]) -> tuple[Optional[str], list[dict[str, Any]]]:\n    system_messages = [msg for msg in messages if msg.get(\"role\") == \"system\"]\n    non_system_messages = [msg for msg in messages if msg.get(\"role\") != \"system\"]\n\n    # For Anthropic, we want to extract the first system message as a system prompt,\n    # and leave the rest of the messages as-is.\n    system_message = system_messages[0][\"content\"] if system_messages else None\n    return system_message, non_system_messages\n\n\nclass AnthropicChat(ChatProvider, StreamingChatProvider):\n    def __init__(self, auth: AuthProvider, model: str | None, tier: str) -> None:\n        self.auth = auth\n        self.model = model or CHAT_MODELS.get(tier, \"claude-3-haiku\")\n        # Initialize Anthropic client with authentication and base URL if needed\n        headers = self.auth.get_headers()  # [VERIFY] method not found in signatures\n        kwargs = self.auth.get_request_kwargs()  # [VERIFY] method not found in signatures\n        base_url = kwargs.pop(\"base_url\", None)\n        self.client = anthropic.Anthropic(  # [VERIFY] method not found in signatures\n            api_key=headers.get(\"Authorization\", \"\"),\n            base_url=base_url,\n            **kwargs\n        )\n\n    def chat(self, messages: list[dict[str, Any]]) -> str:\n        system_message, non_system_messages = _extract_system_message(messages)\n        try:\n            response = self.client.messages.create(  # [VERIFY] method not found in signatures\n                model=self.model,\n                max_tokens=1024,\n                temperature=0.5,\n                system=system_message,\n                messages=non_system_messages\n            )\n            return response.content[0].text\n        except HTTPStatusError as e:\n            logging.error(f\"Anthropic API error: {e.response.status_code} - {e.response.text}\")\n            raise\n\n    def chat_stream(self, messages: list[dict[str, Any]]) -> Iterator[str]:\n        system_message, non_system_messages = _extract_system_message(messages)\n        try:\n            with self.client.messages.stream(  # [VERIFY] method not found in signatures\n                model=self.model,\n                max_tokens=1024,\n                temperature=0.5,\n                system=system_message,\n                messages=non_system_messages\n            ) as stream:\n                for text in stream.text_stream:\n                    yield text\n        except HTTPStatusError as e:\n            logging.error(f\"Anthropic API error: {e.response.status_code} - {e.response.text}\")\n            raise\n\n\nclass AnthropicVision(VisionProvider):\n    def __init__(self, auth: AuthProvider, model: str | None) -> None:\n        self.auth = auth\n        self.model = model or VISION_MODEL\n        # Initialize Anthropic client with authentication and base URL if needed\n        headers = self.auth.get_headers()  # [VERIFY] method not found in signatures\n        kwargs = self.auth.get_request_kwargs()  # [VERIFY] method not found in signatures\n        base_url = kwargs.pop(\"base_url\", None)\n        self.client = anthropic.Anthropic(  # [VERIFY] method not found in signatures\n            api_key=headers.get(\"Authorization\", \"\"),\n            base_url=base_url,\n            **kwargs\n        )\n\n    def describe_image(self, image_base64: str, prompt: str | None) -> str:\n        try:\n            response = self.client.messages.create(  # [VERIFY] method not found in signatures\n                model=self.model,\n                max_tokens=1024,\n                messages=[{\n                    \"role\": \"user\",\n                    \"content\": [\n                        {\n                            \"type\": \"image\",\n                            \"source\": {\n                                \"type\": \"base64\",\n                                \"media_type\": \"image/jpeg\",\n                                \"data\": image_base64\n                            }\n                        },\n                        {\"role\": \"user\", \"content\": prompt or \"Describe this image.\"}\n                    ]\n                }]\n            )\n            return response.content[0].text\n        except HTTPStatusError as e:\n            logging.error(f\"Anthropic Vision API error: {e.response.status_code} - {e.response.text}\")\n            raise",
+        "purpose": "Provider implementations for Anthropic LLMs with synchronous and streaming chat capabilities, along with vision support"
+      }
+    ]
+  },
+  "roadmap_risk": {
+    "roadmap": {
+      "phases": [
+        {
+          "number": 0,
+          "name": "Read Before Writing",
+          "objective": "Verify integration points by reading source",
+          "deliverables": [
+            "Verified: fitz_ai/llm/providers/base.py",
+            "Verified: fitz_ai/llm/providers/openai.py",
+            "Verified: fitz_ai/llm/providers/anthropic.py",
+            "Verified: fitz_ai/llm/providers/cohere.py",
+            "Verified: fitz_ai/llm/providers/ollama.py"
+          ],
+          "dependencies": [],
+          "estimated_complexity": "low",
+          "key_risks": [],
+          "verification_command": "pytest fitz_ai/llm/providers/test_base.py fitz_ai/llm/providers/test_openai.py fitz_ai/llm/providers/test_anthropic.py fitz_ai/llm/providers/test_cohere.py fitz_ai/llm/providers/test_ollama.py",
+          "estimated_effort": "~15 min"
+        }
+      ],
+      "critical_path": [
+        0,
+        2,
+        3,
+        5
+      ],
+      "parallel_opportunities": [
+        [
+          4,
+          6
+        ]
+      ],
+      "total_phases": 1
+    },
+    "risk": {
+      "risks": [],
+      "overall_risk_level": "low",
+      "recommended_contingencies": []
+    }
+  },
+  "roadmap": {
+    "phases": [
+      {
+        "number": 0,
+        "name": "Read Before Writing",
+        "objective": "Verify integration points by reading source",
+        "deliverables": [
+          "Verified: fitz_ai/llm/providers/base.py",
+          "Verified: fitz_ai/llm/providers/openai.py",
+          "Verified: fitz_ai/llm/providers/anthropic.py",
+          "Verified: fitz_ai/llm/providers/cohere.py",
+          "Verified: fitz_ai/llm/providers/ollama.py"
+        ],
+        "dependencies": [],
+        "estimated_complexity": "low",
+        "key_risks": [],
+        "verification_command": "pytest fitz_ai/llm/providers/test_base.py fitz_ai/llm/providers/test_openai.py fitz_ai/llm/providers/test_anthropic.py fitz_ai/llm/providers/test_cohere.py fitz_ai/llm/providers/test_ollama.py",
+        "estimated_effort": "~15 min"
+      }
+    ],
+    "critical_path": [
+      0,
+      2,
+      3,
+      5
+    ],
+    "parallel_opportunities": [
+      [
+        4,
+        6
+      ]
+    ],
+    "total_phases": 1
+  },
+  "risk": {
+    "risks": [],
+    "overall_risk_level": "low",
+    "recommended_contingencies": []
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "run": 1,
+  "elapsed_s": 390.4,
+  "success": true,
+  "recommended": "Approach A (Corrected)",
+  "plan_size": 46364,
+  "stage_timings": {
+    "agent_gathering": 13.90700000000652,
+    "implementation_check": 3.687000000005355,
+    "context": 47.312999999994645,
+    "architecture_design": 239.5460000000021,
+    "roadmap_risk": 82.73499999998603,
+    "coherence_check": 3.109000000025844
+  },
+  "error": null
+}

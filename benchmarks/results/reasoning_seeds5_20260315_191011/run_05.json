@@ -1,0 +1,16 @@
+{
+  "run": 5,
+  "elapsed_s": 536.7,
+  "success": true,
+  "recommended": "Instrumentation-Based Token Counting",
+  "plan_size": 40658,
+  "stage_timings": {
+    "agent_gathering": 14.48499999998603,
+    "implementation_check": 3.1560000000172295,
+    "context": 44.84399999998277,
+    "architecture_design": 420.28100000001723,
+    "roadmap_risk": 52.578000000008615,
+    "coherence_check": 1.2659999999741558
+  },
+  "error": null
+}

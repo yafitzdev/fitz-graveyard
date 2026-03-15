@@ -1,0 +1,423 @@
+{
+  "context": {
+    "project_description": "Implement token usage tracking for LLM queries by instrumenting ChatProvider implementations across OpenAI, Anthropic, and Cohere providers using the existing BenchmarkHook infrastructure.",
+    "key_requirements": [
+      "Instrument chat methods (chat() and chat_stream()) on OpenAIChat, AnthropicChat, and CohereChat providers",
+      "Extract actual token counts from SDK responses when available (OpenAI usage field, Anthropic usage object, Cohere usage fields)",
+      "Implement fallback strategies for providers that don't expose exact tokens (Ollama, etc.) using character-based estimation or defaults",
+      "Log usage data via existing logging infrastructure without breaking current APIs"
+    ],
+    "constraints": [
+      "Must leverage existing InstrumentedProxy framework in fitz_ai/core/instrumentation.py",
+      "Cannot modify existing provider method signatures or break current functionality",
+      "Token counting must be implemented in a single new file fitz_ai/core/token_counter.py",
+      "Integration must work with factory functions like create_chat_provider"
+    ],
+    "existing_context": "fitz_ai/llm/providers/openai.py, fitz_ai/llm/providers/anthropic.py, fitz_ai/llm/providers/cohere.py, fitz_ai/core/instrumentation.py, fitz_ai/logging/logger.py",
+    "stakeholders": [
+      "development team responsible for LLM provider integrations",
+      "observability team monitoring system usage costs",
+      "engineering leadership needing visibility into token consumption patterns"
+    ],
+    "scope_boundaries": {
+      "in_scope": [
+        "token counting for chat/completion operations across OpenAI, Anthropic, and Cohere providers",
+        "integration with existing InstrumentedProxy infrastructure",
+        "logging of token usage data via existing logging system"
+      ],
+      "out_of_scope": [
+        "tracking tokens for non-chat LLM operations beyond completion APIs",
+        "implementation of token counting logic for Ollama and other providers that don't expose exact token counts (will use fallback estimation only)",
+        "modification of current LLM provider interfaces or breaking changes to existing APIs"
+      ]
+    },
+    "existing_files": [
+      "fitz_ai/core/instrumentation.py \u2014 Instrumentation system for benchmarking plugin performance",
+      "fitz_ai/llm/providers/openai.py \u2014 OpenAI provider wrappers using the official SDK",
+      "fitz_ai/llm/providers/anthropic.py \u2014 Anthropic provider wrappers using the official SDK",
+      "fitz_ai/llm/providers/cohere.py \u2014 Cohere provider wrappers using the official SDK",
+      "fitz_ai/llm/factory.py \u2014 LLM provider factory functions",
+      "fitz_ai/llm/providers/base.py \u2014 discovered by agent",
+      "fitz_ai/llm/providers/ollama.py \u2014 discovered by agent"
+    ],
+    "needed_artifacts": [
+      "fitz_ai/core/token_counter.py \u2014 Implements BenchmarkHook to track LLM calls and count tokens for chat/completion operations across all providers"
+    ],
+    "assumptions": [
+      {
+        "assumption": "Token counting should only focus on chat/completion operations",
+        "impact": "Including other LLM operations would increase scope and complexity; excluding them keeps the implementation minimal and focused",
+        "confidence": "high"
+      },
+      {
+        "assumption": "All major LLM providers expose token usage information in their SDK responses",
+        "impact": "If a provider doesn't expose token counts, fallback strategies (like character-based estimation) would be needed; this may lead to inaccurate tracking for some providers",
+        "confidence": "medium"
+      },
+      {
+        "assumption": "The existing InstrumentedProxy infrastructure can be leveraged without modification",
+        "impact": "If the proxy framework isn't flexible enough, additional changes might be required in core architecture which could introduce risks or delays to implementation",
+        "confidence": "high"
+      },
+      {
+        "assumption": "No breaking changes are acceptable for current APIs during this feature addition",
+        "impact": "Any API disruption would affect existing integrations and user workflows; maintaining backward compatibility ensures smooth adoption",
+        "confidence": "high"
+      }
+    ]
+  },
+  "architecture_design": {
+    "architecture": {
+      "approaches": [
+        {
+          "name": "Instrumentation-Based Token Counting",
+          "description": "Use the existing BenchmarkHook system to intercept LLM calls and extract token usage from SDK responses when available, falling back to character-based estimation for providers that don't expose exact counts.",
+          "pros": [
+            "Leverages existing instrumentation infrastructure without major architectural changes",
+            "Provides at least approximate cost tracking for all supported providers",
+            "Defensive programming with error handling prevents system crashes"
+          ],
+          "cons": [
+            "Token data is lost in current provider interfaces that return simple strings instead of structured responses",
+            "Streaming response token counting requires significant architecture changes",
+            "Fallback estimation accuracy varies by model and text type"
+          ],
+          "complexity": "medium",
+          "best_for": [
+            "Production systems needing basic cost visibility without breaking existing APIs",
+            "Scenarios where exact precision isn't critical but approximate tracking is valuable"
+          ]
+        },
+        {
+          "name": "Provider-Interface Modification Approach",
+          "description": "Modify LLM provider interfaces to return structured response objects that contain token usage metadata alongside completion text, enabling accurate token extraction across all providers.",
+          "pros": [
+            "Provides precise token counting for all providers with minimal hook logic changes",
+            "Enables full streaming token tracking capabilities",
+            "Creates consistent interface contract across all LLM clients"
+          ],
+          "cons": [
+            "Requires substantial refactoring of provider implementations and interfaces",
+            "Breaking change to existing provider contracts that may affect downstream consumers",
+            "Significant development effort required for all supported providers (OpenAI, Anthropic, Cohere, Ollama)"
+          ],
+          "complexity": "high",
+          "best_for": [
+            "Systems where precise cost tracking is critical and can justify major architectural changes",
+            "New deployments or refactoring projects with sufficient resources"
+          ]
+        }
+      ],
+      "recommended": "Instrumentation-Based Token Counting",
+      "reasoning": "This approach aligns with existing architecture patterns while addressing the core requirement of providing token usage visibility. It leverages proven instrumentation mechanisms (BenchmarkHook protocol) and follows defensive programming practices to avoid breaking system flow when SDK response formats vary. The 'Provider-Interface Modification Approach' is technically superior but requires major architectural changes that would break backward compatibility and demand substantial engineering resources, making it inappropriate for this immediate implementation scope.",
+      "key_tradeoffs": {
+        "token_precision_vs.system_overhead": "The hook prioritizes system reliability and minimal overhead over exact token precision by using character-based fallback estimation when SDK-provided usage data is unavailable, ensuring the monitoring doesn't break core functionality even with inconsistent provider responses.",
+        "detailed_metrics.vs.performance": "Detailed token logging trades some performance for valuable observability. The hook uses defensive error handling to prevent crashes but logs are structured and minimal, avoiding excessive overhead on LLM call paths."
+      },
+      "technology_considerations": [
+        "Python typing annotations with generics for type safety in hook interfaces",
+        "Logging infrastructure integration using structured logging with 'extra' parameter for consistent metric collection",
+        "Instrumentation system leveraging proxy pattern to wrap LLM provider methods without modifying their contracts",
+        "Error handling practices with try/catch blocks around token extraction and logging operations to ensure system resilience",
+        "Character-based token estimation heuristic as fallback mechanism for providers that don't expose exact usage counts (e.g., Ollama)"
+      ],
+      "scope_statement": "Implement a token counter hook using existing instrumentation infrastructure that extracts usage data from supported LLM responses when available, with fallback character-based estimation. This provides approximate cost tracking without requiring provider interface modifications or breaking changes."
+    },
+    "design": {
+      "adrs": [
+        {
+          "title": "ADR: Token Counter Hook for LLM Usage Tracking",
+          "context": "The need to track token consumption across different LLM providers (OpenAI, Anthropic, Cohere, Ollama) for cost monitoring and observability purposes. Current provider interfaces return simple string types instead of structured responses containing usage metadata.",
+          "decision": "Implement a TokenCounterHook that integrates with the existing instrumentation system to extract token counts from SDK responses when available, falling back to character-based estimation for providers without exact token data",
+          "rationale": "This approach follows the existing benchmark hook architecture while providing at least some indication of cost per query rather than requiring exact precision. The hook is automatically registered upon import and works with all instrumented LLM clients through the InstrumentedProxy mechanism.",
+          "consequences": [
+            "Provides basic token usage tracking across supported providers",
+            "Fallback estimation gives approximate costs when exact data unavailable",
+            "Defensive error handling prevents crashes from malformed SDK responses",
+            "Requires careful consideration for streaming responses which cannot be properly tracked in current architecture"
+          ],
+          "alternatives_considered": [
+            "Modify provider interfaces to return structured response objects with usage metadata - rejected because it would require breaking changes to existing contracts",
+            "Implement custom wrapper around each provider that captures token data before returning results - rejected because it adds complexity and potential performance overhead",
+            "Only support exact counting for OpenAI and Anthropic (providers that expose usage in responses) - rejected because it creates inconsistent behavior across providers"
+          ]
+        },
+        {
+          "title": "ADR: Token Data Exposure Through Instrumentation Boundaries",
+          "context": "The instrumentation-based approach requires passing token count data through hook boundaries, potentially exposing internal implementation details to external systems that may not need or should not have access to this granular telemetry.",
+          "decision": "Accept partial exposure of token usage metrics across instrumentation boundaries while maintaining the core functionality of providing visibility without breaking existing system flow.",
+          "rationale": "The BenchmarkHook protocol is designed for telemetry and monitoring scenarios where data crossing boundaries is expected. However, we must acknowledge that raw token counts are sensitive operational data that might reveal implementation details about model usage patterns or business logic.",
+          "consequences": [
+            "External systems may gain insight into internal token counting implementations",
+            "Potential security implications if token metadata contains sensitive usage patterns",
+            "Increased complexity in access control for telemetry APIs"
+          ],
+          "alternatives_considered": [
+            "Implement a separate metrics service that aggregates and transforms token data internally before exposing it",
+            "Only expose aggregated counts rather than individual request-level token information",
+            "Create an opt-in mechanism where only explicitly configured hooks receive detailed token count data"
+          ]
+        }
+      ],
+      "components": [
+        {
+          "name": "TokenCounterHook",
+          "purpose": "A benchmark hook that counts tokens consumed by LLM chat/completion operations, extracting actual token counts from SDK responses when available and logging them using the existing logging infrastructure with fallback to character-based estimates",
+          "responsibilities": [
+            "Track start time and basic metadata for instrumented calls",
+            "Extract token usage information from successful chat calls when available in SDK response data",
+            "Provide fallback calculation based on character lengths of message content when exact counts unavailable",
+            "Log detailed metrics using existing logging infrastructure with structured fields including provider name, method type, input/output tokens, and error info",
+            "Handle all exceptions during token extraction and logging without crashing the main execution flow"
+          ],
+          "interfaces": [
+            "on_call_start(layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any",
+            "on_call_end(context: Any, result: Any, error: Exception | None) -> None"
+          ],
+          "dependencies": [
+            "BenchmarkHook",
+            "ChatProvider",
+            "InstrumentedProxy",
+            "StructuredLogger"
+          ]
+        }
+      ],
+      "data_model": {
+        "TokenUsageRecord": [
+          "provider: str",
+          "method: str",
+          "input_tokens: int",
+          "output_tokens: int",
+          "total_tokens: int",
+          "error: str | None"
+        ]
+      },
+      "integration_points": [
+        "ExternalSystem \u2014 TokenCounterHook integrates with the existing instrumentation system via BenchmarkHook protocol, automatically registering itself upon import to track LLM usage across all instrumented chat/completion operations"
+      ],
+      "artifacts": [
+        {
+          "filename": "fitz_ai/core/token_counter.py",
+          "content": "\"\"\"\nToken counter hook that tracks LLM usage for chat/completion operations.\nThis hook extracts actual token counts from SDK responses when available and logs them\nusing the existing logging infrastructure.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport logging\nimport time\nfrom typing import Any, Dict, Optional\n\nfrom fitz_ai.core.instrumentation import BenchmarkHook\nfrom fitz_ai.llm.providers.base import ChatProvider\n\nlogger = logging.getLogger(__name__)  # [VERIFY] method not found in signatures\n\nclass TokenCounterHook(BenchmarkHook):\n    \"\"\"\n    A benchmark hook that counts tokens consumed by LLM chat/completion operations.\n    \n    This hook extracts token usage from SDK responses and logs detailed metrics,\n    falling back to character-based estimates for providers not supporting exact counts.\n    \"\"\"\n\n    def on_call_start(\n        self,\n        layer: str,\n        plugin_name: str,\n        method: str,\n        args: tuple,\n        kwargs: dict,\n    ) -> Any:\n        # Store start time and basic metadata\n        return {\n            \"start_time\": time.time(),  # [VERIFY] method not found in signatures\n            \"layer\": layer,\n            \"plugin_name\": plugin_name,\n            \"method\": method,\n        }\n\n    def on_call_end(\n        self,\n        context: Any,\n        result: Any,\n        error: Exception | None,\n    ) -> None:\n        # Only process successful chat calls\n        if not (context and isinstance(context, dict) and context.get(\"method\") in (\"chat\", \"chat_stream\")):\n            return\n            \n        plugin_name = context[\"plugin_name\"]\n        method = context[\"method\"]\n        \n        # Extract tokens when available from response data\n        input_tokens = 0\n        output_tokens = 0\n        total_tokens = 0\n        \n        try:\n            if method == \"chat\":\n                # Handle different SDK responses for chat completion\n                \n                # OpenAI: result is a string, but may be dict with usage info (if streaming)\n                if isinstance(result, str) and not error:\n                    # For non-streaming calls, check if we can extract token counts\n                    pass  # This will require parsing in some cases\n                    \n                elif hasattr(result, '__dict__') and 'usage' in result.__dict__:\n                    # Handle structured response objects like OpenAI's ChatCompletionResponse\n                    usage = getattr(result, 'usage', None)\n                    if isinstance(usage, dict):\n                        input_tokens = usage.get(\"prompt_tokens\", 0)\n                        output_tokens = usage.get(\"completion_tokens\", 0)\n                        total_tokens = usage.get(\"total_tokens\", input_tokens + output_tokens)\n                        \n                elif hasattr(result, 'get') and callable(getattr(result, 'get')):\n                    # Handle cases like dictionary-like response\n                    if isinstance(result, dict):\n                        usage = result.get('usage', {})\n                        if isinstance(usage, dict):\n                            input_tokens = usage.get(\"prompt_tokens\", 0)\n                            output_tokens = usage.get(\"completion_tokens\", 0)\n                            total_tokens = usage.get(\"total_tokens\", input_tokens + output_tokens)\n\n            elif method == \"chat_stream\":\n                # Streamed responses are harder to extract counts from directly\n                # We'll use a fallback strategy or rely on external context tracking\n                \n                pass  # Stream-based counting would need more complex logic\n\n        except Exception as e:\n            logger.warning(\n                f\"Failed to extract token usage for {plugin_name}.{method}\",\n                extra={\n                    \"error\": str(e),\n                    \"provider\": plugin_name,\n                    \"method\": method,\n                },\n                exc_info=True,\n            )\n            \n        # Fallback calculation: estimate based on text lengths\n        if input_tokens == 0 and output_tokens == 0:\n            estimated_input = self._estimate_tokens_from_messages(args[0] if args else []) \\\n                if hasattr(args, '__len__') and len(args) > 0 and isinstance(args[0], list) \\\n                else 0\n                \n            # For output we cannot easily estimate without response data\n            estimated_output = 0\n            \n            input_tokens = estimated_input\n            output_tokens = estimated_output\n\n        # Log the token usage record\n        try:\n            logger.info(\n                \"LLM Token Usage\",\n                extra={\n                    \"provider\": plugin_name,\n                    \"method\": method,\n                    \"input_tokens\": input_tokens,\n                    \"output_tokens\": output_tokens,\n                    \"total_tokens\": total_tokens,\n                    \"error\": str(error) if error else None,\n                },\n            )\n            \n        except Exception as e:\n            # Defensive logging - don't let token counting break main flow\n            logger.warning(\n                \"Failed to log token usage\",\n                extra={\n                    \"provider\": plugin_name,\n                    \"method\": method,\n                    \"error\": str(e),\n                },\n                exc_info=True,\n            )\n\n    def _estimate_tokens_from_messages(self, messages: list[dict[str, Any]]) -> int:\n        \"\"\"Estimate tokens based on character length of all message content.\n        \n        Note: This is a simple heuristic and not accurate for all models.\n        For production use with specific tokenizers, consider integrating\n        proper tokenizer libraries like tiktoken or sentencepiece.\n        \"\"\"\n        # Flatten messages to get total text content\n        full_text = \" \".join(str(msg.get('content', '')) for msg in messages)\n        \n        # Approximate: 1 token ~ 4 characters for English text\n        # Roughly matches OpenAI's gpt-3.5-turbo estimate of ~0.75 tokens/word,\n        # with words averaging ~4 letters including spaces/punctuation.\n        return max(1, len(full_text) // 4)\n\n\n# Register this hook automatically upon import\n# This ensures that all instrumented providers will get token tracking\nfrom fitz_ai.core.instrumentation import register_hook\n\nregister_hook(TokenCounterHook())",
+          "purpose": "Implements a benchmark hook that counts tokens consumed by LLM chat/completion operations, extracting actual token usage from SDK responses when available and falling back to character-based estimates for providers not supporting exact counts"
+        }
+      ]
+    }
+  },
+  "architecture": {
+    "approaches": [
+      {
+        "name": "Instrumentation-Based Token Counting",
+        "description": "Use the existing BenchmarkHook system to intercept LLM calls and extract token usage from SDK responses when available, falling back to character-based estimation for providers that don't expose exact counts.",
+        "pros": [
+          "Leverages existing instrumentation infrastructure without major architectural changes",
+          "Provides at least approximate cost tracking for all supported providers",
+          "Defensive programming with error handling prevents system crashes"
+        ],
+        "cons": [
+          "Token data is lost in current provider interfaces that return simple strings instead of structured responses",
+          "Streaming response token counting requires significant architecture changes",
+          "Fallback estimation accuracy varies by model and text type"
+        ],
+        "complexity": "medium",
+        "best_for": [
+          "Production systems needing basic cost visibility without breaking existing APIs",
+          "Scenarios where exact precision isn't critical but approximate tracking is valuable"
+        ]
+      },
+      {
+        "name": "Provider-Interface Modification Approach",
+        "description": "Modify LLM provider interfaces to return structured response objects that contain token usage metadata alongside completion text, enabling accurate token extraction across all providers.",
+        "pros": [
+          "Provides precise token counting for all providers with minimal hook logic changes",
+          "Enables full streaming token tracking capabilities",
+          "Creates consistent interface contract across all LLM clients"
+        ],
+        "cons": [
+          "Requires substantial refactoring of provider implementations and interfaces",
+          "Breaking change to existing provider contracts that may affect downstream consumers",
+          "Significant development effort required for all supported providers (OpenAI, Anthropic, Cohere, Ollama)"
+        ],
+        "complexity": "high",
+        "best_for": [
+          "Systems where precise cost tracking is critical and can justify major architectural changes",
+          "New deployments or refactoring projects with sufficient resources"
+        ]
+      }
+    ],
+    "recommended": "Instrumentation-Based Token Counting",
+    "reasoning": "This approach aligns with existing architecture patterns while addressing the core requirement of providing token usage visibility. It leverages proven instrumentation mechanisms (BenchmarkHook protocol) and follows defensive programming practices to avoid breaking system flow when SDK response formats vary. The 'Provider-Interface Modification Approach' is technically superior but requires major architectural changes that would break backward compatibility and demand substantial engineering resources, making it inappropriate for this immediate implementation scope.",
+    "key_tradeoffs": {
+      "token_precision_vs.system_overhead": "The hook prioritizes system reliability and minimal overhead over exact token precision by using character-based fallback estimation when SDK-provided usage data is unavailable, ensuring the monitoring doesn't break core functionality even with inconsistent provider responses.",
+      "detailed_metrics.vs.performance": "Detailed token logging trades some performance for valuable observability. The hook uses defensive error handling to prevent crashes but logs are structured and minimal, avoiding excessive overhead on LLM call paths."
+    },
+    "technology_considerations": [
+      "Python typing annotations with generics for type safety in hook interfaces",
+      "Logging infrastructure integration using structured logging with 'extra' parameter for consistent metric collection",
+      "Instrumentation system leveraging proxy pattern to wrap LLM provider methods without modifying their contracts",
+      "Error handling practices with try/catch blocks around token extraction and logging operations to ensure system resilience",
+      "Character-based token estimation heuristic as fallback mechanism for providers that don't expose exact usage counts (e.g., Ollama)"
+    ],
+    "scope_statement": "Implement a token counter hook using existing instrumentation infrastructure that extracts usage data from supported LLM responses when available, with fallback character-based estimation. This provides approximate cost tracking without requiring provider interface modifications or breaking changes."
+  },
+  "design": {
+    "adrs": [
+      {
+        "title": "ADR: Token Counter Hook for LLM Usage Tracking",
+        "context": "The need to track token consumption across different LLM providers (OpenAI, Anthropic, Cohere, Ollama) for cost monitoring and observability purposes. Current provider interfaces return simple string types instead of structured responses containing usage metadata.",
+        "decision": "Implement a TokenCounterHook that integrates with the existing instrumentation system to extract token counts from SDK responses when available, falling back to character-based estimation for providers without exact token data",
+        "rationale": "This approach follows the existing benchmark hook architecture while providing at least some indication of cost per query rather than requiring exact precision. The hook is automatically registered upon import and works with all instrumented LLM clients through the InstrumentedProxy mechanism.",
+        "consequences": [
+          "Provides basic token usage tracking across supported providers",
+          "Fallback estimation gives approximate costs when exact data unavailable",
+          "Defensive error handling prevents crashes from malformed SDK responses",
+          "Requires careful consideration for streaming responses which cannot be properly tracked in current architecture"
+        ],
+        "alternatives_considered": [
+          "Modify provider interfaces to return structured response objects with usage metadata - rejected because it would require breaking changes to existing contracts",
+          "Implement custom wrapper around each provider that captures token data before returning results - rejected because it adds complexity and potential performance overhead",
+          "Only support exact counting for OpenAI and Anthropic (providers that expose usage in responses) - rejected because it creates inconsistent behavior across providers"
+        ]
+      },
+      {
+        "title": "ADR: Token Data Exposure Through Instrumentation Boundaries",
+        "context": "The instrumentation-based approach requires passing token count data through hook boundaries, potentially exposing internal implementation details to external systems that may not need or should not have access to this granular telemetry.",
+        "decision": "Accept partial exposure of token usage metrics across instrumentation boundaries while maintaining the core functionality of providing visibility without breaking existing system flow.",
+        "rationale": "The BenchmarkHook protocol is designed for telemetry and monitoring scenarios where data crossing boundaries is expected. However, we must acknowledge that raw token counts are sensitive operational data that might reveal implementation details about model usage patterns or business logic.",
+        "consequences": [
+          "External systems may gain insight into internal token counting implementations",
+          "Potential security implications if token metadata contains sensitive usage patterns",
+          "Increased complexity in access control for telemetry APIs"
+        ],
+        "alternatives_considered": [
+          "Implement a separate metrics service that aggregates and transforms token data internally before exposing it",
+          "Only expose aggregated counts rather than individual request-level token information",
+          "Create an opt-in mechanism where only explicitly configured hooks receive detailed token count data"
+        ]
+      }
+    ],
+    "components": [
+      {
+        "name": "TokenCounterHook",
+        "purpose": "A benchmark hook that counts tokens consumed by LLM chat/completion operations, extracting actual token counts from SDK responses when available and logging them using the existing logging infrastructure with fallback to character-based estimates",
+        "responsibilities": [
+          "Track start time and basic metadata for instrumented calls",
+          "Extract token usage information from successful chat calls when available in SDK response data",
+          "Provide fallback calculation based on character lengths of message content when exact counts unavailable",
+          "Log detailed metrics using existing logging infrastructure with structured fields including provider name, method type, input/output tokens, and error info",
+          "Handle all exceptions during token extraction and logging without crashing the main execution flow"
+        ],
+        "interfaces": [
+          "on_call_start(layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any",
+          "on_call_end(context: Any, result: Any, error: Exception | None) -> None"
+        ],
+        "dependencies": [
+          "BenchmarkHook",
+          "ChatProvider",
+          "InstrumentedProxy",
+          "StructuredLogger"
+        ]
+      }
+    ],
+    "data_model": {
+      "TokenUsageRecord": [
+        "provider: str",
+        "method: str",
+        "input_tokens: int",
+        "output_tokens: int",
+        "total_tokens: int",
+        "error: str | None"
+      ]
+    },
+    "integration_points": [
+      "ExternalSystem \u2014 TokenCounterHook integrates with the existing instrumentation system via BenchmarkHook protocol, automatically registering itself upon import to track LLM usage across all instrumented chat/completion operations"
+    ],
+    "artifacts": [
+      {
+        "filename": "fitz_ai/core/token_counter.py",
+        "content": "\"\"\"\nToken counter hook that tracks LLM usage for chat/completion operations.\nThis hook extracts actual token counts from SDK responses when available and logs them\nusing the existing logging infrastructure.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport logging\nimport time\nfrom typing import Any, Dict, Optional\n\nfrom fitz_ai.core.instrumentation import BenchmarkHook\nfrom fitz_ai.llm.providers.base import ChatProvider\n\nlogger = logging.getLogger(__name__)  # [VERIFY] method not found in signatures\n\nclass TokenCounterHook(BenchmarkHook):\n    \"\"\"\n    A benchmark hook that counts tokens consumed by LLM chat/completion operations.\n    \n    This hook extracts token usage from SDK responses and logs detailed metrics,\n    falling back to character-based estimates for providers not supporting exact counts.\n    \"\"\"\n\n    def on_call_start(\n        self,\n        layer: str,\n        plugin_name: str,\n        method: str,\n        args: tuple,\n        kwargs: dict,\n    ) -> Any:\n        # Store start time and basic metadata\n        return {\n            \"start_time\": time.time(),  # [VERIFY] method not found in signatures\n            \"layer\": layer,\n            \"plugin_name\": plugin_name,\n            \"method\": method,\n        }\n\n    def on_call_end(\n        self,\n        context: Any,\n        result: Any,\n        error: Exception | None,\n    ) -> None:\n        # Only process successful chat calls\n        if not (context and isinstance(context, dict) and context.get(\"method\") in (\"chat\", \"chat_stream\")):\n            return\n            \n        plugin_name = context[\"plugin_name\"]\n        method = context[\"method\"]\n        \n        # Extract tokens when available from response data\n        input_tokens = 0\n        output_tokens = 0\n        total_tokens = 0\n        \n        try:\n            if method == \"chat\":\n                # Handle different SDK responses for chat completion\n                \n                # OpenAI: result is a string, but may be dict with usage info (if streaming)\n                if isinstance(result, str) and not error:\n                    # For non-streaming calls, check if we can extract token counts\n                    pass  # This will require parsing in some cases\n                    \n                elif hasattr(result, '__dict__') and 'usage' in result.__dict__:\n                    # Handle structured response objects like OpenAI's ChatCompletionResponse\n                    usage = getattr(result, 'usage', None)\n                    if isinstance(usage, dict):\n                        input_tokens = usage.get(\"prompt_tokens\", 0)\n                        output_tokens = usage.get(\"completion_tokens\", 0)\n                        total_tokens = usage.get(\"total_tokens\", input_tokens + output_tokens)\n                        \n                elif hasattr(result, 'get') and callable(getattr(result, 'get')):\n                    # Handle cases like dictionary-like response\n                    if isinstance(result, dict):\n                        usage = result.get('usage', {})\n                        if isinstance(usage, dict):\n                            input_tokens = usage.get(\"prompt_tokens\", 0)\n                            output_tokens = usage.get(\"completion_tokens\", 0)\n                            total_tokens = usage.get(\"total_tokens\", input_tokens + output_tokens)\n\n            elif method == \"chat_stream\":\n                # Streamed responses are harder to extract counts from directly\n                # We'll use a fallback strategy or rely on external context tracking\n                \n                pass  # Stream-based counting would need more complex logic\n\n        except Exception as e:\n            logger.warning(\n                f\"Failed to extract token usage for {plugin_name}.{method}\",\n                extra={\n                    \"error\": str(e),\n                    \"provider\": plugin_name,\n                    \"method\": method,\n                },\n                exc_info=True,\n            )\n            \n        # Fallback calculation: estimate based on text lengths\n        if input_tokens == 0 and output_tokens == 0:\n            estimated_input = self._estimate_tokens_from_messages(args[0] if args else []) \\\n                if hasattr(args, '__len__') and len(args) > 0 and isinstance(args[0], list) \\\n                else 0\n                \n            # For output we cannot easily estimate without response data\n            estimated_output = 0\n            \n            input_tokens = estimated_input\n            output_tokens = estimated_output\n\n        # Log the token usage record\n        try:\n            logger.info(\n                \"LLM Token Usage\",\n                extra={\n                    \"provider\": plugin_name,\n                    \"method\": method,\n                    \"input_tokens\": input_tokens,\n                    \"output_tokens\": output_tokens,\n                    \"total_tokens\": total_tokens,\n                    \"error\": str(error) if error else None,\n                },\n            )\n            \n        except Exception as e:\n            # Defensive logging - don't let token counting break main flow\n            logger.warning(\n                \"Failed to log token usage\",\n                extra={\n                    \"provider\": plugin_name,\n                    \"method\": method,\n                    \"error\": str(e),\n                },\n                exc_info=True,\n            )\n\n    def _estimate_tokens_from_messages(self, messages: list[dict[str, Any]]) -> int:\n        \"\"\"Estimate tokens based on character length of all message content.\n        \n        Note: This is a simple heuristic and not accurate for all models.\n        For production use with specific tokenizers, consider integrating\n        proper tokenizer libraries like tiktoken or sentencepiece.\n        \"\"\"\n        # Flatten messages to get total text content\n        full_text = \" \".join(str(msg.get('content', '')) for msg in messages)\n        \n        # Approximate: 1 token ~ 4 characters for English text\n        # Roughly matches OpenAI's gpt-3.5-turbo estimate of ~0.75 tokens/word,\n        # with words averaging ~4 letters including spaces/punctuation.\n        return max(1, len(full_text) // 4)\n\n\n# Register this hook automatically upon import\n# This ensures that all instrumented providers will get token tracking\nfrom fitz_ai.core.instrumentation import register_hook\n\nregister_hook(TokenCounterHook())",
+        "purpose": "Implements a benchmark hook that counts tokens consumed by LLM chat/completion operations, extracting actual token usage from SDK responses when available and falling back to character-based estimates for providers not supporting exact counts"
+      }
+    ]
+  },
+  "roadmap_risk": {
+    "roadmap": {
+      "phases": [
+        {
+          "number": 0,
+          "name": "Read Before Writing",
+          "objective": "Verify integration points by reading source",
+          "deliverables": [
+            "Verified: fitz_ai/llm/providers/base.py",
+            "Verified: fitz_ai/llm/providers/openai.py",
+            "Verified: fitz_ai/llm/providers/anthropic.py",
+            "Verified: fitz_ai/llm/providers/cohere.py",
+            "Verified: fitz_ai/llm/providers/ollama.py"
+          ],
+          "dependencies": [],
+          "estimated_complexity": "low",
+          "key_risks": [],
+          "verification_command": "pytest fitz_ai/llm/providers/ -v --tb=short",
+          "estimated_effort": "~15 min"
+        }
+      ],
+      "critical_path": [
+        0,
+        2,
+        3,
+        5
+      ],
+      "parallel_opportunities": [
+        [
+          4,
+          6
+        ]
+      ],
+      "total_phases": 1
+    },
+    "risk": {
+      "risks": [],
+      "overall_risk_level": "low",
+      "recommended_contingencies": []
+    }
+  },
+  "roadmap": {
+    "phases": [
+      {
+        "number": 0,
+        "name": "Read Before Writing",
+        "objective": "Verify integration points by reading source",
+        "deliverables": [
+          "Verified: fitz_ai/llm/providers/base.py",
+          "Verified: fitz_ai/llm/providers/openai.py",
+          "Verified: fitz_ai/llm/providers/anthropic.py",
+          "Verified: fitz_ai/llm/providers/cohere.py",
+          "Verified: fitz_ai/llm/providers/ollama.py"
+        ],
+        "dependencies": [],
+        "estimated_complexity": "low",
+        "key_risks": [],
+        "verification_command": "pytest fitz_ai/llm/providers/ -v --tb=short",
+        "estimated_effort": "~15 min"
+      }
+    ],
+    "critical_path": [
+      0,
+      2,
+      3,
+      5
+    ],
+    "parallel_opportunities": [
+      [
+        4,
+        6
+      ]
+    ],
+    "total_phases": 1
+  },
+  "risk": {
+    "risks": [],
+    "overall_risk_level": "low",
+    "recommended_contingencies": []
+  }
+}

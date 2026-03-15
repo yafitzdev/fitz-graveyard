@@ -1,0 +1,16 @@
+{
+  "run": 4,
+  "elapsed_s": 557.0,
+  "success": true,
+  "recommended": "Instrumentation-Based Token Tracking",
+  "plan_size": 49165,
+  "stage_timings": {
+    "agent_gathering": 15.812999999994645,
+    "implementation_check": 3.639999999984866,
+    "context": 56.312999999994645,
+    "architecture_design": 423.9530000000086,
+    "roadmap_risk": 55.078000000008615,
+    "coherence_check": 2.062999999994645
+  },
+  "error": null
+}

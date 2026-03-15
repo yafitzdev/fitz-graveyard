@@ -1,0 +1,16 @@
+{
+  "run": 5,
+  "elapsed_s": 781.8,
+  "success": true,
+  "recommended": "Approach 1: Centralized Hook-Based Instrumentation",
+  "plan_size": 33391,
+  "stage_timings": {
+    "agent_gathering": 14.203999999997905,
+    "implementation_check": 3.187000000005355,
+    "context": 163.04699999999139,
+    "architecture_design": 536.7190000000119,
+    "roadmap_risk": 62.187000000005355,
+    "coherence_check": 2.312999999994645
+  },
+  "error": null
+}

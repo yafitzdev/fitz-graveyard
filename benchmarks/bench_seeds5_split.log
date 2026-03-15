@@ -1,0 +1,1307 @@
+2026-03-15 20:05:14,285 INFO     bench: Running 5 reasoning benchmarks -> C:\Users\yanfi\PycharmProjects\fitz-graveyard\benchmarks\results\reasoning_split_seeds5_20260315_200514
+2026-03-15 20:05:14,286 INFO     bench: Split reasoning mode: architecture + design as separate calls
+2026-03-15 20:05:14,286 INFO     bench: Max seed files: 5
+2026-03-15 20:05:14,290 INFO     bench: --- Reasoning run 1/5 ---
+2026-03-15 20:05:15,515 INFO     fitz_graveyard.config.loader: Loaded config from C:\Users\yanfi\AppData\Local\fitz-graveyard\fitz-graveyard\config.yaml
+2026-03-15 20:05:16,340 INFO     httpx: HTTP Request: GET http://localhost:1234/v1/models "HTTP/1.1 200 OK"
+2026-03-15 20:05:16,903 INFO     fitz_graveyard.llm.lm_studio: Health check: switching qwen3-coder-30b-a3b-instruct -> qwen3.5-4b
+2026-03-15 20:05:17,262 INFO     fitz_graveyard.llm.lm_studio: Switching model: qwen3-coder-30b-a3b-instruct -> qwen3.5-4b
+2026-03-15 20:05:17,275 INFO     fitz_graveyard.llm.lm_studio: Running: C:\Users\yanfi\.lmstudio\bin\lms.EXE unload --all
+2026-03-15 20:05:17,913 INFO     fitz_graveyard.llm.lm_studio: Model unloaded successfully: Unloading "qwen3-coder-30b-a3b-instruct"...
+Unloaded 1 model.
+2026-03-15 20:05:17,929 INFO     fitz_graveyard.llm.lm_studio: Running: lms load qwen3.5-4b -y -c 65536 --parallel 1
+2026-03-15 20:05:37,962 INFO     fitz_graveyard.llm.lm_studio: Model qwen3.5-4b loaded successfully
+2026-03-15 20:05:38,709 INFO     fitz_graveyard.llm.lm_studio: Switching model: qwen3.5-4b -> qwen3-coder-30b-a3b-instruct
+2026-03-15 20:05:38,720 INFO     fitz_graveyard.llm.lm_studio: Running: C:\Users\yanfi\.lmstudio\bin\lms.EXE unload --all
+2026-03-15 20:05:39,066 INFO     fitz_graveyard.llm.lm_studio: Model unloaded successfully: Unloading "qwen3.5-4b"...
+Unloaded 1 model.
+2026-03-15 20:05:39,080 INFO     fitz_graveyard.llm.lm_studio: Running: lms load qwen3-coder-30b-a3b-instruct -y -c 65536 --parallel 1
+2026-03-15 20:07:03,304 INFO     fitz_graveyard.llm.lm_studio: Model qwen3-coder-30b-a3b-instruct loaded successfully
+2026-03-15 20:07:03,308 INFO     fitz_graveyard.planning.pipeline.orchestrator: Created PlanningPipeline with 3 stages
+2026-03-15 20:07:03,355 INFO     fitz_graveyard.planning.pipeline.orchestrator: Starting fresh pipeline for job bench_001
+2026-03-15 20:07:03,355 INFO     fitz_graveyard.planning.pipeline.orchestrator: Running AgentContextGatherer for job bench_001
+2026-03-15 20:07:17,054 INFO     fitz_graveyard.planning.agent.gatherer: AgentContextGatherer: using 30 override files (skipped LLM retrieval)
+2026-03-15 20:07:17,054 INFO     fitz_graveyard.planning.agent.gatherer: AgentContextGatherer: fitz-ai retrieved 30 files from 711 indexed
+2026-03-15 20:07:17,054 INFO     fitz_graveyard.planning.agent.gatherer: AgentContextGatherer: 30 selected, 0 import, 0 hub, 0 neighbor
+2026-03-15 20:07:17,077 INFO     fitz_graveyard.planning.agent.gatherer: AgentContextGatherer: compressed 30 files (67447 -> 66889 chars, 1% reduction)
+2026-03-15 20:07:17,250 INFO     fitz_graveyard.planning.agent.indexer: Library signatures: extracted 2 packages (3613 chars)
+2026-03-15 20:07:17,251 INFO     fitz_graveyard.planning.agent.gatherer: AgentContextGatherer: seed=5 files (12558 chars), tool_pool=25 files (54331 chars), max_seeds=5
+2026-03-15 20:07:17,251 INFO     fitz_graveyard.planning.agent.gatherer: AgentContextGatherer: 30 files (66889 chars compressed, 30637 chars overview) — pipeline total 13.9s
+2026-03-15 20:07:17,251 INFO     fitz_graveyard.planning.pipeline.orchestrator: AgentContextGatherer complete: synthesized=30637, raw=43493 chars
+2026-03-15 20:07:17,324 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:07:18,054 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:07:20,941 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 538 chars in 3.6s (~37.1 tok/s)
+2026-03-15 20:07:20,941 INFO     fitz_graveyard.planning.pipeline.orchestrator: Implementation check took 3.7s (538 chars)
+2026-03-15 20:07:20,942 INFO     fitz_graveyard.planning.pipeline.orchestrator: Implementation check: already_implemented=False
+2026-03-15 20:07:20,942 INFO     fitz_graveyard.planning.pipeline.orchestrator: Executing 3 stages: ['context', 'architecture_design', 'roadmap_risk']
+2026-03-15 20:07:20,942 INFO     fitz_graveyard.planning.pipeline.orchestrator: Executing stage: context
+2026-03-15 20:07:20,943 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': tool reasoning start — 30 files in pool, source_dir=yes, max_rounds=5
+2026-03-15 20:07:20,996 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=2, tools=2
+2026-03-15 20:07:24,286 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:07:24,296 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:07:25,777 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': disk read 'fitz_ai/llm/client.py' (3057 raw \u2192 1128 compressed)
+2026-03-15 20:07:25,778 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': disk read 'fitz_ai/llm/factory.py' (2069 raw \u2192 483 compressed)
+2026-03-15 20:07:25,779 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': tool round 1/5 — 1 call(s), 3 file(s): ['fitz_ai/core/instrumentation.py', 'fitz_ai/llm/client.py', 'fitz_ai/llm/factory.py'] (3.4s)
+2026-03-15 20:07:25,838 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=4, tools=2
+2026-03-15 20:07:26,489 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:07:26,490 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:07:26,496 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': disk read 'fitz_ai/llm/config.py' (17769 raw \u2192 2287 compressed)
+2026-03-15 20:07:26,496 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': tool round 2/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/config.py'] (0.7s)
+2026-03-15 20:07:26,540 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=6, tools=2
+2026-03-15 20:07:27,065 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:07:27,066 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:07:27,066 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': tool round 3/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/providers/base.py'] (0.6s)
+2026-03-15 20:07:27,116 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=8, tools=2
+2026-03-15 20:07:39,903 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:07:39,904 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=stop, tool_calls=False
+2026-03-15 20:07:39,904 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': tool reasoning complete — round 4/5 (no tool calls), total 2 pool reads + 3 disk reads, 19.0s total
+2026-03-15 20:07:39,904 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': pool files read: ['fitz_ai/core/instrumentation.py', 'fitz_ai/llm/providers/base.py']
+2026-03-15 20:07:39,904 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': disk files read: ['fitz_ai/llm/client.py', 'fitz_ai/llm/factory.py', 'fitz_ai/llm/config.py']
+2026-03-15 20:07:39,904 INFO     fitz_graveyard.planning.pipeline.stages.context: Stage 'context': reasoning took 19.0s (7565 chars)
+2026-03-15 20:07:39,954 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:07:39,958 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:07:55,595 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 9163 chars in 15.6s (~146.5 tok/s)
+2026-03-15 20:07:55,595 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': self-critique took 15.7s (7565 \u2192 9163 chars)
+2026-03-15 20:07:55,645 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:07:55,906 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:07:59,601 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 1254 chars in 4.0s (~79.3 tok/s)
+2026-03-15 20:07:59,601 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': extracted 'description' (4.0s, 1254 chars)
+2026-03-15 20:07:59,651 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:07:59,910 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:08:01,138 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 701 chars in 1.5s (~118.0 tok/s)
+2026-03-15 20:08:01,138 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': extracted 'stakeholders' (1.5s, 701 chars)
+2026-03-15 20:08:01,189 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:08:01,451 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:08:05,580 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 1174 chars in 4.4s (~66.8 tok/s)
+2026-03-15 20:08:05,580 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': extracted 'files' (4.5s, 1174 chars)
+2026-03-15 20:08:05,631 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:08:05,893 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:08:08,256 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 1465 chars in 2.6s (~139.5 tok/s)
+2026-03-15 20:08:08,257 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': extracted 'assumptions' (2.7s, 1465 chars)
+2026-03-15 20:08:08,260 INFO     fitz_graveyard.planning.pipeline.validators: ensure_min_existing_files: backfilled 1 files from raw summaries
+2026-03-15 20:08:08,262 INFO     fitz_graveyard.planning.pipeline.orchestrator: Stage 'context' completed successfully
+2026-03-15 20:08:08,262 INFO     fitz_graveyard.planning.pipeline.orchestrator: Executing stage: architecture_design
+2026-03-15 20:08:08,263 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': generated 2 customized investigation questions
+2026-03-15 20:08:08,322 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:08:08,369 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:08:08,416 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:08:08,463 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:08:08,724 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:08:08,728 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:08:08,731 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:08:08,734 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:08:14,266 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 2270 chars in 5.9s (~96.1 tok/s)
+2026-03-15 20:08:14,316 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:08:14,576 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:08:20,317 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 4187 chars in 11.9s (~87.9 tok/s)
+2026-03-15 20:08:20,368 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:08:20,613 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:08:26,251 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 3734 chars in 17.8s (~52.5 tok/s)
+2026-03-15 20:08:31,530 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 2912 chars in 23.2s (~31.4 tok/s)
+2026-03-15 20:08:33,415 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 1278 chars in 19.1s (~16.7 tok/s)
+2026-03-15 20:08:36,303 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 1882 chars in 15.9s (~29.5 tok/s)
+2026-03-15 20:08:36,303 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': 6/6 investigations completed in 28.0s (17717 chars)
+2026-03-15 20:08:36,305 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool reasoning start — 33 files in pool, source_dir=yes, max_rounds=5
+2026-03-15 20:08:36,356 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=2, tools=2
+2026-03-15 20:08:40,732 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:08:40,733 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:08:40,733 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 1/5 — 1 call(s), 3 file(s): ['fitz_ai/core/instrumentation.py', 'fitz_ai/llm/client.py', 'fitz_ai/llm/factory.py'] (4.4s)
+2026-03-15 20:08:40,783 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=4, tools=2
+2026-03-15 20:08:49,763 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:08:49,764 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=stop, tool_calls=False
+2026-03-15 20:08:49,764 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool reasoning complete — round 2/5 (no tool calls), total 3 pool reads + 0 disk reads, 13.5s total
+2026-03-15 20:08:49,764 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': pool files read: ['fitz_ai/core/instrumentation.py', 'fitz_ai/llm/client.py', 'fitz_ai/llm/factory.py']
+2026-03-15 20:08:49,764 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': architecture reasoning took 13.5s (5290 chars)
+2026-03-15 20:08:49,765 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool reasoning start — 33 files in pool, source_dir=yes, max_rounds=5
+2026-03-15 20:08:49,814 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=2, tools=2
+2026-03-15 20:08:54,078 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:08:54,079 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:08:54,079 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 1/5 — 1 call(s), 3 file(s): ['fitz_ai/core/instrumentation.py', 'fitz_ai/llm/client.py', 'fitz_ai/llm/factory.py'] (4.3s)
+2026-03-15 20:08:54,129 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=4, tools=2
+2026-03-15 20:08:54,857 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:08:54,857 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:08:54,857 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 2/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/config.py'] (0.8s)
+2026-03-15 20:08:54,909 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=6, tools=2
+2026-03-15 20:08:55,853 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:08:55,854 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:08:55,854 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 3/5 — 1 call(s), 4 file(s): ['fitz_ai/llm/providers/openai.py', 'fitz_ai/llm/providers/anthropic.py', 'fitz_ai/llm/providers/cohere.py', 'fitz_ai/llm/providers/ollama.py'] (1.0s)
+2026-03-15 20:08:55,906 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=8, tools=2
+2026-03-15 20:08:57,177 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:08:57,178 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:08:57,178 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 4/5 — 1 call(s), 1 file(s): ['fitz_ai/engines/fitz_krag/engine.py'] (1.3s)
+2026-03-15 20:08:57,230 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=10, tools=2
+2026-03-15 20:08:57,957 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:08:57,958 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:08:57,960 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': disk read 'fitz_ai/llm/auth/httpx_auth.py' (1121 raw \u2192 554 compressed)
+2026-03-15 20:08:57,960 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 5/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/auth/httpx_auth.py'] (0.8s)
+2026-03-15 20:08:57,960 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': max rounds (5) reached, forcing final response. Total: 9 pool + 1 disk reads, 8.2s
+2026-03-15 20:08:58,008 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=12
+2026-03-15 20:08:58,015 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:09:03,943 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 112 chars in 5.9s (~4.7 tok/s)
+2026-03-15 20:09:03,943 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': design reasoning took 14.2s (112 chars)
+2026-03-15 20:09:03,995 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:09:04,040 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:09:04,089 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:09:04,137 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:09:04,382 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:09:04,414 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:09:04,416 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:09:04,420 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:09:17,172 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 7135 chars in 13.0s (~136.7 tok/s)
+2026-03-15 20:09:17,172 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': type boundary audit took 13.1s
+2026-03-15 20:09:26,578 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 5536 chars in 22.5s (~61.5 tok/s)
+2026-03-15 20:09:26,578 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': pattern verification took 22.5s
+2026-03-15 20:09:43,948 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 8461 chars in 40.0s (~52.9 tok/s)
+2026-03-15 20:09:43,948 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': contract verification took 40.0s
+2026-03-15 20:09:55,222 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 6732 chars in 51.2s (~32.9 tok/s)
+2026-03-15 20:09:55,223 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': data flow verification took 51.2s
+2026-03-15 20:10:05,332 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:10:05,590 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:10:28,284 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 15888 chars in 23.0s (~173.0 tok/s)
+2026-03-15 20:10:28,284 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': sketch verification took 33.1s
+2026-03-15 20:10:28,349 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:10:28,612 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:10:59,824 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 22466 chars in 31.5s (~178.5 tok/s)
+2026-03-15 20:10:59,824 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': assumption verification took 31.5s
+2026-03-15 20:10:59,824 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': verification agents completed in 115.9s (6/6 agents produced output)
+2026-03-15 20:11:09,929 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:11:10,188 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:11:26,045 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 6240 chars in 16.1s (~96.8 tok/s)
+2026-03-15 20:11:26,046 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': self-critique took 26.2s (71927 \u2192 6240 chars)
+2026-03-15 20:11:36,157 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:11:36,419 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:11:41,980 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 3019 chars in 5.8s (~129.9 tok/s)
+2026-03-15 20:11:41,981 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': extracted 'approaches' (15.9s, 3019 chars)
+2026-03-15 20:11:42,031 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:11:42,296 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:11:44,050 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 1310 chars in 2.0s (~162.5 tok/s)
+2026-03-15 20:11:44,050 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': extracted 'tradeoffs' (2.1s, 1310 chars)
+2026-03-15 20:11:44,117 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:11:44,376 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:11:48,476 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 1787 chars in 4.4s (~102.5 tok/s)
+2026-03-15 20:11:48,477 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': extracted 'adrs' (4.4s, 1787 chars)
+2026-03-15 20:11:48,529 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:11:48,773 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:11:53,427 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 1714 chars in 4.9s (~87.3 tok/s)
+2026-03-15 20:11:53,427 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': extracted 'components' (5.0s, 1714 chars)
+2026-03-15 20:11:53,478 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:11:53,738 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:11:56,390 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 436 chars in 2.9s (~37.3 tok/s)
+2026-03-15 20:11:56,390 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': extracted 'integrations' (3.0s, 436 chars)
+2026-03-15 20:11:56,442 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:11:56,702 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:12:01,604 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 1957 chars in 5.2s (~94.9 tok/s)
+2026-03-15 20:12:01,605 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': extracted 'artifacts' (5.2s, 1957 chars)
+2026-03-15 20:12:01,657 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:12:01,916 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:12:03,505 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 1644 chars in 1.8s (~222.9 tok/s)
+2026-03-15 20:12:03,505 INFO     fitz_graveyard.planning.pipeline.validators: ensure_min_adrs: added 1 ADRs via LLM
+2026-03-15 20:12:03,508 INFO     fitz_graveyard.planning.pipeline.validators: ensure_valid_artifacts: annotated 2 suspicious lines
+2026-03-15 20:12:03,556 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:12:03,818 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:12:07,799 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 1469 chars in 4.2s (~86.4 tok/s)
+2026-03-15 20:12:07,800 INFO     fitz_graveyard.planning.pipeline.validators: ensure_correct_artifacts: LLM corrected 1 artifacts
+2026-03-15 20:12:07,801 INFO     fitz_graveyard.planning.pipeline.orchestrator: Stage 'architecture_design' completed successfully
+2026-03-15 20:12:07,802 INFO     fitz_graveyard.planning.pipeline.orchestrator: Executing stage: roadmap_risk
+2026-03-15 20:12:07,802 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': tool reasoning start — 34 files in pool, source_dir=yes, max_rounds=5
+2026-03-15 20:12:07,852 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=2, tools=2
+2026-03-15 20:12:11,498 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:12:11,499 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:12:11,499 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': tool round 1/5 — 1 call(s), 3 file(s): ['fitz_ai/core/instrumentation.py', 'fitz_ai/llm/client.py', 'fitz_ai/llm/factory.py'] (3.7s)
+2026-03-15 20:12:21,610 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=4, tools=2
+2026-03-15 20:12:22,540 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:12:22,540 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:12:22,540 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': tool round 2/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/config.py'] (11.0s)
+2026-03-15 20:12:22,593 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=6, tools=2
+2026-03-15 20:12:36,344 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:12:36,345 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=stop, tool_calls=False
+2026-03-15 20:12:36,346 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': tool reasoning complete — round 3/5 (no tool calls), total 4 pool reads + 0 disk reads, 28.5s total
+2026-03-15 20:12:36,346 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': pool files read: ['fitz_ai/core/instrumentation.py', 'fitz_ai/llm/client.py', 'fitz_ai/llm/factory.py', 'fitz_ai/llm/config.py']
+2026-03-15 20:12:36,346 INFO     fitz_graveyard.planning.pipeline.stages.roadmap_risk: Stage 'roadmap_risk': reasoning took 28.5s (7680 chars)
+2026-03-15 20:12:36,397 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:12:36,401 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:13:02,990 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 15451 chars in 26.6s (~145.2 tok/s)
+2026-03-15 20:13:02,990 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': self-critique took 26.6s (7680 \u2192 15451 chars)
+2026-03-15 20:13:13,107 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:13:13,366 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:13:19,253 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 2266 chars in 6.2s (~92.0 tok/s)
+2026-03-15 20:13:19,253 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': extracted 'phases' (16.3s, 2266 chars)
+2026-03-15 20:13:19,305 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:13:19,563 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:13:20,531 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 133 chars in 1.2s (~27.3 tok/s)
+2026-03-15 20:13:20,531 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': extracted 'scheduling' (1.3s, 133 chars)
+2026-03-15 20:13:20,580 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:13:20,840 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:13:29,709 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 4533 chars in 9.1s (~124.2 tok/s)
+2026-03-15 20:13:29,709 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': extracted 'risks' (9.2s, 4533 chars)
+2026-03-15 20:13:29,710 INFO     fitz_graveyard.planning.pipeline.validators: ensure_phase_zero: injected Phase 0 with 5 files
+2026-03-15 20:13:29,760 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:13:30,021 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:13:30,538 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 205 chars in 0.8s (~65.6 tok/s)
+2026-03-15 20:13:30,538 INFO     fitz_graveyard.planning.pipeline.validators: ensure_concrete_verification: LLM fixed 1 vague commands
+2026-03-15 20:13:30,540 INFO     fitz_graveyard.planning.pipeline.orchestrator: Stage 'roadmap_risk' completed successfully
+2026-03-15 20:13:30,604 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:13:30,864 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:13:33,650 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 1976 chars in 3.0s (~162.1 tok/s)
+2026-03-15 20:13:33,650 INFO     fitz_graveyard.planning.pipeline.orchestrator: Coherence check took 3.1s (1976 chars)
+2026-03-15 20:13:33,651 INFO     fitz_graveyard.planning.pipeline.orchestrator: Coherence: skipped roadmap fixes (only list fields)
+2026-03-15 20:13:33,651 INFO     fitz_graveyard.planning.pipeline.orchestrator: Coherence: skipped risk fixes (only list fields)
+2026-03-15 20:13:33,700 INFO     bench: Run 1: Approach A (Corrected) (390.4s, success=True)
+2026-03-15 20:13:33,700 INFO     bench: --- Reasoning run 2/5 ---
+2026-03-15 20:13:33,707 INFO     fitz_graveyard.config.loader: Loaded config from C:\Users\yanfi\AppData\Local\fitz-graveyard\fitz-graveyard\config.yaml
+2026-03-15 20:13:34,497 INFO     httpx: HTTP Request: GET http://localhost:1234/v1/models "HTTP/1.1 200 OK"
+2026-03-15 20:13:35,301 INFO     fitz_graveyard.llm.lm_studio: Health check: switching qwen3-coder-30b-a3b-instruct -> qwen3.5-4b
+2026-03-15 20:13:35,914 INFO     fitz_graveyard.llm.lm_studio: Switching model: qwen3-coder-30b-a3b-instruct -> qwen3.5-4b
+2026-03-15 20:13:35,928 INFO     fitz_graveyard.llm.lm_studio: Running: C:\Users\yanfi\.lmstudio\bin\lms.EXE unload --all
+2026-03-15 20:13:36,560 INFO     fitz_graveyard.llm.lm_studio: Model unloaded successfully: Unloading "qwen3-coder-30b-a3b-instruct"...
+Unloaded 1 model.
+2026-03-15 20:13:36,576 INFO     fitz_graveyard.llm.lm_studio: Running: lms load qwen3.5-4b -y -c 65536 --parallel 1
+2026-03-15 20:13:56,147 INFO     fitz_graveyard.llm.lm_studio: Model qwen3.5-4b loaded successfully
+2026-03-15 20:13:56,910 INFO     fitz_graveyard.llm.lm_studio: Switching model: qwen3.5-4b -> qwen3-coder-30b-a3b-instruct
+2026-03-15 20:13:56,925 INFO     fitz_graveyard.llm.lm_studio: Running: C:\Users\yanfi\.lmstudio\bin\lms.EXE unload --all
+2026-03-15 20:13:57,257 INFO     fitz_graveyard.llm.lm_studio: Model unloaded successfully: Unloading "qwen3.5-4b"...
+Unloaded 1 model.
+2026-03-15 20:13:57,273 INFO     fitz_graveyard.llm.lm_studio: Running: lms load qwen3-coder-30b-a3b-instruct -y -c 65536 --parallel 1
+2026-03-15 20:15:25,516 INFO     fitz_graveyard.llm.lm_studio: Model qwen3-coder-30b-a3b-instruct loaded successfully
+2026-03-15 20:15:25,524 INFO     fitz_graveyard.planning.pipeline.orchestrator: Created PlanningPipeline with 3 stages
+2026-03-15 20:15:25,572 INFO     fitz_graveyard.planning.pipeline.orchestrator: Starting fresh pipeline for job bench_002
+2026-03-15 20:15:25,572 INFO     fitz_graveyard.planning.pipeline.orchestrator: Running AgentContextGatherer for job bench_002
+2026-03-15 20:15:40,348 INFO     fitz_graveyard.planning.agent.gatherer: AgentContextGatherer: using 30 override files (skipped LLM retrieval)
+2026-03-15 20:15:40,348 INFO     fitz_graveyard.planning.agent.gatherer: AgentContextGatherer: fitz-ai retrieved 30 files from 711 indexed
+2026-03-15 20:15:40,348 INFO     fitz_graveyard.planning.agent.gatherer: AgentContextGatherer: 30 selected, 0 import, 0 hub, 0 neighbor
+2026-03-15 20:15:40,364 INFO     fitz_graveyard.planning.agent.gatherer: AgentContextGatherer: compressed 30 files (67447 -> 66889 chars, 1% reduction)
+2026-03-15 20:15:40,531 INFO     fitz_graveyard.planning.agent.indexer: Library signatures: extracted 2 packages (3613 chars)
+2026-03-15 20:15:40,532 INFO     fitz_graveyard.planning.agent.gatherer: AgentContextGatherer: seed=5 files (12558 chars), tool_pool=25 files (54331 chars), max_seeds=5
+2026-03-15 20:15:40,532 INFO     fitz_graveyard.planning.agent.gatherer: AgentContextGatherer: 30 files (66889 chars compressed, 30637 chars overview) — pipeline total 15.0s
+2026-03-15 20:15:40,532 INFO     fitz_graveyard.planning.pipeline.orchestrator: AgentContextGatherer complete: synthesized=30637, raw=43493 chars
+2026-03-15 20:15:40,599 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:15:40,920 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:15:43,744 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 526 chars in 3.1s (~41.9 tok/s)
+2026-03-15 20:15:43,745 INFO     fitz_graveyard.planning.pipeline.orchestrator: Implementation check took 3.2s (526 chars)
+2026-03-15 20:15:43,745 INFO     fitz_graveyard.planning.pipeline.orchestrator: Implementation check: already_implemented=False
+2026-03-15 20:15:43,745 INFO     fitz_graveyard.planning.pipeline.orchestrator: Executing 3 stages: ['context', 'architecture_design', 'roadmap_risk']
+2026-03-15 20:15:43,745 INFO     fitz_graveyard.planning.pipeline.orchestrator: Executing stage: context
+2026-03-15 20:15:43,746 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': tool reasoning start — 30 files in pool, source_dir=yes, max_rounds=5
+2026-03-15 20:15:43,803 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=2, tools=2
+2026-03-15 20:15:55,611 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:15:55,617 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:15:55,620 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': disk read 'fitz_ai/llm/client.py' (3057 raw \u2192 1128 compressed)
+2026-03-15 20:15:55,622 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': disk read 'fitz_ai/llm/factory.py' (2069 raw \u2192 483 compressed)
+2026-03-15 20:15:55,622 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': tool round 1/5 — 1 call(s), 3 file(s): ['fitz_ai/core/instrumentation.py', 'fitz_ai/llm/client.py', 'fitz_ai/llm/factory.py'] (11.9s)
+2026-03-15 20:15:55,668 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=4, tools=2
+2026-03-15 20:15:56,468 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:15:56,468 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:15:56,474 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': disk read 'fitz_ai/llm/config.py' (17769 raw \u2192 2287 compressed)
+2026-03-15 20:15:56,474 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': tool round 2/5 — 1 call(s), 2 file(s): ['fitz_ai/llm/config.py', 'fitz_ai/engines/fitz_krag/engine.py'] (0.9s)
+2026-03-15 20:15:56,583 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=6, tools=2
+2026-03-15 20:16:02,147 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:16:02,148 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=stop, tool_calls=False
+2026-03-15 20:16:02,148 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': tool reasoning complete — round 3/5 (no tool calls), total 2 pool reads + 3 disk reads, 18.4s total
+2026-03-15 20:16:02,148 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': pool files read: ['fitz_ai/core/instrumentation.py', 'fitz_ai/engines/fitz_krag/engine.py']
+2026-03-15 20:16:02,148 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': disk files read: ['fitz_ai/llm/client.py', 'fitz_ai/llm/factory.py', 'fitz_ai/llm/config.py']
+2026-03-15 20:16:02,148 INFO     fitz_graveyard.planning.pipeline.stages.context: Stage 'context': reasoning took 18.4s (2826 chars)
+2026-03-15 20:16:02,197 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:16:02,202 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:16:19,415 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 10438 chars in 17.2s (~151.5 tok/s)
+2026-03-15 20:16:19,416 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': self-critique took 17.3s (2826 \u2192 10438 chars)
+2026-03-15 20:16:19,467 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:16:19,726 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:16:24,449 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 1249 chars in 5.0s (~62.7 tok/s)
+2026-03-15 20:16:24,449 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': extracted 'description' (5.0s, 1249 chars)
+2026-03-15 20:16:24,519 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:16:24,778 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:16:27,326 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 914 chars in 2.8s (~81.7 tok/s)
+2026-03-15 20:16:27,326 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': extracted 'stakeholders' (2.9s, 914 chars)
+2026-03-15 20:16:27,394 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:16:27,653 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:16:31,475 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 874 chars in 4.1s (~53.6 tok/s)
+2026-03-15 20:16:31,475 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': extracted 'files' (4.2s, 874 chars)
+2026-03-15 20:16:31,530 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:16:31,790 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:16:34,315 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 799 chars in 2.8s (~71.4 tok/s)
+2026-03-15 20:16:34,316 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': extracted 'assumptions' (2.8s, 799 chars)
+2026-03-15 20:16:34,320 INFO     fitz_graveyard.planning.pipeline.orchestrator: Stage 'context' completed successfully
+2026-03-15 20:16:34,321 INFO     fitz_graveyard.planning.pipeline.orchestrator: Executing stage: architecture_design
+2026-03-15 20:16:34,322 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': generated 2 customized investigation questions
+2026-03-15 20:16:34,383 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:16:34,429 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:16:34,492 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:16:34,538 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:16:34,798 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:16:34,802 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:16:34,806 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:16:34,812 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:16:40,690 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 2270 chars in 6.3s (~90.6 tok/s)
+2026-03-15 20:16:40,783 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:16:41,065 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:16:47,990 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 3222 chars in 13.6s (~59.2 tok/s)
+2026-03-15 20:16:49,011 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:16:50,071 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:16:52,528 WARNING  fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': _ask_one failed: The model has crashed without additional information. (Exit code: 18446744072635812000)
+2026-03-15 20:16:52,529 WARNING  fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': _ask_one failed: The model has crashed without additional information. (Exit code: 18446744072635812000)
+2026-03-15 20:16:52,529 WARNING  fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': _ask_one failed: The model has crashed without additional information. (Exit code: 18446744072635812000)
+2026-03-15 20:16:52,529 WARNING  fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': _ask_one failed: The model has crashed without additional information. (Exit code: 18446744072635812000)
+2026-03-15 20:16:52,529 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': 2/6 investigations completed in 18.2s (5956 chars)
+2026-03-15 20:16:52,530 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool reasoning start — 33 files in pool, source_dir=yes, max_rounds=5
+2026-03-15 20:16:52,598 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=2, tools=2
+2026-03-15 20:18:19,318 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:18:19,337 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:18:19,339 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 1/5 — 1 call(s), 3 file(s): ['fitz_ai/core/instrumentation.py', 'fitz_ai/llm/client.py', 'fitz_ai/llm/factory.py'] (86.8s)
+2026-03-15 20:18:19,455 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=4, tools=2
+2026-03-15 20:18:20,198 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:18:20,199 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:18:20,199 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 2/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/config.py'] (0.9s)
+2026-03-15 20:18:20,250 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=6, tools=2
+2026-03-15 20:18:21,163 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:18:21,164 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:18:21,164 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 3/5 — 1 call(s), 4 file(s): ['fitz_ai/llm/providers/openai.py', 'fitz_ai/llm/providers/anthropic.py', 'fitz_ai/llm/providers/cohere.py', 'fitz_ai/llm/providers/ollama.py'] (1.0s)
+2026-03-15 20:18:21,216 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=8, tools=2
+2026-03-15 20:18:28,760 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:18:28,761 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=stop, tool_calls=False
+2026-03-15 20:18:28,762 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool reasoning complete — round 4/5 (no tool calls), total 8 pool reads + 0 disk reads, 96.2s total
+2026-03-15 20:18:28,762 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': pool files read: ['fitz_ai/core/instrumentation.py', 'fitz_ai/llm/client.py', 'fitz_ai/llm/factory.py', 'fitz_ai/llm/config.py', 'fitz_ai/llm/providers/openai.py', 'fitz_ai/llm/providers/anthropic.py', 'fitz_ai/llm/providers/cohere.py', 'fitz_ai/llm/providers/ollama.py']
+2026-03-15 20:18:28,762 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': architecture reasoning took 96.2s (4006 chars)
+2026-03-15 20:18:28,766 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool reasoning start — 33 files in pool, source_dir=yes, max_rounds=5
+2026-03-15 20:18:28,811 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=2, tools=2
+2026-03-15 20:18:34,818 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:18:34,819 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:18:34,819 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 1/5 — 1 call(s), 5 file(s): ['fitz_ai/core/instrumentation.py', 'fitz_ai/llm/providers/openai.py', 'fitz_ai/llm/providers/anthropic.py', 'fitz_ai/llm/providers/cohere.py', 'fitz_ai/llm/providers/ollama.py'] (6.0s)
+2026-03-15 20:18:34,869 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=4, tools=2
+2026-03-15 20:18:36,941 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:18:36,943 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:18:36,943 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 2/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/providers/openai.py'] (2.1s)
+2026-03-15 20:18:36,989 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=6, tools=2
+2026-03-15 20:18:38,288 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:18:38,288 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:18:38,288 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 3/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/client.py'] (1.3s)
+2026-03-15 20:18:38,352 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=8, tools=2
+2026-03-15 20:18:39,018 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:18:39,018 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:18:39,018 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 4/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/factory.py'] (0.7s)
+2026-03-15 20:18:39,070 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=10, tools=2
+2026-03-15 20:18:39,888 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:18:39,889 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:18:39,889 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 5/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/config.py'] (0.9s)
+2026-03-15 20:18:39,889 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': max rounds (5) reached, forcing final response. Total: 9 pool + 0 disk reads, 11.1s
+2026-03-15 20:18:39,939 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=12
+2026-03-15 20:18:39,947 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:19:27,330 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 12851 chars in 47.4s (~67.8 tok/s)
+2026-03-15 20:19:27,332 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': design reasoning took 58.6s (12851 chars)
+2026-03-15 20:19:37,443 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:19:37,491 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:19:37,538 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:19:37,584 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:19:37,754 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:19:37,798 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:19:37,846 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:19:37,851 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:20:12,829 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 3505 chars in 35.3s (~24.8 tok/s)
+2026-03-15 20:20:12,829 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': pattern verification took 45.4s
+2026-03-15 20:20:23,567 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 5906 chars in 46.0s (~32.1 tok/s)
+2026-03-15 20:20:23,567 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': type boundary audit took 56.1s
+2026-03-15 20:20:26,971 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 5986 chars in 49.5s (~30.2 tok/s)
+2026-03-15 20:20:26,972 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': data flow verification took 59.6s
+2026-03-15 20:20:50,184 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 13279 chars in 72.7s (~45.6 tok/s)
+2026-03-15 20:20:50,184 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': contract verification took 82.8s
+2026-03-15 20:21:10,356 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:21:10,625 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:21:40,935 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 7818 chars in 30.6s (~63.9 tok/s)
+2026-03-15 20:21:40,936 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': sketch verification took 50.8s
+2026-03-15 20:21:51,046 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:21:51,306 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:22:53,957 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 22788 chars in 62.9s (~90.6 tok/s)
+2026-03-15 20:22:53,958 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': assumption verification took 73.0s
+2026-03-15 20:22:53,958 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': verification agents completed in 206.6s (6/6 agents produced output)
+2026-03-15 20:23:14,140 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:23:14,400 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:24:16,868 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 16915 chars in 62.7s (~67.4 tok/s)
+2026-03-15 20:24:16,868 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': self-critique took 82.9s (76446 \u2192 16915 chars)
+2026-03-15 20:24:37,043 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:24:37,299 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:24:50,293 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 2486 chars in 13.2s (~46.9 tok/s)
+2026-03-15 20:24:50,294 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': extracted 'approaches' (33.4s, 2486 chars)
+2026-03-15 20:25:00,414 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:25:00,671 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:25:06,117 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 1009 chars in 5.7s (~44.2 tok/s)
+2026-03-15 20:25:06,118 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': extracted 'tradeoffs' (15.8s, 1009 chars)
+2026-03-15 20:25:06,170 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:25:06,430 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:25:16,651 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 1739 chars in 10.5s (~41.5 tok/s)
+2026-03-15 20:25:16,651 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': extracted 'adrs' (10.5s, 1739 chars)
+2026-03-15 20:25:26,768 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:25:27,030 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:25:38,771 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 1042 chars in 12.0s (~21.7 tok/s)
+2026-03-15 20:25:38,771 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': extracted 'components' (22.1s, 1042 chars)
+2026-03-15 20:25:38,818 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:25:39,082 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:25:45,963 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 242 chars in 7.1s (~8.5 tok/s)
+2026-03-15 20:25:45,963 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': extracted 'integrations' (7.2s, 242 chars)
+2026-03-15 20:25:46,013 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:25:46,272 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:26:22,704 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 11483 chars in 36.7s (~78.2 tok/s)
+2026-03-15 20:26:22,704 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': extracted 'artifacts' (36.8s, 11483 chars)
+2026-03-15 20:26:42,884 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:26:43,146 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:26:50,113 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 2652 chars in 7.2s (~91.7 tok/s)
+2026-03-15 20:26:50,114 INFO     fitz_graveyard.planning.pipeline.validators: ensure_min_adrs: added 1 ADRs via LLM
+2026-03-15 20:26:50,127 INFO     fitz_graveyard.planning.pipeline.validators: ensure_valid_artifacts: annotated 6 suspicious lines
+2026-03-15 20:26:50,181 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:26:50,442 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:27:26,508 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 11271 chars in 36.3s (~77.6 tok/s)
+2026-03-15 20:27:26,509 INFO     fitz_graveyard.planning.pipeline.validators: ensure_correct_artifacts: LLM corrected 1 artifacts
+2026-03-15 20:27:26,516 INFO     fitz_graveyard.planning.pipeline.orchestrator: Stage 'architecture_design' completed successfully
+2026-03-15 20:27:26,516 INFO     fitz_graveyard.planning.pipeline.orchestrator: Executing stage: roadmap_risk
+2026-03-15 20:27:26,518 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': tool reasoning start — 33 files in pool, source_dir=yes, max_rounds=5
+2026-03-15 20:27:46,698 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=2, tools=2
+2026-03-15 20:27:53,620 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:27:53,622 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:27:53,622 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': tool round 1/5 — 1 call(s), 3 file(s): ['fitz_ai/core/instrumentation.py', 'fitz_ai/llm/client.py', 'fitz_ai/llm/factory.py'] (27.1s)
+2026-03-15 20:27:53,671 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=4, tools=2
+2026-03-15 20:27:54,843 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:27:54,843 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:27:54,844 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': tool round 2/5 — 1 call(s), 2 file(s): ['fitz_ai/llm/config.py', 'fitz_ai/llm/providers/base.py'] (1.2s)
+2026-03-15 20:27:54,896 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=6, tools=2
+2026-03-15 20:27:55,841 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:27:55,841 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:27:55,842 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': tool round 3/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/providers/openai.py'] (1.0s)
+2026-03-15 20:27:55,893 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=8, tools=2
+2026-03-15 20:27:56,711 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:27:56,711 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:27:56,711 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': tool round 4/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/providers/anthropic.py'] (0.9s)
+2026-03-15 20:27:56,763 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=10, tools=2
+2026-03-15 20:27:57,484 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:27:57,485 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:27:57,485 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': tool round 5/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/providers/cohere.py'] (0.8s)
+2026-03-15 20:27:57,485 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': max rounds (5) reached, forcing final response. Total: 8 pool + 0 disk reads, 31.0s
+2026-03-15 20:27:57,536 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=12
+2026-03-15 20:27:57,543 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:28:06,131 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 119 chars in 8.6s (~3.5 tok/s)
+2026-03-15 20:28:06,131 INFO     fitz_graveyard.planning.pipeline.stages.roadmap_risk: Stage 'roadmap_risk': reasoning took 39.6s (119 chars)
+2026-03-15 20:28:06,182 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:28:06,443 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:28:22,228 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 3993 chars in 16.0s (~62.2 tok/s)
+2026-03-15 20:28:22,228 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': self-critique took 16.1s (119 \u2192 3993 chars)
+2026-03-15 20:28:42,386 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:28:42,645 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:28:54,846 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 2372 chars in 12.5s (~47.6 tok/s)
+2026-03-15 20:28:54,846 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': extracted 'phases' (32.6s, 2372 chars)
+2026-03-15 20:29:04,960 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:29:05,217 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:29:06,803 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 133 chars in 1.8s (~18.0 tok/s)
+2026-03-15 20:29:06,803 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': extracted 'scheduling' (12.0s, 133 chars)
+2026-03-15 20:29:06,856 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:29:07,114 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:29:20,051 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 2869 chars in 13.2s (~54.3 tok/s)
+2026-03-15 20:29:20,052 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': extracted 'risks' (13.2s, 2869 chars)
+2026-03-15 20:29:20,052 INFO     fitz_graveyard.planning.pipeline.validators: ensure_phase_zero: injected Phase 0 with 5 files
+2026-03-15 20:29:20,103 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:29:20,363 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:29:21,122 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 46 chars in 1.0s (~11.3 tok/s)
+2026-03-15 20:29:21,123 INFO     fitz_graveyard.planning.pipeline.validators: ensure_concrete_verification: LLM fixed 1 vague commands
+2026-03-15 20:29:21,124 INFO     fitz_graveyard.planning.pipeline.orchestrator: Stage 'roadmap_risk' completed successfully
+2026-03-15 20:29:21,175 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:29:21,437 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:29:24,779 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 923 chars in 3.6s (~64.2 tok/s)
+2026-03-15 20:29:24,779 INFO     fitz_graveyard.planning.pipeline.orchestrator: Coherence check took 3.6s (923 chars)
+2026-03-15 20:29:24,779 INFO     fitz_graveyard.planning.pipeline.orchestrator: Coherence: skipped roadmap fixes (only list fields)
+2026-03-15 20:29:24,779 INFO     fitz_graveyard.planning.pipeline.orchestrator: Coherence: skipped risk fixes (only list fields)
+2026-03-15 20:29:24,804 INFO     bench: Run 2: Approach 1: Direct Hook Integration with Response Parsing (839.3s, success=True)
+2026-03-15 20:29:24,805 INFO     bench: --- Reasoning run 3/5 ---
+2026-03-15 20:29:24,819 INFO     fitz_graveyard.config.loader: Loaded config from C:\Users\yanfi\AppData\Local\fitz-graveyard\fitz-graveyard\config.yaml
+2026-03-15 20:29:25,591 INFO     httpx: HTTP Request: GET http://localhost:1234/v1/models "HTTP/1.1 200 OK"
+2026-03-15 20:29:26,422 INFO     fitz_graveyard.llm.lm_studio: Health check: switching qwen3-coder-30b-a3b-instruct -> qwen3.5-4b
+2026-03-15 20:29:26,758 INFO     fitz_graveyard.llm.lm_studio: Switching model: qwen3-coder-30b-a3b-instruct -> qwen3.5-4b
+2026-03-15 20:29:26,770 INFO     fitz_graveyard.llm.lm_studio: Running: C:\Users\yanfi\.lmstudio\bin\lms.EXE unload --all
+2026-03-15 20:29:27,113 INFO     fitz_graveyard.llm.lm_studio: Model unloaded successfully: Unloading "qwen3-coder-30b-a3b-instruct"...
+Unloaded 1 model.
+2026-03-15 20:29:27,124 INFO     fitz_graveyard.llm.lm_studio: Running: lms load qwen3.5-4b -y -c 65536 --parallel 1
+2026-03-15 20:29:47,523 INFO     fitz_graveyard.llm.lm_studio: Model qwen3.5-4b loaded successfully
+2026-03-15 20:29:48,253 INFO     fitz_graveyard.llm.lm_studio: Switching model: qwen3.5-4b -> qwen3-coder-30b-a3b-instruct
+2026-03-15 20:29:48,264 INFO     fitz_graveyard.llm.lm_studio: Running: C:\Users\yanfi\.lmstudio\bin\lms.EXE unload --all
+2026-03-15 20:29:48,599 INFO     fitz_graveyard.llm.lm_studio: Model unloaded successfully: Unloading "qwen3.5-4b"...
+Unloaded 1 model.
+2026-03-15 20:29:48,611 INFO     fitz_graveyard.llm.lm_studio: Running: lms load qwen3-coder-30b-a3b-instruct -y -c 65536 --parallel 1
+2026-03-15 20:31:22,056 INFO     fitz_graveyard.llm.lm_studio: Model qwen3-coder-30b-a3b-instruct loaded successfully
+2026-03-15 20:31:22,063 INFO     fitz_graveyard.planning.pipeline.orchestrator: Created PlanningPipeline with 3 stages
+2026-03-15 20:31:22,122 INFO     fitz_graveyard.planning.pipeline.orchestrator: Starting fresh pipeline for job bench_003
+2026-03-15 20:31:22,122 INFO     fitz_graveyard.planning.pipeline.orchestrator: Running AgentContextGatherer for job bench_003
+2026-03-15 20:31:36,637 INFO     fitz_graveyard.planning.agent.gatherer: AgentContextGatherer: using 30 override files (skipped LLM retrieval)
+2026-03-15 20:31:36,637 INFO     fitz_graveyard.planning.agent.gatherer: AgentContextGatherer: fitz-ai retrieved 30 files from 711 indexed
+2026-03-15 20:31:36,637 INFO     fitz_graveyard.planning.agent.gatherer: AgentContextGatherer: 30 selected, 0 import, 0 hub, 0 neighbor
+2026-03-15 20:31:36,653 INFO     fitz_graveyard.planning.agent.gatherer: AgentContextGatherer: compressed 30 files (67447 -> 66889 chars, 1% reduction)
+2026-03-15 20:31:36,855 INFO     fitz_graveyard.planning.agent.indexer: Library signatures: extracted 2 packages (3613 chars)
+2026-03-15 20:31:36,855 INFO     fitz_graveyard.planning.agent.gatherer: AgentContextGatherer: seed=5 files (12558 chars), tool_pool=25 files (54331 chars), max_seeds=5
+2026-03-15 20:31:36,855 INFO     fitz_graveyard.planning.agent.gatherer: AgentContextGatherer: 30 files (66889 chars compressed, 30637 chars overview) — pipeline total 14.7s
+2026-03-15 20:31:36,856 INFO     fitz_graveyard.planning.pipeline.orchestrator: AgentContextGatherer complete: synthesized=30637, raw=43493 chars
+2026-03-15 20:31:36,922 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:31:37,239 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:31:39,983 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 477 chars in 3.1s (~38.9 tok/s)
+2026-03-15 20:31:39,984 INFO     fitz_graveyard.planning.pipeline.orchestrator: Implementation check took 3.1s (477 chars)
+2026-03-15 20:31:39,984 INFO     fitz_graveyard.planning.pipeline.orchestrator: Implementation check: already_implemented=False
+2026-03-15 20:31:39,984 INFO     fitz_graveyard.planning.pipeline.orchestrator: Executing 3 stages: ['context', 'architecture_design', 'roadmap_risk']
+2026-03-15 20:31:39,984 INFO     fitz_graveyard.planning.pipeline.orchestrator: Executing stage: context
+2026-03-15 20:31:39,985 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': tool reasoning start — 30 files in pool, source_dir=yes, max_rounds=5
+2026-03-15 20:31:40,045 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=2, tools=2
+2026-03-15 20:31:50,522 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:31:50,528 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:31:50,529 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': tool round 1/5 — 1 call(s), 2 file(s): ['fitz_ai/core/instrumentation.py', 'fitz_ai/llm/providers/base.py'] (10.5s)
+2026-03-15 20:31:50,577 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=4, tools=2
+2026-03-15 20:31:51,477 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:31:51,478 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:31:51,478 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': tool round 2/5 — 1 call(s), 2 file(s): ['fitz_ai/llm/providers/openai.py', 'fitz_ai/llm/providers/cohere.py'] (1.0s)
+2026-03-15 20:31:51,528 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=6, tools=2
+2026-03-15 20:31:52,470 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:31:52,471 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:31:52,471 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': tool round 3/5 — 1 call(s), 2 file(s): ['fitz_ai/llm/providers/anthropic.py', 'fitz_ai/llm/providers/ollama.py'] (1.0s)
+2026-03-15 20:31:52,523 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=8, tools=2
+2026-03-15 20:31:53,479 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:31:53,479 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:31:53,479 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': tool round 4/5 — 1 call(s), 1 file(s): ['fitz_ai/engines/fitz_krag/engine.py'] (1.0s)
+2026-03-15 20:31:53,530 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=10, tools=2
+2026-03-15 20:31:54,240 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:31:54,240 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:31:54,243 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': disk read 'fitz_ai/llm/client.py' (3057 raw \u2192 1128 compressed)
+2026-03-15 20:31:54,244 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': tool round 5/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/client.py'] (0.8s)
+2026-03-15 20:31:54,244 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': max rounds (5) reached, forcing final response. Total: 7 pool + 1 disk reads, 14.2s
+2026-03-15 20:31:54,291 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=12
+2026-03-15 20:31:54,297 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:31:59,184 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 177 chars in 4.9s (~9.0 tok/s)
+2026-03-15 20:31:59,184 INFO     fitz_graveyard.planning.pipeline.stages.context: Stage 'context': reasoning took 19.2s (177 chars)
+2026-03-15 20:31:59,236 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:31:59,493 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:32:11,311 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 7024 chars in 12.1s (~145.6 tok/s)
+2026-03-15 20:32:11,311 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': self-critique took 12.1s (177 \u2192 7024 chars)
+2026-03-15 20:32:11,363 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:32:11,623 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:32:14,763 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 884 chars in 3.4s (~65.2 tok/s)
+2026-03-15 20:32:14,764 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': extracted 'description' (3.4s, 884 chars)
+2026-03-15 20:32:14,812 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:32:15,072 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:32:16,432 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 775 chars in 1.6s (~120.4 tok/s)
+2026-03-15 20:32:16,432 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': extracted 'stakeholders' (1.7s, 775 chars)
+2026-03-15 20:32:16,483 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:32:16,747 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:32:20,224 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 853 chars in 3.8s (~56.9 tok/s)
+2026-03-15 20:32:20,224 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': extracted 'files' (3.8s, 853 chars)
+2026-03-15 20:32:20,275 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:32:20,534 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:32:23,996 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 2599 chars in 3.7s (~174.7 tok/s)
+2026-03-15 20:32:23,996 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': extracted 'assumptions' (3.8s, 2599 chars)
+2026-03-15 20:32:24,002 INFO     fitz_graveyard.planning.pipeline.orchestrator: Stage 'context' completed successfully
+2026-03-15 20:32:24,002 INFO     fitz_graveyard.planning.pipeline.orchestrator: Executing stage: architecture_design
+2026-03-15 20:32:24,003 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': generated 2 customized investigation questions
+2026-03-15 20:32:24,047 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:32:24,093 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:32:24,139 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:32:24,187 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:32:24,450 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:32:24,453 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:32:24,455 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:32:24,457 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:32:32,316 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 4045 chars in 8.1s (~124.5 tok/s)
+2026-03-15 20:32:32,367 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:32:32,614 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:32:34,950 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 1610 chars in 10.8s (~37.1 tok/s)
+2026-03-15 20:32:35,001 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:32:35,264 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:32:40,941 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 4187 chars in 16.8s (~62.3 tok/s)
+2026-03-15 20:32:46,160 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 2912 chars in 22.1s (~32.9 tok/s)
+2026-03-15 20:32:48,028 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 1278 chars in 15.7s (~20.4 tok/s)
+2026-03-15 20:32:50,887 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 1882 chars in 15.9s (~29.6 tok/s)
+2026-03-15 20:32:50,888 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': 6/6 investigations completed in 26.9s (17368 chars)
+2026-03-15 20:32:50,889 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool reasoning start — 31 files in pool, source_dir=yes, max_rounds=5
+2026-03-15 20:32:50,940 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=2, tools=2
+2026-03-15 20:32:55,336 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:32:55,337 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:32:55,338 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': disk read 'fitz_ai/llm/factory.py' (2069 raw \u2192 483 compressed)
+2026-03-15 20:32:55,338 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 1/5 — 1 call(s), 3 file(s): ['fitz_ai/core/instrumentation.py', 'fitz_ai/llm/client.py', 'fitz_ai/llm/factory.py'] (4.5s)
+2026-03-15 20:32:55,389 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=4, tools=2
+2026-03-15 20:32:56,102 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:32:56,102 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:32:56,109 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': disk read 'fitz_ai/llm/config.py' (17769 raw \u2192 2287 compressed)
+2026-03-15 20:32:56,109 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 2/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/config.py'] (0.8s)
+2026-03-15 20:32:56,157 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=6, tools=2
+2026-03-15 20:33:03,239 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:33:03,240 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:33:03,240 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 3/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/factory.py'] (7.1s)
+2026-03-15 20:33:13,353 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=8, tools=2
+2026-03-15 20:33:14,193 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:33:14,194 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:33:14,194 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 4/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/config.py'] (11.0s)
+2026-03-15 20:33:14,245 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=10, tools=2
+2026-03-15 20:33:14,968 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:33:14,969 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:33:14,969 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 5/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/config.py'] (0.8s)
+2026-03-15 20:33:14,969 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': max rounds (5) reached, forcing final response. Total: 5 pool + 2 disk reads, 24.1s
+2026-03-15 20:33:15,020 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=12
+2026-03-15 20:33:15,027 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:33:20,180 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 151 chars in 5.2s (~7.3 tok/s)
+2026-03-15 20:33:20,180 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': architecture reasoning took 29.3s (151 chars)
+2026-03-15 20:33:20,182 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool reasoning start — 33 files in pool, source_dir=yes, max_rounds=5
+2026-03-15 20:33:20,232 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=2, tools=2
+2026-03-15 20:33:24,766 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:33:24,767 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:33:24,768 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 1/5 — 1 call(s), 3 file(s): ['fitz_ai/core/instrumentation.py', 'fitz_ai/llm/factory.py', 'fitz_ai/llm/client.py'] (4.6s)
+2026-03-15 20:33:24,818 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=4, tools=2
+2026-03-15 20:33:33,139 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:33:33,140 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:33:33,140 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 2/5 — 1 call(s), 1 file(s): ['fitz_ai/logging/logger.py'] (8.4s)
+2026-03-15 20:33:33,191 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=6, tools=2
+2026-03-15 20:33:33,651 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:33:33,651 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:33:33,653 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 3/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/config.py'] (0.5s)
+2026-03-15 20:33:33,704 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=8, tools=2
+2026-03-15 20:33:34,432 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:33:34,434 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:33:34,434 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 4/5 — 1 call(s), 2 file(s): ['fitz_ai/llm/providers/openai.py', 'fitz_ai/llm/providers/cohere.py'] (0.8s)
+2026-03-15 20:33:34,486 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=10, tools=2
+2026-03-15 20:33:35,282 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:33:35,283 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:33:35,283 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 5/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/providers/anthropic.py'] (0.9s)
+2026-03-15 20:33:35,283 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': max rounds (5) reached, forcing final response. Total: 8 pool + 0 disk reads, 15.1s
+2026-03-15 20:33:35,335 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=12
+2026-03-15 20:33:35,341 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:33:41,251 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 119 chars in 5.9s (~5.0 tok/s)
+2026-03-15 20:33:41,251 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': design reasoning took 21.1s (119 chars)
+2026-03-15 20:33:41,304 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:33:41,351 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:33:41,398 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:33:41,444 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:33:41,707 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:33:41,711 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:33:41,715 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:33:41,719 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:33:59,417 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 9260 chars in 18.1s (~127.8 tok/s)
+2026-03-15 20:33:59,417 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': contract verification took 18.2s
+2026-03-15 20:34:09,815 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 5449 chars in 28.5s (~47.9 tok/s)
+2026-03-15 20:34:09,815 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': data flow verification took 28.5s
+2026-03-15 20:34:16,541 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 3804 chars in 35.1s (~27.1 tok/s)
+2026-03-15 20:34:16,541 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': pattern verification took 35.2s
+2026-03-15 20:34:32,455 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 9250 chars in 51.0s (~45.3 tok/s)
+2026-03-15 20:34:32,456 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': type boundary audit took 51.1s
+2026-03-15 20:34:52,637 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:34:52,909 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:35:05,582 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 9052 chars in 13.0s (~174.7 tok/s)
+2026-03-15 20:35:05,582 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': sketch verification took 33.1s
+2026-03-15 20:35:05,630 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:35:05,888 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:35:34,460 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 21216 chars in 28.8s (~184.0 tok/s)
+2026-03-15 20:35:34,461 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': assumption verification took 28.9s
+2026-03-15 20:35:34,461 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': verification agents completed in 113.2s (6/6 agents produced output)
+2026-03-15 20:35:44,579 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:35:44,840 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:35:50,027 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 298 chars in 5.4s (~13.7 tok/s)
+2026-03-15 20:35:50,027 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': self-critique took 15.6s (58608 \u2192 298 chars)
+2026-03-15 20:35:50,027 WARNING  fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': critique output too short (298 chars), keeping original
+2026-03-15 20:35:50,080 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:35:50,338 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:36:00,442 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 3566 chars in 10.4s (~86.1 tok/s)
+2026-03-15 20:36:00,442 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': extracted 'approaches' (10.4s, 3566 chars)
+2026-03-15 20:36:10,564 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:36:10,823 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:36:15,560 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 1529 chars in 5.0s (~76.7 tok/s)
+2026-03-15 20:36:15,560 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': extracted 'tradeoffs' (15.1s, 1529 chars)
+2026-03-15 20:36:15,613 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:36:15,871 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:36:30,855 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 6897 chars in 15.2s (~113.2 tok/s)
+2026-03-15 20:36:30,855 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': extracted 'adrs' (15.3s, 6897 chars)
+2026-03-15 20:36:40,967 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:36:41,227 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:37:13,938 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 13969 chars in 33.0s (~105.9 tok/s)
+2026-03-15 20:37:13,938 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': extracted 'components' (43.1s, 13969 chars)
+2026-03-15 20:37:34,114 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:37:34,372 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:37:39,489 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 199 chars in 5.4s (~9.3 tok/s)
+2026-03-15 20:37:39,490 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': extracted 'integrations' (25.5s, 199 chars)
+2026-03-15 20:37:39,540 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:37:39,814 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:38:20,640 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 16895 chars in 41.1s (~102.7 tok/s)
+2026-03-15 20:38:20,640 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': extracted 'artifacts' (41.2s, 16895 chars)
+2026-03-15 20:38:20,821 WARNING  fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': field group 'artifacts' extraction failed: Could not extract valid JSON from output (16895 chars). Preview: {\n  "artifacts": [\n    {\n      "filename": "fitz_ai/llm/providers/base.py",\n      "content": "from __future__ import annotations\n\nclass RerankResult:\n    \"\"\"Represents a single document reranking result.\"\"\"\n    index: int\n    relevance_score: float\n\nfrom typing import Any, Protocol, Iterator\n\nclass ChatProvider(Protocol):\n    def chat(self, messages: list[dict[str, Any]]) -> str:\n        ...\n\nclass StreamingChatProvider(Protocol):\n    def chat_stream(self, messages: list[dict
+2026-03-15 20:38:20,826 INFO     fitz_graveyard.planning.pipeline.orchestrator: Stage 'architecture_design' completed successfully
+2026-03-15 20:38:20,826 INFO     fitz_graveyard.planning.pipeline.orchestrator: Executing stage: roadmap_risk
+2026-03-15 20:38:20,828 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': tool reasoning start — 33 files in pool, source_dir=yes, max_rounds=5
+2026-03-15 20:38:41,011 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=2, tools=2
+2026-03-15 20:38:45,486 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:38:45,487 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:38:45,487 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': tool round 1/5 — 1 call(s), 1 file(s): ['fitz_ai/core/instrumentation.py'] (24.7s)
+2026-03-15 20:38:45,538 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=4, tools=2
+2026-03-15 20:38:46,110 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:38:46,111 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:38:46,111 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': tool round 2/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/factory.py'] (0.6s)
+2026-03-15 20:38:46,161 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=6, tools=2
+2026-03-15 20:38:46,577 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:38:46,578 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:38:46,578 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': tool round 3/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/client.py'] (0.5s)
+2026-03-15 20:38:46,630 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=8, tools=2
+2026-03-15 20:38:47,092 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:38:47,092 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:38:47,093 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': tool round 4/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/config.py'] (0.5s)
+2026-03-15 20:38:47,145 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=10, tools=2
+2026-03-15 20:38:47,703 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:38:47,703 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:38:47,703 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': tool round 5/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/providers/base.py'] (0.6s)
+2026-03-15 20:38:47,704 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': max rounds (5) reached, forcing final response. Total: 5 pool + 0 disk reads, 26.9s
+2026-03-15 20:38:47,756 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=12
+2026-03-15 20:38:47,762 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:39:02,723 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 6228 chars in 15.0s (~104.0 tok/s)
+2026-03-15 20:39:02,723 INFO     fitz_graveyard.planning.pipeline.stages.roadmap_risk: Stage 'roadmap_risk': reasoning took 41.9s (6228 chars)
+2026-03-15 20:39:12,835 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:39:13,106 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:39:47,359 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 20558 chars in 34.5s (~148.8 tok/s)
+2026-03-15 20:39:47,359 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': self-critique took 44.6s (6228 \u2192 20558 chars)
+2026-03-15 20:39:57,477 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:39:57,748 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:40:05,015 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 2872 chars in 7.5s (~95.1 tok/s)
+2026-03-15 20:40:05,015 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': extracted 'phases' (17.7s, 2872 chars)
+2026-03-15 20:40:05,069 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:40:05,326 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:40:06,558 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 108 chars in 1.5s (~18.2 tok/s)
+2026-03-15 20:40:06,558 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': extracted 'scheduling' (1.5s, 108 chars)
+2026-03-15 20:40:06,604 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:40:06,861 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:40:17,316 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 5561 chars in 10.7s (~129.7 tok/s)
+2026-03-15 20:40:17,317 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': extracted 'risks' (10.8s, 5561 chars)
+2026-03-15 20:40:17,318 INFO     fitz_graveyard.planning.pipeline.validators: ensure_phase_zero: injected Phase 0 with 5 files
+2026-03-15 20:40:27,436 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:40:27,698 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:40:28,319 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 205 chars in 0.9s (~58.6 tok/s)
+2026-03-15 20:40:28,319 INFO     fitz_graveyard.planning.pipeline.validators: ensure_concrete_verification: LLM fixed 1 vague commands
+2026-03-15 20:40:28,323 INFO     fitz_graveyard.planning.pipeline.orchestrator: Stage 'roadmap_risk' completed successfully
+2026-03-15 20:40:28,374 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:40:28,632 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:40:31,089 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 1700 chars in 2.7s (~157.2 tok/s)
+2026-03-15 20:40:31,089 INFO     fitz_graveyard.planning.pipeline.orchestrator: Coherence check took 2.8s (1700 chars)
+2026-03-15 20:40:31,089 INFO     fitz_graveyard.planning.pipeline.orchestrator: Coherence: skipped roadmap fixes (only list fields)
+2026-03-15 20:40:31,089 INFO     fitz_graveyard.planning.pipeline.orchestrator: Coherence: skipped risk fixes (only list fields)
+2026-03-15 20:40:31,132 INFO     bench: Run 3: Wrapper-Based Instrumentation (549.1s, success=True)
+2026-03-15 20:40:31,132 INFO     bench: --- Reasoning run 4/5 ---
+2026-03-15 20:40:31,154 INFO     fitz_graveyard.config.loader: Loaded config from C:\Users\yanfi\AppData\Local\fitz-graveyard\fitz-graveyard\config.yaml
+2026-03-15 20:40:31,944 INFO     httpx: HTTP Request: GET http://localhost:1234/v1/models "HTTP/1.1 200 OK"
+2026-03-15 20:40:32,534 INFO     fitz_graveyard.llm.lm_studio: Health check: switching qwen3-coder-30b-a3b-instruct -> qwen3.5-4b
+2026-03-15 20:40:32,869 INFO     fitz_graveyard.llm.lm_studio: Switching model: qwen3-coder-30b-a3b-instruct -> qwen3.5-4b
+2026-03-15 20:40:32,881 INFO     fitz_graveyard.llm.lm_studio: Running: C:\Users\yanfi\.lmstudio\bin\lms.EXE unload --all
+2026-03-15 20:40:33,256 INFO     fitz_graveyard.llm.lm_studio: Model unloaded successfully: Unloading "qwen3-coder-30b-a3b-instruct"...
+Unloaded 1 model.
+2026-03-15 20:40:33,268 INFO     fitz_graveyard.llm.lm_studio: Running: lms load qwen3.5-4b -y -c 65536 --parallel 1
+2026-03-15 20:40:52,581 INFO     fitz_graveyard.llm.lm_studio: Model qwen3.5-4b loaded successfully
+2026-03-15 20:40:53,293 INFO     fitz_graveyard.llm.lm_studio: Switching model: qwen3.5-4b -> qwen3-coder-30b-a3b-instruct
+2026-03-15 20:40:53,305 INFO     fitz_graveyard.llm.lm_studio: Running: C:\Users\yanfi\.lmstudio\bin\lms.EXE unload --all
+2026-03-15 20:40:53,649 INFO     fitz_graveyard.llm.lm_studio: Model unloaded successfully: Unloading "qwen3.5-4b"...
+Unloaded 1 model.
+2026-03-15 20:40:53,662 INFO     fitz_graveyard.llm.lm_studio: Running: lms load qwen3-coder-30b-a3b-instruct -y -c 65536 --parallel 1
+2026-03-15 20:42:29,581 INFO     fitz_graveyard.llm.lm_studio: Model qwen3-coder-30b-a3b-instruct loaded successfully
+2026-03-15 20:42:29,585 INFO     fitz_graveyard.planning.pipeline.orchestrator: Created PlanningPipeline with 3 stages
+2026-03-15 20:42:29,651 INFO     fitz_graveyard.planning.pipeline.orchestrator: Starting fresh pipeline for job bench_004
+2026-03-15 20:42:29,651 INFO     fitz_graveyard.planning.pipeline.orchestrator: Running AgentContextGatherer for job bench_004
+2026-03-15 20:42:45,262 INFO     fitz_graveyard.planning.agent.gatherer: AgentContextGatherer: using 30 override files (skipped LLM retrieval)
+2026-03-15 20:42:45,262 INFO     fitz_graveyard.planning.agent.gatherer: AgentContextGatherer: fitz-ai retrieved 30 files from 711 indexed
+2026-03-15 20:42:45,262 INFO     fitz_graveyard.planning.agent.gatherer: AgentContextGatherer: 30 selected, 0 import, 0 hub, 0 neighbor
+2026-03-15 20:42:45,281 INFO     fitz_graveyard.planning.agent.gatherer: AgentContextGatherer: compressed 30 files (67447 -> 66889 chars, 1% reduction)
+2026-03-15 20:42:45,456 INFO     fitz_graveyard.planning.agent.indexer: Library signatures: extracted 2 packages (3613 chars)
+2026-03-15 20:42:45,456 INFO     fitz_graveyard.planning.agent.gatherer: AgentContextGatherer: seed=5 files (12558 chars), tool_pool=25 files (54331 chars), max_seeds=5
+2026-03-15 20:42:45,456 INFO     fitz_graveyard.planning.agent.gatherer: AgentContextGatherer: 30 files (66889 chars compressed, 30637 chars overview) — pipeline total 15.8s
+2026-03-15 20:42:45,456 INFO     fitz_graveyard.planning.pipeline.orchestrator: AgentContextGatherer complete: synthesized=30637, raw=43493 chars
+2026-03-15 20:42:45,583 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:42:45,977 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:42:49,103 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 478 chars in 3.5s (~34.0 tok/s)
+2026-03-15 20:42:49,103 INFO     fitz_graveyard.planning.pipeline.orchestrator: Implementation check took 3.6s (478 chars)
+2026-03-15 20:42:49,103 INFO     fitz_graveyard.planning.pipeline.orchestrator: Implementation check: already_implemented=False
+2026-03-15 20:42:49,103 INFO     fitz_graveyard.planning.pipeline.orchestrator: Executing 3 stages: ['context', 'architecture_design', 'roadmap_risk']
+2026-03-15 20:42:49,103 INFO     fitz_graveyard.planning.pipeline.orchestrator: Executing stage: context
+2026-03-15 20:42:49,104 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': tool reasoning start — 30 files in pool, source_dir=yes, max_rounds=5
+2026-03-15 20:42:49,161 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=2, tools=2
+2026-03-15 20:43:03,192 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:43:03,198 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=stop, tool_calls=False
+2026-03-15 20:43:03,198 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': tool reasoning complete — round 1/5 (no tool calls), total 0 pool reads + 0 disk reads, 14.1s total
+2026-03-15 20:43:03,199 INFO     fitz_graveyard.planning.pipeline.stages.context: Stage 'context': reasoning took 14.1s (6610 chars)
+2026-03-15 20:43:03,267 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:43:03,272 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:43:28,978 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 14967 chars in 25.7s (~145.6 tok/s)
+2026-03-15 20:43:28,979 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': self-critique took 25.8s (6610 \u2192 14967 chars)
+2026-03-15 20:43:29,032 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:43:29,297 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:43:33,874 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 1134 chars in 4.8s (~58.5 tok/s)
+2026-03-15 20:43:33,874 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': extracted 'description' (4.9s, 1134 chars)
+2026-03-15 20:43:33,927 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:43:34,186 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:43:36,269 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 966 chars in 2.3s (~103.0 tok/s)
+2026-03-15 20:43:36,269 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': extracted 'stakeholders' (2.4s, 966 chars)
+2026-03-15 20:43:36,322 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:43:36,594 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:43:40,221 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 666 chars in 3.9s (~42.6 tok/s)
+2026-03-15 20:43:40,222 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': extracted 'files' (4.0s, 666 chars)
+2026-03-15 20:43:40,286 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:43:40,559 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:43:45,400 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 3294 chars in 5.1s (~161.2 tok/s)
+2026-03-15 20:43:45,401 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': extracted 'assumptions' (5.2s, 3294 chars)
+2026-03-15 20:43:45,402 INFO     fitz_graveyard.planning.pipeline.validators: ensure_min_existing_files: backfilled 4 files from raw summaries
+2026-03-15 20:43:45,410 INFO     fitz_graveyard.planning.pipeline.orchestrator: Stage 'context' completed successfully
+2026-03-15 20:43:45,410 INFO     fitz_graveyard.planning.pipeline.orchestrator: Executing stage: architecture_design
+2026-03-15 20:43:45,412 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': generated 2 customized investigation questions
+2026-03-15 20:43:45,459 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:43:45,505 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:43:45,550 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:43:45,597 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:43:45,859 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:43:45,865 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:43:45,868 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:43:45,872 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:43:56,747 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 4465 chars in 11.3s (~98.9 tok/s)
+2026-03-15 20:43:56,798 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:43:57,060 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:44:03,210 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 4336 chars in 17.7s (~61.4 tok/s)
+2026-03-15 20:44:03,256 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:44:03,521 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:44:09,396 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 3903 chars in 23.8s (~41.0 tok/s)
+2026-03-15 20:44:12,090 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 1610 chars in 26.6s (~15.1 tok/s)
+2026-03-15 20:44:14,002 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 1278 chars in 17.2s (~18.6 tok/s)
+2026-03-15 20:44:17,203 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 1882 chars in 14.0s (~33.7 tok/s)
+2026-03-15 20:44:17,204 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': 6/6 investigations completed in 31.8s (18928 chars)
+2026-03-15 20:44:17,207 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool reasoning start — 30 files in pool, source_dir=yes, max_rounds=5
+2026-03-15 20:44:17,267 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=2, tools=2
+2026-03-15 20:44:21,909 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:44:21,912 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:44:21,912 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 1/5 — 1 call(s), 3 file(s): ['fitz_ai/core/instrumentation.py', 'fitz_ai/llm/providers/base.py', 'fitz_ai/engines/fitz_krag/engine.py'] (4.7s)
+2026-03-15 20:44:21,961 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=4, tools=2
+2026-03-15 20:44:23,006 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:44:23,008 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:44:23,008 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 2/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/providers/openai.py'] (1.1s)
+2026-03-15 20:44:33,129 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=6, tools=2
+2026-03-15 20:44:34,063 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:44:34,065 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:44:34,066 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 3/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/providers/anthropic.py'] (11.1s)
+2026-03-15 20:44:34,127 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=8, tools=2
+2026-03-15 20:44:34,721 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:44:34,722 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:44:34,722 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 4/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/providers/cohere.py'] (0.7s)
+2026-03-15 20:44:34,780 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=10, tools=2
+2026-03-15 20:44:35,473 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:44:35,474 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:44:35,474 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 5/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/providers/ollama.py'] (0.8s)
+2026-03-15 20:44:35,474 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': max rounds (5) reached, forcing final response. Total: 7 pool + 0 disk reads, 18.3s
+2026-03-15 20:44:35,525 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=12
+2026-03-15 20:44:35,532 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:44:40,848 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 113 chars in 5.3s (~5.3 tok/s)
+2026-03-15 20:44:40,848 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': architecture reasoning took 23.6s (113 chars)
+2026-03-15 20:44:40,850 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool reasoning start — 30 files in pool, source_dir=yes, max_rounds=5
+2026-03-15 20:44:40,900 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=2, tools=2
+2026-03-15 20:44:45,636 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:44:45,637 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:44:45,637 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 1/5 — 1 call(s), 3 file(s): ['fitz_ai/core/instrumentation.py', 'fitz_ai/llm/providers/base.py', 'fitz_ai/engines/fitz_krag/engine.py'] (4.8s)
+2026-03-15 20:44:45,685 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=4, tools=2
+2026-03-15 20:44:46,995 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:44:46,995 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:44:46,995 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 2/5 — 1 call(s), 4 file(s): ['fitz_ai/llm/providers/openai.py', 'fitz_ai/llm/providers/anthropic.py', 'fitz_ai/llm/providers/cohere.py', 'fitz_ai/llm/providers/ollama.py'] (1.4s)
+2026-03-15 20:44:47,047 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=6, tools=2
+2026-03-15 20:44:48,315 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:44:48,316 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:44:48,316 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 3/5 — 1 call(s), 1 file(s): ['fitz_ai/core/answer.py'] (1.3s)
+2026-03-15 20:44:48,365 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=8, tools=2
+2026-03-15 20:45:05,058 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:45:05,058 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=stop, tool_calls=False
+2026-03-15 20:45:05,058 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool reasoning complete — round 4/5 (no tool calls), total 8 pool reads + 0 disk reads, 24.2s total
+2026-03-15 20:45:05,059 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': pool files read: ['fitz_ai/core/instrumentation.py', 'fitz_ai/llm/providers/base.py', 'fitz_ai/engines/fitz_krag/engine.py', 'fitz_ai/llm/providers/openai.py', 'fitz_ai/llm/providers/anthropic.py', 'fitz_ai/llm/providers/cohere.py', 'fitz_ai/llm/providers/ollama.py', 'fitz_ai/core/answer.py']
+2026-03-15 20:45:05,059 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': design reasoning took 24.2s (8852 chars)
+2026-03-15 20:45:05,252 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:45:05,256 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:45:20,010 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 8934 chars in 14.8s (~151.4 tok/s)
+2026-03-15 20:45:20,010 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': type boundary audit took 14.8s
+2026-03-15 20:45:35,289 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:45:35,335 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:45:35,381 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:45:35,597 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:45:35,644 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:45:35,649 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:45:51,172 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 8023 chars in 15.9s (~126.2 tok/s)
+2026-03-15 20:45:51,173 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': contract verification took 46.1s
+2026-03-15 20:45:58,134 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 3755 chars in 22.8s (~41.3 tok/s)
+2026-03-15 20:45:58,134 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': pattern verification took 53.0s
+2026-03-15 20:46:09,394 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 5756 chars in 34.1s (~42.2 tok/s)
+2026-03-15 20:46:09,394 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': data flow verification took 64.3s
+2026-03-15 20:46:19,508 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:46:19,769 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:46:32,468 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 8285 chars in 13.0s (~159.9 tok/s)
+2026-03-15 20:46:32,469 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': sketch verification took 23.1s
+2026-03-15 20:46:32,520 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:46:32,780 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:46:56,489 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 16822 chars in 24.0s (~175.5 tok/s)
+2026-03-15 20:46:56,490 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': assumption verification took 24.0s
+2026-03-15 20:46:56,490 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': verification agents completed in 111.4s (6/6 agents produced output)
+2026-03-15 20:47:06,603 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:47:06,865 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:49:13,715 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 61579 chars in 127.1s (~121.1 tok/s)
+2026-03-15 20:49:13,716 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': self-critique took 137.2s (60847 \u2192 61579 chars)
+2026-03-15 20:49:43,953 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:49:44,228 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:49:53,637 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 2797 chars in 9.7s (~72.3 tok/s)
+2026-03-15 20:49:53,637 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': extracted 'approaches' (39.9s, 2797 chars)
+2026-03-15 20:49:53,689 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:49:53,949 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:49:58,859 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 1459 chars in 5.2s (~70.5 tok/s)
+2026-03-15 20:49:58,859 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': extracted 'tradeoffs' (5.2s, 1459 chars)
+2026-03-15 20:49:58,912 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:49:59,173 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:50:13,341 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 5706 chars in 14.4s (~98.9 tok/s)
+2026-03-15 20:50:13,341 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': extracted 'adrs' (14.5s, 5706 chars)
+2026-03-15 20:50:23,450 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:50:23,711 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:50:32,653 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 2203 chars in 9.2s (~59.8 tok/s)
+2026-03-15 20:50:32,654 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': extracted 'components' (19.3s, 2203 chars)
+2026-03-15 20:50:32,715 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:50:32,993 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:50:38,711 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 429 chars in 6.0s (~17.9 tok/s)
+2026-03-15 20:50:38,711 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': extracted 'integrations' (6.0s, 429 chars)
+2026-03-15 20:50:38,762 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:50:39,023 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:50:49,327 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 3072 chars in 10.6s (~72.6 tok/s)
+2026-03-15 20:50:49,327 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': extracted 'artifacts' (10.6s, 3072 chars)
+2026-03-15 20:50:49,365 WARNING  fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': field group 'artifacts' extraction failed: Could not extract valid JSON from output (3072 chars). Preview: {\n  "artifacts": [\n    {\n      "filename": "fitz_ai/llm/tracking/token_tracker.py",\n      "content": "from __future__ import annotations\n\nimport threading\nfrom dataclasses import dataclass, field\nfrom typing import Dict, Optional, Any\n\nfrom fitz_ai.logging.logger import get_logger\n\nlogger = get_logger(__name__)\n\n\n@dataclass\nclass TokenUsage:\n    prompt_tokens: int = 0\n    completion_tokens: int = 0\n\n\nclass QueryTokenTracker:\n    """\n    Tracks token usage per query for cost visibility and monito
+2026-03-15 20:50:49,368 INFO     fitz_graveyard.planning.pipeline.orchestrator: Stage 'architecture_design' completed successfully
+2026-03-15 20:50:49,368 INFO     fitz_graveyard.planning.pipeline.orchestrator: Executing stage: roadmap_risk
+2026-03-15 20:50:49,369 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': tool reasoning start — 30 files in pool, source_dir=yes, max_rounds=5
+2026-03-15 20:50:59,469 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=2, tools=2
+2026-03-15 20:51:03,533 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:51:03,534 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:51:03,534 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': tool round 1/5 — 1 call(s), 5 file(s): ['fitz_ai/core/instrumentation.py', 'fitz_ai/llm/providers/openai.py', 'fitz_ai/llm/providers/anthropic.py', 'fitz_ai/llm/providers/cohere.py', 'fitz_ai/llm/providers/ollama.py'] (14.2s)
+2026-03-15 20:51:03,584 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=4, tools=2
+2026-03-15 20:51:04,950 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:51:04,951 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:51:04,951 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': tool round 2/5 — 1 call(s), 1 file(s): ['fitz_ai/engines/fitz_krag/engine.py'] (1.4s)
+2026-03-15 20:51:05,002 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=6, tools=2
+2026-03-15 20:51:05,605 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:51:05,606 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:51:05,611 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': disk read 'fitz_ai/llm/client.py' (3057 raw \u2192 1128 compressed)
+2026-03-15 20:51:05,611 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': tool round 3/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/client.py'] (0.7s)
+2026-03-15 20:51:05,659 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=8, tools=2
+2026-03-15 20:51:06,166 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:51:06,167 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:51:06,169 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': disk read 'fitz_ai/llm/factory.py' (2069 raw \u2192 483 compressed)
+2026-03-15 20:51:06,169 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': tool round 4/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/factory.py'] (0.5s)
+2026-03-15 20:51:06,218 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=10, tools=2
+2026-03-15 20:51:06,697 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:51:06,698 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:51:06,704 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': disk read 'fitz_ai/llm/config.py' (17769 raw \u2192 2287 compressed)
+2026-03-15 20:51:06,705 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': tool round 5/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/config.py'] (0.5s)
+2026-03-15 20:51:06,705 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': max rounds (5) reached, forcing final response. Total: 6 pool + 3 disk reads, 17.3s
+2026-03-15 20:51:06,749 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=12
+2026-03-15 20:51:06,754 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:51:12,134 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 112 chars in 5.4s (~5.2 tok/s)
+2026-03-15 20:51:12,134 INFO     fitz_graveyard.planning.pipeline.stages.roadmap_risk: Stage 'roadmap_risk': reasoning took 22.8s (112 chars)
+2026-03-15 20:51:12,185 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:51:12,448 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:51:18,595 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 2965 chars in 6.4s (~115.4 tok/s)
+2026-03-15 20:51:18,596 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': self-critique took 6.5s (112 \u2192 2965 chars)
+2026-03-15 20:51:18,646 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:51:18,921 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:51:25,294 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 3063 chars in 6.6s (~115.3 tok/s)
+2026-03-15 20:51:25,294 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': extracted 'phases' (6.7s, 3063 chars)
+2026-03-15 20:51:25,345 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:51:25,605 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:51:26,321 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 133 chars in 1.0s (~34.3 tok/s)
+2026-03-15 20:51:26,321 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': extracted 'scheduling' (1.0s, 133 chars)
+2026-03-15 20:51:26,378 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:51:26,646 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:51:33,551 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 3917 chars in 7.2s (~136.6 tok/s)
+2026-03-15 20:51:33,551 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': extracted 'risks' (7.2s, 3917 chars)
+2026-03-15 20:51:33,553 INFO     fitz_graveyard.planning.pipeline.validators: ensure_phase_zero: injected Phase 0 with 5 files
+2026-03-15 20:51:43,662 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:51:43,923 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:51:44,447 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 210 chars in 0.8s (~67.2 tok/s)
+2026-03-15 20:51:44,448 INFO     fitz_graveyard.planning.pipeline.validators: ensure_concrete_verification: LLM fixed 1 vague commands
+2026-03-15 20:51:44,449 INFO     fitz_graveyard.planning.pipeline.orchestrator: Stage 'roadmap_risk' completed successfully
+2026-03-15 20:51:44,498 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:51:44,758 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:51:46,509 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 1145 chars in 2.0s (~142.0 tok/s)
+2026-03-15 20:51:46,509 INFO     fitz_graveyard.planning.pipeline.orchestrator: Coherence check took 2.1s (1145 chars)
+2026-03-15 20:51:46,510 INFO     fitz_graveyard.planning.pipeline.orchestrator: Coherence: skipped roadmap fixes (only list fields)
+2026-03-15 20:51:46,510 INFO     fitz_graveyard.planning.pipeline.orchestrator: Coherence: skipped risk fixes (only list fields)
+2026-03-15 20:51:46,536 INFO     bench: Run 4: Instrumentation-Based Token Tracking (557.0s, success=True)
+2026-03-15 20:51:46,536 INFO     bench: --- Reasoning run 5/5 ---
+2026-03-15 20:51:46,546 INFO     fitz_graveyard.config.loader: Loaded config from C:\Users\yanfi\AppData\Local\fitz-graveyard\fitz-graveyard\config.yaml
+2026-03-15 20:51:47,319 INFO     httpx: HTTP Request: GET http://localhost:1234/v1/models "HTTP/1.1 200 OK"
+2026-03-15 20:51:47,941 INFO     fitz_graveyard.llm.lm_studio: Health check: switching qwen3-coder-30b-a3b-instruct -> qwen3.5-4b
+2026-03-15 20:51:48,324 INFO     fitz_graveyard.llm.lm_studio: Switching model: qwen3-coder-30b-a3b-instruct -> qwen3.5-4b
+2026-03-15 20:51:48,337 INFO     fitz_graveyard.llm.lm_studio: Running: C:\Users\yanfi\.lmstudio\bin\lms.EXE unload --all
+2026-03-15 20:51:48,709 INFO     fitz_graveyard.llm.lm_studio: Model unloaded successfully: Unloading "qwen3-coder-30b-a3b-instruct"...
+Unloaded 1 model.
+2026-03-15 20:51:48,722 INFO     fitz_graveyard.llm.lm_studio: Running: lms load qwen3.5-4b -y -c 65536 --parallel 1
+2026-03-15 20:52:10,112 INFO     fitz_graveyard.llm.lm_studio: Model qwen3.5-4b loaded successfully
+2026-03-15 20:52:10,860 INFO     fitz_graveyard.llm.lm_studio: Switching model: qwen3.5-4b -> qwen3-coder-30b-a3b-instruct
+2026-03-15 20:52:10,870 INFO     fitz_graveyard.llm.lm_studio: Running: C:\Users\yanfi\.lmstudio\bin\lms.EXE unload --all
+2026-03-15 20:52:11,223 INFO     fitz_graveyard.llm.lm_studio: Model unloaded successfully: Unloading "qwen3.5-4b"...
+Unloaded 1 model.
+2026-03-15 20:52:11,235 INFO     fitz_graveyard.llm.lm_studio: Running: lms load qwen3-coder-30b-a3b-instruct -y -c 65536 --parallel 1
+2026-03-15 20:53:24,865 INFO     fitz_graveyard.llm.lm_studio: Model qwen3-coder-30b-a3b-instruct loaded successfully
+2026-03-15 20:53:24,869 INFO     fitz_graveyard.planning.pipeline.orchestrator: Created PlanningPipeline with 3 stages
+2026-03-15 20:53:24,926 INFO     fitz_graveyard.planning.pipeline.orchestrator: Starting fresh pipeline for job bench_005
+2026-03-15 20:53:24,927 INFO     fitz_graveyard.planning.pipeline.orchestrator: Running AgentContextGatherer for job bench_005
+2026-03-15 20:53:38,965 INFO     fitz_graveyard.planning.agent.gatherer: AgentContextGatherer: using 30 override files (skipped LLM retrieval)
+2026-03-15 20:53:38,965 INFO     fitz_graveyard.planning.agent.gatherer: AgentContextGatherer: fitz-ai retrieved 30 files from 711 indexed
+2026-03-15 20:53:38,965 INFO     fitz_graveyard.planning.agent.gatherer: AgentContextGatherer: 30 selected, 0 import, 0 hub, 0 neighbor
+2026-03-15 20:53:38,981 INFO     fitz_graveyard.planning.agent.gatherer: AgentContextGatherer: compressed 30 files (67447 -> 66889 chars, 1% reduction)
+2026-03-15 20:53:39,135 INFO     fitz_graveyard.planning.agent.indexer: Library signatures: extracted 2 packages (3613 chars)
+2026-03-15 20:53:39,136 INFO     fitz_graveyard.planning.agent.gatherer: AgentContextGatherer: seed=5 files (12558 chars), tool_pool=25 files (54331 chars), max_seeds=5
+2026-03-15 20:53:39,136 INFO     fitz_graveyard.planning.agent.gatherer: AgentContextGatherer: 30 files (66889 chars compressed, 30637 chars overview) — pipeline total 14.2s
+2026-03-15 20:53:39,136 INFO     fitz_graveyard.planning.pipeline.orchestrator: AgentContextGatherer complete: synthesized=30637, raw=43493 chars
+2026-03-15 20:53:39,203 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:53:39,560 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:53:42,323 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 466 chars in 3.1s (~37.5 tok/s)
+2026-03-15 20:53:42,324 INFO     fitz_graveyard.planning.pipeline.orchestrator: Implementation check took 3.2s (466 chars)
+2026-03-15 20:53:42,324 INFO     fitz_graveyard.planning.pipeline.orchestrator: Implementation check: already_implemented=False
+2026-03-15 20:53:42,324 INFO     fitz_graveyard.planning.pipeline.orchestrator: Executing 3 stages: ['context', 'architecture_design', 'roadmap_risk']
+2026-03-15 20:53:42,324 INFO     fitz_graveyard.planning.pipeline.orchestrator: Executing stage: context
+2026-03-15 20:53:42,325 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': tool reasoning start — 30 files in pool, source_dir=yes, max_rounds=5
+2026-03-15 20:53:42,380 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=2, tools=2
+2026-03-15 20:53:58,434 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:53:58,441 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=stop, tool_calls=False
+2026-03-15 20:53:58,441 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': tool reasoning complete — round 1/5 (no tool calls), total 0 pool reads + 0 disk reads, 16.1s total
+2026-03-15 20:53:58,441 INFO     fitz_graveyard.planning.pipeline.stages.context: Stage 'context': reasoning took 16.1s (7877 chars)
+2026-03-15 20:53:58,490 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:53:58,494 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:54:25,906 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 15862 chars in 27.4s (~144.6 tok/s)
+2026-03-15 20:54:25,907 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': self-critique took 27.5s (7877 \u2192 15862 chars)
+2026-03-15 20:54:25,957 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:54:26,214 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:54:47,880 WARNING  fitz_graveyard.planning.pipeline.stages.base: Stage 'context': field group 'description' extraction failed: The model has crashed without additional information. (Exit code: 18446744072635812000)
+2026-03-15 20:54:47,936 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:56:15,611 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:56:17,949 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 882 chars in 90.0s (~2.4 tok/s)
+2026-03-15 20:56:17,952 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': extracted 'stakeholders' (90.1s, 882 chars)
+2026-03-15 20:56:18,017 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:56:18,306 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:56:21,884 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 556 chars in 3.9s (~36.0 tok/s)
+2026-03-15 20:56:21,884 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': extracted 'files' (3.9s, 556 chars)
+2026-03-15 20:56:21,936 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:56:22,194 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:56:25,352 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 1191 chars in 3.4s (~87.0 tok/s)
+2026-03-15 20:56:25,353 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'context': extracted 'assumptions' (3.5s, 1191 chars)
+2026-03-15 20:56:25,354 INFO     fitz_graveyard.planning.pipeline.validators: ensure_min_existing_files: backfilled 4 files from raw summaries
+2026-03-15 20:56:25,362 INFO     fitz_graveyard.planning.pipeline.orchestrator: Stage 'context' completed successfully
+2026-03-15 20:56:25,363 INFO     fitz_graveyard.planning.pipeline.orchestrator: Executing stage: architecture_design
+2026-03-15 20:56:25,365 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': generated 2 customized investigation questions
+2026-03-15 20:56:25,419 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:56:25,465 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:56:25,513 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:56:25,558 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:56:25,822 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:56:25,827 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:56:25,832 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:56:25,838 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:56:42,424 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 1708 chars in 17.0s (~25.2 tok/s)
+2026-03-15 20:56:42,475 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:56:42,724 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:56:48,519 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 1406 chars in 6.0s (~58.1 tok/s)
+2026-03-15 20:56:48,572 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:56:48,821 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:56:52,977 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 4243 chars in 27.5s (~38.6 tok/s)
+2026-03-15 20:56:54,715 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 4518 chars in 29.2s (~38.7 tok/s)
+2026-03-15 20:56:55,898 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 1812 chars in 7.3s (~61.8 tok/s)
+2026-03-15 20:56:58,778 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 4497 chars in 33.4s (~33.7 tok/s)
+2026-03-15 20:56:58,779 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': 6/6 investigations completed in 33.4s (19638 chars)
+2026-03-15 20:56:58,783 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool reasoning start — 30 files in pool, source_dir=yes, max_rounds=5
+2026-03-15 20:56:58,829 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=2, tools=2
+2026-03-15 20:57:06,926 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:57:06,934 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:57:06,935 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 1/5 — 1 call(s), 2 file(s): ['fitz_ai/core/instrumentation.py', 'fitz_ai/llm/providers/base.py'] (8.1s)
+2026-03-15 20:57:06,985 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=4, tools=2
+2026-03-15 20:57:07,994 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:57:07,994 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:57:07,994 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 2/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/providers/openai.py'] (1.1s)
+2026-03-15 20:57:08,047 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=6, tools=2
+2026-03-15 20:57:08,866 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:57:08,867 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:57:08,867 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 3/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/providers/anthropic.py'] (0.9s)
+2026-03-15 20:57:08,918 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=8, tools=2
+2026-03-15 20:57:09,628 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:57:09,628 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:57:09,629 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 4/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/providers/cohere.py'] (0.8s)
+2026-03-15 20:57:09,679 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=10, tools=2
+2026-03-15 20:57:10,563 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:57:10,563 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:57:10,563 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 5/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/providers/ollama.py'] (0.9s)
+2026-03-15 20:57:10,563 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': max rounds (5) reached, forcing final response. Total: 6 pool + 0 disk reads, 11.8s
+2026-03-15 20:57:10,612 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=12
+2026-03-15 20:57:10,619 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:57:50,331 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 9616 chars in 39.7s (~60.5 tok/s)
+2026-03-15 20:57:50,332 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': architecture reasoning took 51.5s (9616 chars)
+2026-03-15 20:57:50,333 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool reasoning start — 30 files in pool, source_dir=yes, max_rounds=5
+2026-03-15 20:58:00,446 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=2, tools=2
+2026-03-15 20:58:11,959 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:58:11,962 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:58:11,962 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 1/5 — 1 call(s), 5 file(s): ['fitz_ai/core/instrumentation.py', 'fitz_ai/llm/providers/openai.py', 'fitz_ai/llm/providers/anthropic.py', 'fitz_ai/llm/providers/cohere.py', 'fitz_ai/llm/providers/ollama.py'] (21.6s)
+2026-03-15 20:58:22,093 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=4, tools=2
+2026-03-15 20:58:24,941 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:58:24,942 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:58:24,942 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 2/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/providers/openai.py'] (13.0s)
+2026-03-15 20:58:24,995 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=6, tools=2
+2026-03-15 20:58:25,983 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:58:25,984 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:58:25,984 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 3/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/providers/anthropic.py'] (1.0s)
+2026-03-15 20:58:26,035 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=8, tools=2
+2026-03-15 20:58:26,896 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:58:26,897 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:58:26,897 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 4/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/providers/cohere.py'] (0.9s)
+2026-03-15 20:58:26,948 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=10, tools=2
+2026-03-15 20:58:27,965 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:58:27,966 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 20:58:27,966 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': tool round 5/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/providers/ollama.py'] (1.1s)
+2026-03-15 20:58:27,966 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': max rounds (5) reached, forcing final response. Total: 9 pool + 0 disk reads, 37.6s
+2026-03-15 20:58:28,033 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=12
+2026-03-15 20:58:28,041 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:58:42,103 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 119 chars in 14.1s (~2.1 tok/s)
+2026-03-15 20:58:42,103 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': design reasoning took 51.8s (119 chars)
+2026-03-15 20:58:42,156 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:58:42,202 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:58:42,249 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:58:42,295 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 20:58:42,555 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:58:42,559 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:58:42,562 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:58:42,565 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 20:59:25,110 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 5755 chars in 42.9s (~33.6 tok/s)
+2026-03-15 20:59:25,110 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': pattern verification took 42.9s
+2026-03-15 20:59:29,365 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 6829 chars in 47.1s (~36.3 tok/s)
+2026-03-15 20:59:29,365 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': type boundary audit took 47.1s
+2026-03-15 20:59:39,695 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 7906 chars in 57.5s (~34.4 tok/s)
+2026-03-15 20:59:39,697 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': contract verification took 57.6s
+2026-03-15 20:59:44,531 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 10843 chars in 62.3s (~43.5 tok/s)
+2026-03-15 20:59:44,531 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': data flow verification took 62.4s
+2026-03-15 21:00:04,713 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 21:00:04,973 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 21:00:45,711 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 12942 chars in 41.0s (~78.9 tok/s)
+2026-03-15 21:00:45,712 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': sketch verification took 61.2s
+2026-03-15 21:01:05,892 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 21:01:06,154 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 21:02:05,841 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 20873 chars in 59.9s (~87.1 tok/s)
+2026-03-15 21:02:05,841 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': assumption verification took 80.1s
+2026-03-15 21:02:05,841 INFO     fitz_graveyard.planning.pipeline.stages.architecture_design: Stage 'architecture_design': verification agents completed in 203.7s (6/6 agents produced output)
+2026-03-15 21:02:26,022 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 21:02:26,280 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 21:03:13,901 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 11306 chars in 47.9s (~59.0 tok/s)
+2026-03-15 21:03:13,901 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': self-critique took 68.1s (75190 \u2192 11306 chars)
+2026-03-15 21:03:34,088 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 21:03:34,354 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 21:03:52,488 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 3055 chars in 18.4s (~41.5 tok/s)
+2026-03-15 21:03:52,488 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': extracted 'approaches' (38.6s, 3055 chars)
+2026-03-15 21:04:02,607 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 21:04:02,871 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 21:04:06,838 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 1011 chars in 4.2s (~59.7 tok/s)
+2026-03-15 21:04:06,838 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': extracted 'tradeoffs' (14.3s, 1011 chars)
+2026-03-15 21:04:06,888 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 21:04:07,148 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 21:04:19,494 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 1727 chars in 12.6s (~34.2 tok/s)
+2026-03-15 21:04:19,494 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': extracted 'adrs' (12.7s, 1727 chars)
+2026-03-15 21:04:19,547 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 21:04:19,808 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 21:04:31,812 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 1490 chars in 12.3s (~30.4 tok/s)
+2026-03-15 21:04:31,812 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': extracted 'components' (12.3s, 1490 chars)
+2026-03-15 21:04:31,862 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 21:04:32,136 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 21:04:36,273 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 114 chars in 4.4s (~6.5 tok/s)
+2026-03-15 21:04:36,273 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': extracted 'integrations' (4.5s, 114 chars)
+2026-03-15 21:04:46,380 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 21:04:46,640 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 21:05:03,369 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 4719 chars in 17.0s (~69.5 tok/s)
+2026-03-15 21:05:03,369 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'architecture_design': extracted 'artifacts' (27.1s, 4719 chars)
+2026-03-15 21:05:03,420 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 21:05:03,682 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 21:05:07,072 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 1551 chars in 3.7s (~106.1 tok/s)
+2026-03-15 21:05:07,073 INFO     fitz_graveyard.planning.pipeline.validators: ensure_min_adrs: added 1 ADRs via LLM
+2026-03-15 21:05:07,141 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 21:05:07,400 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 21:05:22,072 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 4510 chars in 14.9s (~75.6 tok/s)
+2026-03-15 21:05:22,073 INFO     fitz_graveyard.planning.pipeline.validators: ensure_correct_artifacts: LLM corrected 2 artifacts
+2026-03-15 21:05:22,077 INFO     fitz_graveyard.planning.pipeline.orchestrator: Stage 'architecture_design' completed successfully
+2026-03-15 21:05:22,077 INFO     fitz_graveyard.planning.pipeline.orchestrator: Executing stage: roadmap_risk
+2026-03-15 21:05:22,079 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': tool reasoning start — 30 files in pool, source_dir=yes, max_rounds=5
+2026-03-15 21:05:42,261 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=2, tools=2
+2026-03-15 21:05:47,982 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 21:05:47,983 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 21:05:47,984 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': tool round 1/5 — 1 call(s), 2 file(s): ['fitz_ai/core/instrumentation.py', 'fitz_ai/llm/providers/base.py'] (25.9s)
+2026-03-15 21:05:48,034 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=4, tools=2
+2026-03-15 21:05:48,929 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 21:05:48,930 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 21:05:48,930 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': tool round 2/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/providers/openai.py'] (0.9s)
+2026-03-15 21:05:48,982 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=6, tools=2
+2026-03-15 21:05:49,713 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 21:05:49,714 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 21:05:49,714 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': tool round 3/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/providers/anthropic.py'] (0.8s)
+2026-03-15 21:05:49,765 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=8, tools=2
+2026-03-15 21:05:50,446 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 21:05:50,446 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 21:05:50,446 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': tool round 4/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/providers/cohere.py'] (0.7s)
+2026-03-15 21:05:50,497 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: model=qwen3-coder-30b-a3b-instruct, messages=10, tools=2
+2026-03-15 21:05:51,270 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 21:05:51,270 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate_with_tools: finish_reason=tool_calls, tool_calls=True
+2026-03-15 21:05:51,271 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': tool round 5/5 — 1 call(s), 1 file(s): ['fitz_ai/llm/providers/ollama.py'] (0.8s)
+2026-03-15 21:05:51,271 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': max rounds (5) reached, forcing final response. Total: 6 pool + 0 disk reads, 29.2s
+2026-03-15 21:05:51,317 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=12
+2026-03-15 21:05:51,322 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 21:05:58,377 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 118 chars in 7.1s (~4.2 tok/s)
+2026-03-15 21:05:58,377 INFO     fitz_graveyard.planning.pipeline.stages.roadmap_risk: Stage 'roadmap_risk': reasoning took 36.3s (118 chars)
+2026-03-15 21:05:58,430 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 21:05:58,693 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 21:06:02,806 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 284 chars in 4.4s (~16.2 tok/s)
+2026-03-15 21:06:02,806 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': self-critique took 4.4s (118 \u2192 284 chars)
+2026-03-15 21:06:12,921 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 21:06:13,192 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 21:06:17,448 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 18 chars in 4.5s (~1.0 tok/s)
+2026-03-15 21:06:17,449 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': extracted 'phases' (14.6s, 18 chars)
+2026-03-15 21:06:17,510 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 21:06:17,769 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 21:06:18,600 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 78 chars in 1.1s (~17.8 tok/s)
+2026-03-15 21:06:18,600 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': extracted 'scheduling' (1.2s, 78 chars)
+2026-03-15 21:06:18,653 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 21:06:18,910 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 21:06:23,454 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 83 chars in 4.8s (~4.3 tok/s)
+2026-03-15 21:06:23,454 INFO     fitz_graveyard.planning.pipeline.stages.base: Stage 'roadmap_risk': extracted 'risks' (4.9s, 83 chars)
+2026-03-15 21:06:23,454 INFO     fitz_graveyard.planning.pipeline.validators: ensure_phase_zero: injected Phase 0 with 5 files
+2026-03-15 21:06:23,505 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 21:06:23,774 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 21:06:24,268 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 46 chars in 0.8s (~15.0 tok/s)
+2026-03-15 21:06:24,268 INFO     fitz_graveyard.planning.pipeline.validators: ensure_concrete_verification: LLM fixed 1 vague commands
+2026-03-15 21:06:24,270 INFO     fitz_graveyard.planning.pipeline.orchestrator: Stage 'roadmap_risk' completed successfully
+2026-03-15 21:06:24,317 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: model=qwen3-coder-30b-a3b-instruct, messages=2
+2026-03-15 21:06:24,590 INFO     httpx: HTTP Request: POST http://localhost:1234/v1/chat/completions "HTTP/1.1 200 OK"
+2026-03-15 21:06:26,587 INFO     fitz_graveyard.llm.lm_studio: LMStudio.generate: 461 chars in 2.3s (~50.9 tok/s)
+2026-03-15 21:06:26,587 INFO     fitz_graveyard.planning.pipeline.orchestrator: Coherence check took 2.3s (461 chars)
+2026-03-15 21:06:26,588 INFO     fitz_graveyard.planning.pipeline.orchestrator: Coherence: skipped roadmap fixes (only list fields)
+2026-03-15 21:06:26,588 INFO     fitz_graveyard.planning.pipeline.orchestrator: Coherence: skipped risk fixes (only list fields)
+2026-03-15 21:06:26,614 INFO     bench: Run 5: Approach 1: Centralized Hook-Based Instrumentation (781.8s, success=True)
+# Reasoning Benchmark (5 runs)
+
+## Timing
+- Min: 390s
+- Max: 839s
+- Avg: 624s
+
+## Success: 5/5
+
+## Architecture Decisions
+| Run | Recommended | Time | Size |
+|-----|-------------|------|------|
+| 1 | Approach A (Corrected) | 390.4s | 46364B |
+| 2 | Approach 1: Direct Hook Integration with Response Parsing | 839.3s | 55918B |
+| 3 | Wrapper-Based Instrumentation | 549.1s | 79983B |
+| 4 | Instrumentation-Based Token Tracking | 557.0s | 49165B |
+| 5 | Approach 1: Centralized Hook-Based Instrumentation | 781.8s | 33391B |
+
+## Decision Frequency
+| Approach | Count | % |
+|----------|-------|---|
+| Approach A (Corrected) | 1 | 20% |
+| Approach 1: Direct Hook Integration with Response Parsing | 1 | 20% |
+| Wrapper-Based Instrumentation | 1 | 20% |
+| Instrumentation-Based Token Tracking | 1 | 20% |
+| Approach 1: Centralized Hook-Based Instrumentation | 1 | 20% |
+
+## Avg Stage Timings
+| Stage | Avg | Min | Max |
+|-------|-----|-----|-----|
+| agent_gathering | 15s | 14s | 16s |
+| architecture_design | 442s | 240s | 652s |
+| coherence_check | 3s | 2s | 4s |
+| context | 72s | 44s | 163s |
+| implementation_check | 3s | 3s | 4s |
+| roadmap_risk | 88s | 55s | 128s |

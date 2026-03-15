@@ -1,0 +1,434 @@
+{
+  "context": {
+    "project_description": "",
+    "key_requirements": [],
+    "constraints": [],
+    "existing_context": "",
+    "stakeholders": [
+      "Platform Engineers who need to monitor token usage for cost control",
+      "Product Managers who want insights into which queries are expensive",
+      "Developers who want to debug performance issues or understand resource consumption",
+      "DevOps/Infra Teams who must ensure low overhead of tracking and not affect production latencies"
+    ],
+    "scope_boundaries": {
+      "in_scope": [
+        "Instrumenting core ChatProvider and StreamingChatProvider methods (chat, chat_stream)",
+        "Tracking token usage at the provider level",
+        "Integration with current instrumentation system in fitz_ai/core/instrumentation.py"
+      ],
+      "out_of_scope": [
+        "Exporting to external systems or dashboards",
+        "Per-message breakdowns",
+        "Cost estimation based on model-specific pricing",
+        "Tracking embedding or reranking operations"
+      ]
+    },
+    "existing_files": [
+      "fitz_ai/core/instrumentation.py \u2014 Instrumentation system for benchmarking plugin performance",
+      "fitz_ai/llm/providers/base.py \u2014 Provider protocols for LLM clients",
+      "fitz_ai/llm/providers/openai.py \u2014 discovered by agent",
+      "fitz_ai/llm/providers/anthropic.py \u2014 discovered by agent",
+      "fitz_ai/llm/providers/cohere.py \u2014 discovered by agent",
+      "fitz_ai/llm/providers/ollama.py \u2014 discovered by agent"
+    ],
+    "needed_artifacts": [
+      "fitz_ai/core/token_tracking.py \u2014 Centralized module for tracking token usage across LLM providers with TokenTrackingHook and TokenUsage data structure",
+      "fitz_ai/core/token_counter.py \u2014 Encapsulate token counting logic for different LLM providers with utility functions and fallback estimations"
+    ],
+    "assumptions": [
+      {
+        "assumption": "Token counts are available from SDKs",
+        "impact": "Would require custom tokenizer implementation for providers without native support",
+        "confidence": "medium"
+      },
+      {
+        "assumption": "Streaming responses can be counted incrementally",
+        "impact": "Could miss some tokens or overcount if not handled carefully; depends on SDK behavior",
+        "confidence": "medium"
+      },
+      {
+        "assumption": "Each provider's API returns token count metadata",
+        "impact": "If true, we can read from response headers or payload. Otherwise we'll need to estimate using fallback methods like character-based estimation (avg 4 chars \u2248 1 token).",
+        "confidence": "high"
+      },
+      {
+        "assumption": "Tracking is meant for internal observability only (no billing)",
+        "impact": "May limit the design towards cost-awareness instead of pure usage logging",
+        "confidence": "medium"
+      },
+      {
+        "assumption": "We instrument at `ChatProvider` and not higher-level layers",
+        "impact": "Could miss some edge cases, but ensures broad coverage without duplicating logic",
+        "confidence": "high"
+      }
+    ]
+  },
+  "architecture_design": {
+    "architecture": {
+      "approaches": [
+        {
+          "name": "Approach 1: Centralized Hook-Based Instrumentation",
+          "description": "We define `TokenTrackingHook` that implements the current `BenchmarkHook` protocol in instrumentation. This hook will capture start/end events for `chat()` and `chat_stream()` on providers implementing `ChatProvider` or `StreamingChatProvider`. The tracking logic extracts token usage from API response headers (OpenAI-style) or inferred estimates.",
+          "pros": [
+            "Aligns with existing architecture and patterns in `fitz_ai/core/instrumentation.py`",
+            "Minimal disruption to current codebase \u2014 no direct changes required in LLM provider classes",
+            "Follows established conventions of using protocols, hooks, and instrumentation system as intended"
+          ],
+          "cons": [
+            "Currently a no-op implementation that cannot extract tokens without architectural changes",
+            "Requires response-level access which is not available from current provider implementations"
+          ],
+          "complexity": "medium",
+          "best_for": [
+            "Systems with existing instrumentation infrastructure and protocol-based design",
+            "When minimal code modification is required"
+          ]
+        },
+        {
+          "name": "Approach 2: Provider-Specific Token Access",
+          "description": "Each LLM client (e.g., `OpenAIChat`, `AnthropicChat`) would be extended to track tokens internally, perhaps using a decorator or wrapper around core methods like `chat()` and `chat_stream()`. This approach modifies each provider's implementation more directly.",
+          "pros": [
+            "Direct control over token extraction logic",
+            "Easier to add model-specific behavior or fallbacks without external dependencies"
+          ],
+          "cons": [
+            "Violates the decoupling principle of Protocol-based design",
+            "Requires updating all 4\u20135 major LLM client classes with tracking code",
+            "Introduces maintenance overhead for new providers"
+          ],
+          "complexity": "high",
+          "best_for": [
+            "When direct control over each provider's behavior is required",
+            "Systems where protocol-based design isn't the primary pattern"
+          ]
+        }
+      ],
+      "recommended": "Approach 1: Centralized Hook-Based Instrumentation",
+      "reasoning": "This approach is right because it aligns with existing architecture and patterns in fitz_ai/core/instrumentation.py, requires no direct changes to LLM provider classes, and follows established conventions. Approach 2 is wrong because it violates decoupling principles by requiring modifications to each provider implementation and increases maintenance overhead when new providers are added. The current system's design uses protocols like ChatProvider which makes hook-based instrumentation the natural fit.",
+      "key_tradeoffs": {
+        "centralized_vs_decoupled_tracking": "Centralized hook-based approach avoids modifying individual provider classes (decoupling) but requires access to raw API responses which current implementations strip away, making actual token extraction non-functional without architectural changes",
+        "instrumentation_layer_depth": "Using existing InstrumentedProxy system minimizes disruption but creates a dependency on response data availability that isn't currently provided by LLM providers"
+      },
+      "technology_considerations": [
+        "Python dataclasses for immutable TokenUsage structure",
+        "Protocol-based design patterns from fitz_ai/core/instrumentation.py for extensibility",
+        "InstrumentedProxy system for centralized hook registration and event capture",
+        "BenchmarkHook interface for consistent instrumentation pattern adherence",
+        "String-based token estimation as fallback mechanism due to lack of structured response data in current provider implementations"
+      ],
+      "scope_statement": "This task produces two small Python modules (token_tracking.py and token_counter.py) to integrate with existing instrumentation system, focusing on defining interfaces for tracking LLM token usage across different provider types."
+    },
+    "design": {
+      "adrs": [
+        {
+          "title": "ADR: Centralized Token Tracking via Hook-Based Instrumentation",
+          "context": "Implement token usage tracking across LLM providers with minimal disruption to existing codebase and leveraging existing instrumentation infrastructure.",
+          "decision": "Use a centralized hook-based approach by implementing TokenTrackingHook that adheres to BenchmarkHook protocol, integrating with the existing InstrumentedProxy system to monitor chat() and chat_stream() method calls on ChatProvider and StreamingChatProvider implementations.",
+          "rationale": "This approach aligns with existing architecture patterns in fitz_ai/core/instrumentation.py and avoids modifying individual provider classes. It leverages established protocols (BenchmarkHook, ChatProvider) and integrates cleanly with the current instrumentation system without breaking changes or requiring extensive refactoring of LLM providers.",
+          "consequences": [
+            "Minimal disruption to existing LLM provider implementations",
+            "Leverages existing benchmarking infrastructure",
+            "Token extraction remains incomplete in current implementation due to providers returning strings instead of structured responses",
+            "Future enhancements required to access raw API response data for actual token parsing"
+          ],
+          "alternatives_considered": [
+            "Provider-Specific Token Access - rejected because it violates decoupling principles and requires modifying each provider class, increasing maintenance overhead",
+            "Middleware Wrapper Pattern - rejected because it introduces unnecessary complexity when all target interfaces are already known and hookable via protocol"
+          ]
+        },
+        {
+          "title": "ADR: Centralized Hook-Based Instrumentation with Token Tracking",
+          "context": "Implementing token usage tracking through centralized hooks in the instrumentation system, following existing patterns in fitz_ai/core/instrumentation.py",
+          "decision": "Adopt centralized hook-based instrumentation with TokenTrackingHook, TokenUsage, and TokenCounter components instead of per-provider instrumentation",
+          "rationale": "This approach aligns with existing architecture patterns and maintains loose coupling between LLM providers and instrumentation logic. It follows the established protocol-based design where ChatProvider interfaces are not modified directly.",
+          "consequences": [
+            "Token usage data crosses from LLM provider boundaries into central tracking system, potentially creating a single point of failure for telemetry collection",
+            "Failure in token counting logic could silently break downstream analytics without clear error propagation to calling services",
+            "V1 implementation excludes real-time streaming token counts and detailed per-request breakdowns that would require more complex hook coordination"
+          ],
+          "alternatives_considered": [
+            "Per-provider instrumentation requiring direct modifications to each LLM provider class - increases maintenance overhead when adding new providers",
+            "Event-driven approach with separate telemetry service that subscribes to provider events - introduces additional complexity and potential data consistency issues"
+          ]
+        }
+      ],
+      "components": [
+        {
+          "name": "TokenTrackingHook",
+          "purpose": "A benchmark hook to track token usage during LLM API calls",
+          "responsibilities": [
+            "Capture start and end events for LLM API calls",
+            "Extract token usage from responses where available"
+          ],
+          "interfaces": [
+            "on_call_start(layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any",
+            "on_call_end(context: Any, result: Any, error: Exception | None) -> None"
+          ],
+          "dependencies": [
+            "BenchmarkHook",
+            "TokenUsage"
+          ]
+        },
+        {
+          "name": "TokenUsage",
+          "purpose": "Represents token usage for a single LLM call",
+          "responsibilities": [
+            "Store input, output and total token counts"
+          ],
+          "interfaces": [],
+          "dependencies": []
+        },
+        {
+          "name": "TokenCounter",
+          "purpose": "Encapsulate token counting logic with estimation capabilities",
+          "responsibilities": [
+            "Estimate tokens using heuristic approximations",
+            "Extract token counts from LLM responses when available"
+          ],
+          "interfaces": [
+            "estimate_tokens(text: str) -> int",
+            "get_token_estimate_from_response(response: Union[str, dict], provider_type: str) -> Optional[int]"
+          ],
+          "dependencies": []
+        }
+      ],
+      "data_model": {
+        "TokenUsage": [
+          "input_tokens: int | None",
+          "output_tokens: int | None",
+          "total_tokens: int | None"
+        ]
+      },
+      "integration_points": [
+        "ExternalSystem \u2014 Instrumentation system in fitz_ai/core/instrumentation.py"
+      ],
+      "artifacts": [
+        {
+          "filename": "fitz_ai/core/token_tracking.py",
+          "content": "from __future__ import annotations\n\nfrom dataclasses import dataclass\nfrom typing import Any, Optional\n\nfrom fitz_ai.core.instrumentation import BenchmarkHook\n\n\ndefault_token_usage = TokenUsage()\n\n\n@dataclass(frozen=True)\nclass TokenUsage:\n    \"\"\"Represents token usage for a single LLM call.\"\"\"\n\n    input_tokens: int | None = None\n    output_tokens: int | None = None\n    total_tokens: int | None = None\n\n\nclass TokenTrackingHook(BenchmarkHook):\n    \"\"\"\n    A benchmark hook to track token usage during LLM API calls.\n    \n    Note: This implementation currently has no-op logic for extracting tokens,\n          which is a critical gap that prevents actual functionality from working.\n          \n          To make this fully functional, the system must:\n          1. Be modified at the provider level or instrumentation layer to access raw responses\n          2. Implement actual parsing of response headers/bodies (e.g., OpenAI usage fields)\n          3. Provide a mechanism for storing and exposing aggregated metrics.\n    \"\"\"\n\n    def on_call_start(\n        self,\n        layer: str,\n        plugin_name: str,\n        method: str,\n        args: tuple,\n        kwargs: dict,\n    ) -> Any:\n        # For now we just pass through context; future enhancement could use it for correlation\n        return None\n\n    def on_call_end(\n        self,\n        context: Any,\n        result: Any,\n        error: Exception | None,\n    ) -> None:\n        \"\"\"\n        Extract token usage from responses where available.\n        \n        Currently a no-op because the system assumes response strings contain structured metadata, \n        which they do not. Actual parsing logic must be implemented based on:\n        - OpenAI style headers/body fields\n        - Anthropic/other provider-specific structures  \n        - Fallback estimation when direct metrics unavailable\n        \n        This implementation requires changes to LLM providers or instrumentation layer.\n        \"\"\"\n        # TODO: Implement actual token parsing once architecture can access raw responses\n        pass\n\n__all__ = [\n    \"TokenUsage\",\n    \"TokenTrackingHook\"\n]",
+          "purpose": "Centralized module for tracking token usage with TokenTrackingHook and TokenUsage data structure"
+        },
+        {
+          "filename": "fitz_ai/core/token_counter.py",
+          "content": "from __future__ import annotations\n\nimport re\nfrom typing import Optional, Union\n\n\ndef estimate_tokens(text: str) -> int:\n    \"\"\"\n    Estimate number of tokens using a heuristic approximation.\n    \n    This is a rough estimation based on common rules (e.g., 4 chars = 1 token).\n    For accurate metrics, use the actual API response which provides exact counts.\n    \n    Note: This function will not work correctly unless providers return structured data\n          that includes token information in their responses. As of current implementation,\n          all provider chat() methods return strings and strip away raw usage metadata.\n    \"\"\"\n\n    # Simple heuristic - adjust based on empirical observation or model-specific formulas\n    return max(1, len(text) // 4)\n\ndef get_token_estimate_from_response(response: Union[str, dict], provider_type: str = \"unknown\") -> Optional[int]:\n    \"\"\"\n    Try to extract token count from LLM response.\n    \n    Placeholder logic - this currently assumes structured input (dict) but \n    all current providers return strings that lose usage metadata. \n    \n    For production use:\n        - Need to parse actual API responses or intercept at lower levels\n        - Implement provider-specific parsing for OpenAI, Anthropic, Cohere, etc.\n        - Add fallback logic using estimate_tokens() when direct metrics are unavailable\n    \n    Note: The current architecture does not make raw API response data available \n          to hooks due to stripping in provider implementations.\n    \"\"\"\n\n    # This logic would only work if providers returned structured JSON with usage fields\n    if isinstance(response, dict) and \"usage\" in response:\n        return response.get(\"usage\", {}).get(\"total_tokens\")  # e.g., for OpenAI\n\n    # Fallback to estimating - but this assumes the input is still a text string \n    # which may not contain meaningful token information\n    if isinstance(response, str):\n        return estimate_tokens(response)\n    \n    return None\n\n__all__ = [\n    \"estimate_tokens\",\n    \"get_token_estimate_from_response\"\n]",
+          "purpose": "Encapsulate token counting logic"
+        }
+      ]
+    }
+  },
+  "architecture": {
+    "approaches": [
+      {
+        "name": "Approach 1: Centralized Hook-Based Instrumentation",
+        "description": "We define `TokenTrackingHook` that implements the current `BenchmarkHook` protocol in instrumentation. This hook will capture start/end events for `chat()` and `chat_stream()` on providers implementing `ChatProvider` or `StreamingChatProvider`. The tracking logic extracts token usage from API response headers (OpenAI-style) or inferred estimates.",
+        "pros": [
+          "Aligns with existing architecture and patterns in `fitz_ai/core/instrumentation.py`",
+          "Minimal disruption to current codebase \u2014 no direct changes required in LLM provider classes",
+          "Follows established conventions of using protocols, hooks, and instrumentation system as intended"
+        ],
+        "cons": [
+          "Currently a no-op implementation that cannot extract tokens without architectural changes",
+          "Requires response-level access which is not available from current provider implementations"
+        ],
+        "complexity": "medium",
+        "best_for": [
+          "Systems with existing instrumentation infrastructure and protocol-based design",
+          "When minimal code modification is required"
+        ]
+      },
+      {
+        "name": "Approach 2: Provider-Specific Token Access",
+        "description": "Each LLM client (e.g., `OpenAIChat`, `AnthropicChat`) would be extended to track tokens internally, perhaps using a decorator or wrapper around core methods like `chat()` and `chat_stream()`. This approach modifies each provider's implementation more directly.",
+        "pros": [
+          "Direct control over token extraction logic",
+          "Easier to add model-specific behavior or fallbacks without external dependencies"
+        ],
+        "cons": [
+          "Violates the decoupling principle of Protocol-based design",
+          "Requires updating all 4\u20135 major LLM client classes with tracking code",
+          "Introduces maintenance overhead for new providers"
+        ],
+        "complexity": "high",
+        "best_for": [
+          "When direct control over each provider's behavior is required",
+          "Systems where protocol-based design isn't the primary pattern"
+        ]
+      }
+    ],
+    "recommended": "Approach 1: Centralized Hook-Based Instrumentation",
+    "reasoning": "This approach is right because it aligns with existing architecture and patterns in fitz_ai/core/instrumentation.py, requires no direct changes to LLM provider classes, and follows established conventions. Approach 2 is wrong because it violates decoupling principles by requiring modifications to each provider implementation and increases maintenance overhead when new providers are added. The current system's design uses protocols like ChatProvider which makes hook-based instrumentation the natural fit.",
+    "key_tradeoffs": {
+      "centralized_vs_decoupled_tracking": "Centralized hook-based approach avoids modifying individual provider classes (decoupling) but requires access to raw API responses which current implementations strip away, making actual token extraction non-functional without architectural changes",
+      "instrumentation_layer_depth": "Using existing InstrumentedProxy system minimizes disruption but creates a dependency on response data availability that isn't currently provided by LLM providers"
+    },
+    "technology_considerations": [
+      "Python dataclasses for immutable TokenUsage structure",
+      "Protocol-based design patterns from fitz_ai/core/instrumentation.py for extensibility",
+      "InstrumentedProxy system for centralized hook registration and event capture",
+      "BenchmarkHook interface for consistent instrumentation pattern adherence",
+      "String-based token estimation as fallback mechanism due to lack of structured response data in current provider implementations"
+    ],
+    "scope_statement": "This task produces two small Python modules (token_tracking.py and token_counter.py) to integrate with existing instrumentation system, focusing on defining interfaces for tracking LLM token usage across different provider types."
+  },
+  "design": {
+    "adrs": [
+      {
+        "title": "ADR: Centralized Token Tracking via Hook-Based Instrumentation",
+        "context": "Implement token usage tracking across LLM providers with minimal disruption to existing codebase and leveraging existing instrumentation infrastructure.",
+        "decision": "Use a centralized hook-based approach by implementing TokenTrackingHook that adheres to BenchmarkHook protocol, integrating with the existing InstrumentedProxy system to monitor chat() and chat_stream() method calls on ChatProvider and StreamingChatProvider implementations.",
+        "rationale": "This approach aligns with existing architecture patterns in fitz_ai/core/instrumentation.py and avoids modifying individual provider classes. It leverages established protocols (BenchmarkHook, ChatProvider) and integrates cleanly with the current instrumentation system without breaking changes or requiring extensive refactoring of LLM providers.",
+        "consequences": [
+          "Minimal disruption to existing LLM provider implementations",
+          "Leverages existing benchmarking infrastructure",
+          "Token extraction remains incomplete in current implementation due to providers returning strings instead of structured responses",
+          "Future enhancements required to access raw API response data for actual token parsing"
+        ],
+        "alternatives_considered": [
+          "Provider-Specific Token Access - rejected because it violates decoupling principles and requires modifying each provider class, increasing maintenance overhead",
+          "Middleware Wrapper Pattern - rejected because it introduces unnecessary complexity when all target interfaces are already known and hookable via protocol"
+        ]
+      },
+      {
+        "title": "ADR: Centralized Hook-Based Instrumentation with Token Tracking",
+        "context": "Implementing token usage tracking through centralized hooks in the instrumentation system, following existing patterns in fitz_ai/core/instrumentation.py",
+        "decision": "Adopt centralized hook-based instrumentation with TokenTrackingHook, TokenUsage, and TokenCounter components instead of per-provider instrumentation",
+        "rationale": "This approach aligns with existing architecture patterns and maintains loose coupling between LLM providers and instrumentation logic. It follows the established protocol-based design where ChatProvider interfaces are not modified directly.",
+        "consequences": [
+          "Token usage data crosses from LLM provider boundaries into central tracking system, potentially creating a single point of failure for telemetry collection",
+          "Failure in token counting logic could silently break downstream analytics without clear error propagation to calling services",
+          "V1 implementation excludes real-time streaming token counts and detailed per-request breakdowns that would require more complex hook coordination"
+        ],
+        "alternatives_considered": [
+          "Per-provider instrumentation requiring direct modifications to each LLM provider class - increases maintenance overhead when adding new providers",
+          "Event-driven approach with separate telemetry service that subscribes to provider events - introduces additional complexity and potential data consistency issues"
+        ]
+      }
+    ],
+    "components": [
+      {
+        "name": "TokenTrackingHook",
+        "purpose": "A benchmark hook to track token usage during LLM API calls",
+        "responsibilities": [
+          "Capture start and end events for LLM API calls",
+          "Extract token usage from responses where available"
+        ],
+        "interfaces": [
+          "on_call_start(layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any",
+          "on_call_end(context: Any, result: Any, error: Exception | None) -> None"
+        ],
+        "dependencies": [
+          "BenchmarkHook",
+          "TokenUsage"
+        ]
+      },
+      {
+        "name": "TokenUsage",
+        "purpose": "Represents token usage for a single LLM call",
+        "responsibilities": [
+          "Store input, output and total token counts"
+        ],
+        "interfaces": [],
+        "dependencies": []
+      },
+      {
+        "name": "TokenCounter",
+        "purpose": "Encapsulate token counting logic with estimation capabilities",
+        "responsibilities": [
+          "Estimate tokens using heuristic approximations",
+          "Extract token counts from LLM responses when available"
+        ],
+        "interfaces": [
+          "estimate_tokens(text: str) -> int",
+          "get_token_estimate_from_response(response: Union[str, dict], provider_type: str) -> Optional[int]"
+        ],
+        "dependencies": []
+      }
+    ],
+    "data_model": {
+      "TokenUsage": [
+        "input_tokens: int | None",
+        "output_tokens: int | None",
+        "total_tokens: int | None"
+      ]
+    },
+    "integration_points": [
+      "ExternalSystem \u2014 Instrumentation system in fitz_ai/core/instrumentation.py"
+    ],
+    "artifacts": [
+      {
+        "filename": "fitz_ai/core/token_tracking.py",
+        "content": "from __future__ import annotations\n\nfrom dataclasses import dataclass\nfrom typing import Any, Optional\n\nfrom fitz_ai.core.instrumentation import BenchmarkHook\n\n\ndefault_token_usage = TokenUsage()\n\n\n@dataclass(frozen=True)\nclass TokenUsage:\n    \"\"\"Represents token usage for a single LLM call.\"\"\"\n\n    input_tokens: int | None = None\n    output_tokens: int | None = None\n    total_tokens: int | None = None\n\n\nclass TokenTrackingHook(BenchmarkHook):\n    \"\"\"\n    A benchmark hook to track token usage during LLM API calls.\n    \n    Note: This implementation currently has no-op logic for extracting tokens,\n          which is a critical gap that prevents actual functionality from working.\n          \n          To make this fully functional, the system must:\n          1. Be modified at the provider level or instrumentation layer to access raw responses\n          2. Implement actual parsing of response headers/bodies (e.g., OpenAI usage fields)\n          3. Provide a mechanism for storing and exposing aggregated metrics.\n    \"\"\"\n\n    def on_call_start(\n        self,\n        layer: str,\n        plugin_name: str,\n        method: str,\n        args: tuple,\n        kwargs: dict,\n    ) -> Any:\n        # For now we just pass through context; future enhancement could use it for correlation\n        return None\n\n    def on_call_end(\n        self,\n        context: Any,\n        result: Any,\n        error: Exception | None,\n    ) -> None:\n        \"\"\"\n        Extract token usage from responses where available.\n        \n        Currently a no-op because the system assumes response strings contain structured metadata, \n        which they do not. Actual parsing logic must be implemented based on:\n        - OpenAI style headers/body fields\n        - Anthropic/other provider-specific structures  \n        - Fallback estimation when direct metrics unavailable\n        \n        This implementation requires changes to LLM providers or instrumentation layer.\n        \"\"\"\n        # TODO: Implement actual token parsing once architecture can access raw responses\n        pass\n\n__all__ = [\n    \"TokenUsage\",\n    \"TokenTrackingHook\"\n]",
+        "purpose": "Centralized module for tracking token usage with TokenTrackingHook and TokenUsage data structure"
+      },
+      {
+        "filename": "fitz_ai/core/token_counter.py",
+        "content": "from __future__ import annotations\n\nimport re\nfrom typing import Optional, Union\n\n\ndef estimate_tokens(text: str) -> int:\n    \"\"\"\n    Estimate number of tokens using a heuristic approximation.\n    \n    This is a rough estimation based on common rules (e.g., 4 chars = 1 token).\n    For accurate metrics, use the actual API response which provides exact counts.\n    \n    Note: This function will not work correctly unless providers return structured data\n          that includes token information in their responses. As of current implementation,\n          all provider chat() methods return strings and strip away raw usage metadata.\n    \"\"\"\n\n    # Simple heuristic - adjust based on empirical observation or model-specific formulas\n    return max(1, len(text) // 4)\n\ndef get_token_estimate_from_response(response: Union[str, dict], provider_type: str = \"unknown\") -> Optional[int]:\n    \"\"\"\n    Try to extract token count from LLM response.\n    \n    Placeholder logic - this currently assumes structured input (dict) but \n    all current providers return strings that lose usage metadata. \n    \n    For production use:\n        - Need to parse actual API responses or intercept at lower levels\n        - Implement provider-specific parsing for OpenAI, Anthropic, Cohere, etc.\n        - Add fallback logic using estimate_tokens() when direct metrics are unavailable\n    \n    Note: The current architecture does not make raw API response data available \n          to hooks due to stripping in provider implementations.\n    \"\"\"\n\n    # This logic would only work if providers returned structured JSON with usage fields\n    if isinstance(response, dict) and \"usage\" in response:\n        return response.get(\"usage\", {}).get(\"total_tokens\")  # e.g., for OpenAI\n\n    # Fallback to estimating - but this assumes the input is still a text string \n    # which may not contain meaningful token information\n    if isinstance(response, str):\n        return estimate_tokens(response)\n    \n    return None\n\n__all__ = [\n    \"estimate_tokens\",\n    \"get_token_estimate_from_response\"\n]",
+        "purpose": "Encapsulate token counting logic"
+      }
+    ]
+  },
+  "roadmap_risk": {
+    "roadmap": {
+      "phases": [
+        {
+          "number": 0,
+          "name": "Read Before Writing",
+          "objective": "Verify integration points by reading source",
+          "deliverables": [
+            "Verified: fitz_ai/llm/providers/base.py",
+            "Verified: fitz_ai/llm/providers/openai.py",
+            "Verified: fitz_ai/llm/providers/anthropic.py",
+            "Verified: fitz_ai/llm/providers/cohere.py",
+            "Verified: fitz_ai/llm/providers/ollama.py"
+          ],
+          "dependencies": [],
+          "estimated_complexity": "low",
+          "key_risks": [],
+          "verification_command": "pytest tests/test_providers.py -v",
+          "estimated_effort": "~15 min"
+        }
+      ],
+      "critical_path": [
+        0
+      ],
+      "parallel_opportunities": [],
+      "total_phases": 1
+    },
+    "risk": {
+      "risks": [],
+      "overall_risk_level": "low",
+      "recommended_contingencies": []
+    }
+  },
+  "roadmap": {
+    "phases": [
+      {
+        "number": 0,
+        "name": "Read Before Writing",
+        "objective": "Verify integration points by reading source",
+        "deliverables": [
+          "Verified: fitz_ai/llm/providers/base.py",
+          "Verified: fitz_ai/llm/providers/openai.py",
+          "Verified: fitz_ai/llm/providers/anthropic.py",
+          "Verified: fitz_ai/llm/providers/cohere.py",
+          "Verified: fitz_ai/llm/providers/ollama.py"
+        ],
+        "dependencies": [],
+        "estimated_complexity": "low",
+        "key_risks": [],
+        "verification_command": "pytest tests/test_providers.py -v",
+        "estimated_effort": "~15 min"
+      }
+    ],
+    "critical_path": [
+      0
+    ],
+    "parallel_opportunities": [],
+    "total_phases": 1
+  },
+  "risk": {
+    "risks": [],
+    "overall_risk_level": "low",
+    "recommended_contingencies": []
+  }
+}

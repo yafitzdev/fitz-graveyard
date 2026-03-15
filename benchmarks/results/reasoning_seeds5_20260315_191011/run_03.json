@@ -1,0 +1,16 @@
+{
+  "run": 3,
+  "elapsed_s": 410.7,
+  "success": true,
+  "recommended": "Extend Provider Protocols with Usage Metadata",
+  "plan_size": 78988,
+  "stage_timings": {
+    "agent_gathering": 13.59299999999348,
+    "implementation_check": 3.312999999994645,
+    "context": 49.812000000005355,
+    "architecture_design": 280.9070000000065,
+    "roadmap_risk": 59.155999999988126,
+    "coherence_check": 3.75
+  },
+  "error": null
+}

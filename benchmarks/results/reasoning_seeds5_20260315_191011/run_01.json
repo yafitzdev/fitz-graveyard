@@ -1,0 +1,16 @@
+{
+  "run": 1,
+  "elapsed_s": 387.1,
+  "success": true,
+  "recommended": "Extend Provider Interfaces with Structured Responses",
+  "plan_size": 46081,
+  "stage_timings": {
+    "agent_gathering": 14.562999999994645,
+    "implementation_check": 5.01500000001397,
+    "context": 47.469000000011874,
+    "architecture_design": 287.0469999999914,
+    "roadmap_risk": 31.437999999994645,
+    "coherence_check": 1.5309999999881256
+  },
+  "error": null
+}

@@ -1,0 +1,16 @@
+{
+  "run": 4,
+  "elapsed_s": 419.1,
+  "success": true,
+  "recommended": "Add Token Tracking via Instrumentation Hooks",
+  "plan_size": 44642,
+  "stage_timings": {
+    "agent_gathering": 14.187999999994645,
+    "implementation_check": 3.2660000000032596,
+    "context": 58.64000000001397,
+    "architecture_design": 238.81299999999464,
+    "roadmap_risk": 100.95299999997951,
+    "coherence_check": 3.1560000000172295
+  },
+  "error": null
+}

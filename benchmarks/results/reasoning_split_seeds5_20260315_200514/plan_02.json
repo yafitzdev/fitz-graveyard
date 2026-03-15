@@ -1,0 +1,601 @@
+{
+  "context": {
+    "project_description": "Implement a token tracking hook that instruments LLM calls to measure prompt and completion tokens consumed per query, integrating with the existing instrumentation system.",
+    "key_requirements": [
+      "Extract token usage from provider responses (prompt_tokens, completion_tokens) where available",
+      "Fall back to estimation using Tiktoken for providers that don't expose token counts natively",
+      "Group metrics by LLM provider and model for cost tracking per query",
+      "Integrate with existing InstrumentedProxy and BenchmarkHook systems"
+    ],
+    "constraints": [
+      "Must leverage existing InstrumentedProxy and hook system without breaking changes",
+      "Only extract usage from response metadata when available; no modification of core behavior",
+      "Support all major LLM providers (OpenAI, Anthropic, Cohere, Ollama) with appropriate fallbacks",
+      "Maintain minimal instrumentation overhead for production use"
+    ],
+    "existing_context": "fitz_ai/core/instrumentation.py contains BenchmarkHook protocol and InstrumentedProxy class. fitz_ai/llm/providers/base.py defines provider protocols including ChatProvider, EmbeddingProvider, RerankProvider, VisionProvider with standardized method signatures.",
+    "stakeholders": [
+      "developer tasked with implementing LLM token tracking functionality",
+      "system architect responsible for maintaining instrumentation framework",
+      "end users who want visibility into LLM query costs"
+    ],
+    "scope_boundaries": {
+      "in_scope": [
+        "implementation of TokenTrackingHook class that extracts token usage from LLM responses",
+        "integration with existing InstrumentedProxy and hook system",
+        "support for tracking prompt_tokens and completion_tokens per query",
+        "export of TokenTrackingHook through standard import paths"
+      ],
+      "out_of_scope": [
+        "creation of new __init__.py file in fitz_ai/llm/instrumentation/",
+        "development of token_counter.py utility module for estimation fallbacks",
+        "implementation of full observability dashboard or reporting system",
+        "modification of core LLM client behavior or APIs"
+      ]
+    },
+    "existing_files": [
+      "fitz_ai/core/instrumentation.py \u2014 Instrumentation system for benchmarking plugin performance",
+      "fitz_ai/llm/providers/base.py \u2014 Provider protocols for LLM clients",
+      "fitz_ai/llm/providers/openai.py \u2014 OpenAI provider wrappers using the official SDK",
+      "fitz_ai/llm/providers/anthropic.py \u2014 Anthropic provider wrappers using the official SDK",
+      "fitz_ai/llm/providers/cohere.py \u2014 Cohere provider wrappers using the official SDK",
+      "fitz_ai/llm/providers/ollama.py \u2014 Ollama provider wrappers using direct HTTP calls"
+    ],
+    "needed_artifacts": [
+      "fitz_ai/llm/instrumentation/token_tracker.py \u2014 Implements BenchmarkHook subclass to extract and track token consumption per LLM call",
+      "fitz_ai/llm/instrumentation/__init__.py \u2014 Re-exports TokenTrackingHook for clean import paths"
+    ],
+    "assumptions": [
+      {
+        "assumption": "Providers return token info in responses",
+        "impact": "Would require alternative logic like Tiktoken or estimation",
+        "confidence": "high"
+      },
+      {
+        "assumption": "We can plug into `InstrumentedProxy` and hooks system",
+        "impact": "May require custom wrapping approach instead",
+        "confidence": "high"
+      },
+      {
+        "assumption": "Embedding and vision APIs consume tokens",
+        "impact": "Need to expand logic if Ollama doesn't track or tracks differently",
+        "confidence": "medium"
+      },
+      {
+        "assumption": "All major LLMs expose token consumption in response metadata (where applicable)",
+        "impact": "Might require estimation or custom parsing if missing",
+        "confidence": "medium"
+      }
+    ]
+  },
+  "architecture_design": {
+    "architecture": {
+      "approaches": [
+        {
+          "name": "Approach 1: Direct Hook Integration with Response Parsing",
+          "description": "Builds a dedicated `TokenTrackingHook` that directly intercepts LLM calls and parses response metadata for tokens.",
+          "pros": [
+            "Aligns with existing architecture using established instrumentation system",
+            "Non-breaking - does not modify provider interfaces or methods",
+            "Scalable - can easily support new providers by extending response parsing logic",
+            "Minimal overhead - hook-based approach is lightweight and production-ready"
+          ],
+          "cons": [
+            "Failure mode: If providers don't consistently return metadata, fallback estimation can be inaccurate or miss tokens entirely"
+          ],
+          "complexity": "medium",
+          "best_for": [
+            "Production systems requiring cost tracking without breaking existing contracts"
+          ]
+        },
+        {
+          "name": "Approach 2: Decorator-based Token Tracking",
+          "description": "Wraps provider methods directly using decorators that track before/after calls to add token metadata.",
+          "pros": [
+            "More granular control over exactly what is tracked"
+          ],
+          "cons": [
+            "Requires modifying existing providers, violating non-breaking constraint",
+            "Creates tight coupling between tracking and core logic",
+            "High operational burden - would require changes to all provider implementations"
+          ],
+          "complexity": "high",
+          "best_for": [
+            "Systems where modification of core behavior is acceptable and fine-grained control is needed"
+          ]
+        }
+      ],
+      "recommended": "Approach 1: Direct Hook Integration with Response Parsing",
+      "reasoning": "Approach 1 is correct because it aligns with existing architecture by using the established instrumentation system without modifying core behavior. It's non-breaking since it doesn't change provider interfaces or methods, only adds tracking capability on top of existing hooks. It's scalable and can easily support new providers by extending response parsing logic while maintaining architectural purity. Approach 2 would break existing provider contracts which violates constraints.",
+      "key_tradeoffs": {
+        "Hook-based vs Decorator-based approach": "Hook-based approach provides non-breaking integration with existing instrumentation system, while decorator approach requires modifying provider implementations and creates tight coupling.",
+        "Direct parsing vs Fallback estimation": "Direct parsing from response metadata is more accurate but fails when providers don't expose tokens; fallback to Tiktoken estimation ensures tracking works at cost of accuracy."
+      },
+      "technology_considerations": [
+        "Tiktoken for token estimation - uses existing codebase dependency",
+        "OpenAI response structure parsing - handles usage field in responses",
+        "Anthropic response structure parsing - handles usage fields with input_tokens/output_tokens",
+        "Cohere response structure parsing - handles meta.tokens field extraction",
+        "Ollama response structure parsing - handles prompt_eval_count/eval_count fields",
+        "Regular expressions for string-based token pattern matching"
+      ],
+      "scope_statement": "This task produces two files: `fitz_ai/llm/instrumentation/token_tracker.py` and `fitz_ai/llm/instrumentation/__init__.py`. The challenge is correctly parsing response structures from multiple providers to extract token usage, with appropriate fallbacks."
+    },
+    "design": {
+      "adrs": [
+        {
+          "title": "ADR: Token Usage Tracking via Benchmark Hook",
+          "context": "Implement token usage tracking for LLM calls to enable cost monitoring and optimization. The system needs to extract prompt_tokens and completion_tokens from provider responses when available, with fallback estimation using Tiktoken.",
+          "decision": "Create a dedicated TokenTrackingHook class that implements the BenchmarkHook protocol to intercept LLM calls at the instrumentation layer without modifying existing provider interfaces or behavior",
+          "rationale": "This approach aligns with existing architecture patterns (instrumentation system), is non-breaking to providers, scalable for new providers through response parsing extensions, and follows the 'instrumentation without modification' principle established elsewhere in the codebase. It integrates cleanly with existing hook infrastructure via register_hook() calls.",
+          "consequences": [
+            "Minimal operational overhead - only requires adding one hook registration call",
+            "Direct integration with existing instrumentation system maintains architectural purity",
+            "Separation of concerns between provider logic and tracking capabilities",
+            "Fallback estimation using Tiktoken ensures tracking works even when native metrics aren't provided"
+          ],
+          "alternatives_considered": [
+            "Decorator-based approach - rejected because it would require modifying all provider implementations, violating the non-breaking constraint",
+            "Proxy-based extension of existing proxy system - rejected as overly complex for this specific task and duplicating functionality already present in BenchmarkHook protocol"
+          ]
+        },
+        {
+          "title": "ADR: Token Usage Data Exclusion from Provider Response",
+          "context": "The TokenTrackingHook approach excludes detailed token usage data from provider responses to maintain architectural purity and avoid breaking existing provider contracts",
+          "decision": "Only basic response metadata will be tracked, not detailed token counting information that would require modifying provider interfaces",
+          "rationale": "This maintains backward compatibility with existing providers while keeping the hook architecture clean. The tradeoff is that full token usage analytics must be computed separately through post-processing rather than being available inline with responses.",
+          "consequences": [
+            "Token analysis requires additional processing layer or batch computation instead of real-time response enrichment",
+            "Potential performance overhead from separate token counting systems that may not align well with provider throughput",
+            "Limited ability to provide immediate feedback about usage patterns during request processing"
+          ],
+          "alternatives_considered": [
+            "Modify provider interfaces to include token counts directly in responses - would break contracts and increase complexity",
+            "Implement a hybrid approach where some providers support inline token data while others require post-processing - increases maintenance burden and inconsistency"
+          ]
+        }
+      ],
+      "components": [
+        {
+          "name": "TokenTrackingHook",
+          "purpose": "A benchmark hook that tracks token usage from LLM calls for cost tracking purposes",
+          "responsibilities": [
+            "Extract prompt_tokens and completion_tokens from provider responses when available",
+            "Fall back to estimation using Tiktoken when native metrics aren't provided",
+            "Group metrics by LLM provider and model for cost tracking"
+          ],
+          "interfaces": [
+            "on_call_start(layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any",
+            "on_call_end(context: Any, result: Any, error: Exception | None) -> None"
+          ],
+          "dependencies": [
+            "BenchmarkHook",
+            "ChatProvider",
+            "EmbeddingProvider",
+            "RerankProvider",
+            "VisionProvider"
+          ]
+        }
+      ],
+      "data_model": {
+        "TokenUsage": [
+          "prompt_tokens: int",
+          "completion_tokens: int",
+          "total_tokens: int"
+        ],
+        "ProviderInfo": [
+          "provider: str",
+          "model: str"
+        ]
+      },
+      "integration_points": [
+        "ExternalSystem \u2014 TokenTrackingHook integrates with the existing instrumentation system via BenchmarkHook protocol, registering itself with register_hook() function in fitz_ai/core/instrumentation.py"
+      ],
+      "artifacts": [
+        {
+          "filename": "fitz_ai/llm/instrumentation/token_tracker.py",
+          "content": "from __future__ import annotations\n\nimport logging\nimport re\nfrom typing import Any, Dict, Optional, Union\n\nfrom fitz_ai.core.instrumentation import BenchmarkHook\nfrom fitz_ai.llm.providers.base import ChatProvider, EmbeddingProvider, RerankProvider, VisionProvider\n\nlogger = logging.getLogger(__name__)\n\nclass TokenTrackingHook(BenchmarkHook):\n    \"\"\"\n    A benchmark hook that tracks token usage from LLM calls for cost tracking purposes.\n    \n    This implementation extracts prompt_tokens and completion_tokens from provider responses\n    when available, falling back to estimation using Tiktoken where native metrics aren't provided. \n    \"\"\"\n\n    def __init__(self) -> None:\n        self._tiktoken_available = False\n        try:\n            import tiktoken  # noqa: F401\n            self._tiktoken_available = True\n        except ImportError:\n            logger.debug(\"Tiktoken not available for token estimation\")\n\n    def on_call_start(\n        self,\n        layer: str,\n        plugin_name: str,\n        method: str,\n        args: tuple,\n        kwargs: dict,\n    ) -> Any:\n        # No pre-call setup needed - we track at call end\n        return None\n\n    def on_call_end(\n        self,\n        context: Any,\n        result: Any,\n        error: Exception | None,\n    ) -> None:\n        if error is not None or result is None:\n            return\n            \n        # Extract token usage from known provider response formats\n        try:\n            self._extract_and_log_tokens(context, result)\n        except Exception as e:\n            logger.debug(f\"Failed to extract tokens for call: {e}\")\n\n    def _extract_and_log_tokens(self, context: Any, result: Any) -> None:\n        \"\"\"Extract token usage from response and log it.\"\"\"\n        # Extract provider info from the context if available\n        provider_info = self._get_provider_info(context)\n        if not provider_info or \"provider\" not in provider_info:\n            return\n\n        try:\n            tokens = self._extract_tokens_from_response(result, provider_info)\n            if tokens is None and self._tiktoken_available:\n                # Fall back to estimation using Tiktoken\n                estimated_tokens = self._estimate_tokens(provider_info, result)\n                if estimated_tokens:\n                    tokens = estimated_tokens\n            elif tokens is None:\n                return  # No token data available or estimations failed\n\n            # Log the tokens - in a real system this would go to metrics collection\n            logger.debug(\n                f\"Token usage for {provider_info.get('provider')}/{provider_info.get('model', 'unknown')} - \"\n                f\"prompt: {tokens.get('prompt_tokens', 0)}, completion: {tokens.get('completion_tokens', 0)}\"\n            )\n        except Exception as e:\n            logger.debug(f\"Error extracting tokens from response: {e}\")\n\n    def _get_provider_info(self, context: Any) -> Optional[Dict[str, str]]:\n        \"\"\"Extract provider information from the instrumentation context.\"\"\"\n        # The context is a tuple of (layer, plugin_name, method) from InstrumentedProxy._wrap_method\n        if hasattr(context, '__len__') and len(context) >= 3:\n            layer = context[0] if isinstance(context[0], str) else None\n            plugin_name = context[1] if isinstance(context[1], str) else None\n\n            # Extract model information from the provider name or method calls if possible\n            info: Dict[str, str] = {\"provider\": layer or \"unknown\"}\n\n            if hasattr(self, '_model_from_context') and callable(getattr(self, '_model_from_context')):\n                try:\n                    model_info = self._model_from_context(context)\n                    if model_info.get('model_name'):\n                        info['model'] = model_info['model_name']\n                except Exception as e:\n                    logger.debug(f\"Failed to extract model from context: {e}\")\n\n            return info\n        elif hasattr(context, 'provider') and hasattr(context, 'model'):  # Directly passed provider data\n            return {\"provider\": getattr(context, \"provider\"), \"model\": getattr(context, \"model\")}\n        else:\n            # Fallback to generic information from context\n            if isinstance(context, dict) and 'layer' in context and 'plugin_name' in context:\n                return {\n                    \"provider\": context.get('layer', 'unknown'), \n                    \"model\": context.get('plugin_name', 'unknown')\n                }\n        return {\"provider\": \"unknown\", \"model\": \"unknown\"}\n\n    def _extract_tokens_from_response(self, result: Any, provider_info: Dict[str, str]) -> Optional[Dict[str, int]]:\n        \"\"\"Extract token usage from response objects for different providers.\"\"\"\n        if not result or not isinstance(result, (str, dict)):\n            return None\n\n        provider = provider_info.get(\"provider\", \"\").lower()\n        \n        # Handle OpenAI-style responses - check for metadata in response dicts\n        if \"openai\" in provider and isinstance(result, dict):\n            # Check for OpenAI usage fields in response structure\n            usage = result.get('usage', {})\n            if isinstance(usage, dict):\n                tokens = {}\n                if 'prompt_tokens' in usage:\n                    tokens['prompt_tokens'] = usage['prompt_tokens']\n                if 'completion_tokens' in usage:  \n                    tokens['completion_tokens'] = usage['completion_tokens']\n                if 'total_tokens' in usage:\n                    tokens['total_tokens'] = usage['total_tokens']\n                return tokens if tokens else None\n\n        # Handle Anthropic-style responses - check for metadata fields\n        elif \"anthropic\" in provider and isinstance(result, dict):\n            # Anthropic may have response headers or structured data with token counts\n            # This is a simplified check; real implementation would need to be more specific\n            if 'usage' in result:\n                usage = result['usage']\n                if isinstance(usage, dict):\n                    tokens = {}\n                    if 'input_tokens' in usage:\n                        tokens['prompt_tokens'] = usage['input_tokens']\n                    if 'output_tokens' in usage:  \n                        tokens['completion_tokens'] = usage['output_tokens']\n                    return tokens if tokens else None\n\n        # Handle Cohere-style responses - check for metadata fields\n        elif \"cohere\" in provider and isinstance(result, dict):\n            if 'meta' in result and isinstance(result['meta'], dict) and 'tokens' in result['meta']:\n                tokens = result['meta']['tokens']\n                if isinstance(tokens, dict):  \n                    extracted_tokens = {}\n                    if 'prompt_tokens' in tokens:\n                        extracted_tokens['prompt_tokens'] = tokens['prompt_tokens']\n                    if 'completion_tokens' in tokens:  \n                        extracted_tokens['completion_tokens'] = tokens['completion_tokens']\n                    return extracted_tokens if extracted_tokens else None\n\n        # Handle Ollama-style responses - check for usage information or other metadata\n        elif \"ollama\" in provider and isinstance(result, dict):\n            if 'prompt_eval_count' in result or 'eval_count' in result:\n                tokens = {}\n                if 'prompt_eval_count' in result:  # Ollama uses prompt_eval_count for prompt tokens\n                    tokens['prompt_tokens'] = result['prompt_eval_count']\n                if 'eval_count' in result:  # Ollama uses eval_count for completion tokens (if available)\n                    tokens['completion_tokens'] = result['eval_count']\n                return tokens if tokens else None\n\n        # Handle text-based responses - try to extract from string formats that might contain token info\n        elif isinstance(result, str) and \"tokens\" in result.lower():\n            # Try parsing common token count patterns (basic approach)\n            pattern = r'(prompt|input)_tokens?[:\\s]+(\\d+)'\n            match = re.search(pattern, result, re.IGNORECASE)\n            if match:\n                prompt_tokens = int(match.group(2))\n                return {\"prompt_tokens\": prompt_tokens}\n\n        # For other provider types or when no specific parsing is available, try to estimate using Tiktoken\n        return None\n\n    def _estimate_tokens(self, provider_info: Dict[str, str], result: Any) -> Optional[Dict[str, int]]:\n        \"\"\"Estimate tokens using Tiktoken if available.\"\"\"\n        try:\n            import tiktoken\n        except ImportError:\n            logger.debug(\"Tiktoken not installed - cannot estimate tokens\")\n            return None\n\n        # For text responses, we'll count tokens based on the result string content\n        if isinstance(result, str):\n            # Get model name from provider info for encoding selection\n            model_name = provider_info.get(\"model\", \"gpt-4o\")  # Default fallback\n            \n            try:\n                # Select appropriate tokenizer (fallback to gpt-4o if unknown)\n                enc = tiktoken.encoding_for_model(model_name) if 'gpt' in model_name else tiktoken.get_encoding('cl100k_base')\n                token_count = len(enc.encode(result))\n                return {\"completion_tokens\": token_count, \"total_tokens\": token_count}\n            except Exception as e:\n                logger.debug(f\"Failed to estimate tokens with Tiktoken: {e}\")\n        elif isinstance(result, dict) and 'content' in result:\n            # For structured responses that include content field\n            content = str(result.get('content', ''))\n            model_name = provider_info.get(\"model\", \"gpt-4o\")\n            try:\n                enc = tiktoken.encoding_for_model(model_name) if 'gpt' in model_name else tiktoken.get_encoding('cl100k_base')\n                token_count = len(enc.encode(content)) if content else 0\n                return {\"completion_tokens\": token_count, \"total_tokens\": token_count}\n            except Exception as e:\n                logger.debug(f\"Failed to estimate tokens with Tiktoken: {e}\")\n        elif hasattr(result, '__dict__') and hasattr(result, 'content'):  # Check for common fields in objects\n            content = str(getattr(result, 'content', ''))\n            model_name = provider_info.get(\"model\", \"gpt-4o\")\n            try:\n                enc = tiktoken.encoding_for_model(model_name) if 'gpt' in model_name else tiktoken.get_encoding('cl100k_base')\n                token_count = len(enc.encode(content)) if content else 0\n                return {\"completion_tokens\": token_count, \"total_tokens\": token_count}\n            except Exception as e:\n                logger.debug(f\"Failed to estimate tokens with Tiktoken: {e}\")\n\n        return None\n",
+          "purpose": "Implements a BenchmarkHook for tracking LLM token usage across different providers, extracting native metrics when available and falling back to Tiktoken estimation"
+        }
+      ]
+    }
+  },
+  "architecture": {
+    "approaches": [
+      {
+        "name": "Approach 1: Direct Hook Integration with Response Parsing",
+        "description": "Builds a dedicated `TokenTrackingHook` that directly intercepts LLM calls and parses response metadata for tokens.",
+        "pros": [
+          "Aligns with existing architecture using established instrumentation system",
+          "Non-breaking - does not modify provider interfaces or methods",
+          "Scalable - can easily support new providers by extending response parsing logic",
+          "Minimal overhead - hook-based approach is lightweight and production-ready"
+        ],
+        "cons": [
+          "Failure mode: If providers don't consistently return metadata, fallback estimation can be inaccurate or miss tokens entirely"
+        ],
+        "complexity": "medium",
+        "best_for": [
+          "Production systems requiring cost tracking without breaking existing contracts"
+        ]
+      },
+      {
+        "name": "Approach 2: Decorator-based Token Tracking",
+        "description": "Wraps provider methods directly using decorators that track before/after calls to add token metadata.",
+        "pros": [
+          "More granular control over exactly what is tracked"
+        ],
+        "cons": [
+          "Requires modifying existing providers, violating non-breaking constraint",
+          "Creates tight coupling between tracking and core logic",
+          "High operational burden - would require changes to all provider implementations"
+        ],
+        "complexity": "high",
+        "best_for": [
+          "Systems where modification of core behavior is acceptable and fine-grained control is needed"
+        ]
+      }
+    ],
+    "recommended": "Approach 1: Direct Hook Integration with Response Parsing",
+    "reasoning": "Approach 1 is correct because it aligns with existing architecture by using the established instrumentation system without modifying core behavior. It's non-breaking since it doesn't change provider interfaces or methods, only adds tracking capability on top of existing hooks. It's scalable and can easily support new providers by extending response parsing logic while maintaining architectural purity. Approach 2 would break existing provider contracts which violates constraints.",
+    "key_tradeoffs": {
+      "Hook-based vs Decorator-based approach": "Hook-based approach provides non-breaking integration with existing instrumentation system, while decorator approach requires modifying provider implementations and creates tight coupling.",
+      "Direct parsing vs Fallback estimation": "Direct parsing from response metadata is more accurate but fails when providers don't expose tokens; fallback to Tiktoken estimation ensures tracking works at cost of accuracy."
+    },
+    "technology_considerations": [
+      "Tiktoken for token estimation - uses existing codebase dependency",
+      "OpenAI response structure parsing - handles usage field in responses",
+      "Anthropic response structure parsing - handles usage fields with input_tokens/output_tokens",
+      "Cohere response structure parsing - handles meta.tokens field extraction",
+      "Ollama response structure parsing - handles prompt_eval_count/eval_count fields",
+      "Regular expressions for string-based token pattern matching"
+    ],
+    "scope_statement": "This task produces two files: `fitz_ai/llm/instrumentation/token_tracker.py` and `fitz_ai/llm/instrumentation/__init__.py`. The challenge is correctly parsing response structures from multiple providers to extract token usage, with appropriate fallbacks."
+  },
+  "design": {
+    "adrs": [
+      {
+        "title": "ADR: Token Usage Tracking via Benchmark Hook",
+        "context": "Implement token usage tracking for LLM calls to enable cost monitoring and optimization. The system needs to extract prompt_tokens and completion_tokens from provider responses when available, with fallback estimation using Tiktoken.",
+        "decision": "Create a dedicated TokenTrackingHook class that implements the BenchmarkHook protocol to intercept LLM calls at the instrumentation layer without modifying existing provider interfaces or behavior",
+        "rationale": "This approach aligns with existing architecture patterns (instrumentation system), is non-breaking to providers, scalable for new providers through response parsing extensions, and follows the 'instrumentation without modification' principle established elsewhere in the codebase. It integrates cleanly with existing hook infrastructure via register_hook() calls.",
+        "consequences": [
+          "Minimal operational overhead - only requires adding one hook registration call",
+          "Direct integration with existing instrumentation system maintains architectural purity",
+          "Separation of concerns between provider logic and tracking capabilities",
+          "Fallback estimation using Tiktoken ensures tracking works even when native metrics aren't provided"
+        ],
+        "alternatives_considered": [
+          "Decorator-based approach - rejected because it would require modifying all provider implementations, violating the non-breaking constraint",
+          "Proxy-based extension of existing proxy system - rejected as overly complex for this specific task and duplicating functionality already present in BenchmarkHook protocol"
+        ]
+      },
+      {
+        "title": "ADR: Token Usage Data Exclusion from Provider Response",
+        "context": "The TokenTrackingHook approach excludes detailed token usage data from provider responses to maintain architectural purity and avoid breaking existing provider contracts",
+        "decision": "Only basic response metadata will be tracked, not detailed token counting information that would require modifying provider interfaces",
+        "rationale": "This maintains backward compatibility with existing providers while keeping the hook architecture clean. The tradeoff is that full token usage analytics must be computed separately through post-processing rather than being available inline with responses.",
+        "consequences": [
+          "Token analysis requires additional processing layer or batch computation instead of real-time response enrichment",
+          "Potential performance overhead from separate token counting systems that may not align well with provider throughput",
+          "Limited ability to provide immediate feedback about usage patterns during request processing"
+        ],
+        "alternatives_considered": [
+          "Modify provider interfaces to include token counts directly in responses - would break contracts and increase complexity",
+          "Implement a hybrid approach where some providers support inline token data while others require post-processing - increases maintenance burden and inconsistency"
+        ]
+      }
+    ],
+    "components": [
+      {
+        "name": "TokenTrackingHook",
+        "purpose": "A benchmark hook that tracks token usage from LLM calls for cost tracking purposes",
+        "responsibilities": [
+          "Extract prompt_tokens and completion_tokens from provider responses when available",
+          "Fall back to estimation using Tiktoken when native metrics aren't provided",
+          "Group metrics by LLM provider and model for cost tracking"
+        ],
+        "interfaces": [
+          "on_call_start(layer: str, plugin_name: str, method: str, args: tuple, kwargs: dict) -> Any",
+          "on_call_end(context: Any, result: Any, error: Exception | None) -> None"
+        ],
+        "dependencies": [
+          "BenchmarkHook",
+          "ChatProvider",
+          "EmbeddingProvider",
+          "RerankProvider",
+          "VisionProvider"
+        ]
+      }
+    ],
+    "data_model": {
+      "TokenUsage": [
+        "prompt_tokens: int",
+        "completion_tokens: int",
+        "total_tokens: int"
+      ],
+      "ProviderInfo": [
+        "provider: str",
+        "model: str"
+      ]
+    },
+    "integration_points": [
+      "ExternalSystem \u2014 TokenTrackingHook integrates with the existing instrumentation system via BenchmarkHook protocol, registering itself with register_hook() function in fitz_ai/core/instrumentation.py"
+    ],
+    "artifacts": [
+      {
+        "filename": "fitz_ai/llm/instrumentation/token_tracker.py",
+        "content": "from __future__ import annotations\n\nimport logging\nimport re\nfrom typing import Any, Dict, Optional, Union\n\nfrom fitz_ai.core.instrumentation import BenchmarkHook\nfrom fitz_ai.llm.providers.base import ChatProvider, EmbeddingProvider, RerankProvider, VisionProvider\n\nlogger = logging.getLogger(__name__)\n\nclass TokenTrackingHook(BenchmarkHook):\n    \"\"\"\n    A benchmark hook that tracks token usage from LLM calls for cost tracking purposes.\n    \n    This implementation extracts prompt_tokens and completion_tokens from provider responses\n    when available, falling back to estimation using Tiktoken where native metrics aren't provided. \n    \"\"\"\n\n    def __init__(self) -> None:\n        self._tiktoken_available = False\n        try:\n            import tiktoken  # noqa: F401\n            self._tiktoken_available = True\n        except ImportError:\n            logger.debug(\"Tiktoken not available for token estimation\")\n\n    def on_call_start(\n        self,\n        layer: str,\n        plugin_name: str,\n        method: str,\n        args: tuple,\n        kwargs: dict,\n    ) -> Any:\n        # No pre-call setup needed - we track at call end\n        return None\n\n    def on_call_end(\n        self,\n        context: Any,\n        result: Any,\n        error: Exception | None,\n    ) -> None:\n        if error is not None or result is None:\n            return\n            \n        # Extract token usage from known provider response formats\n        try:\n            self._extract_and_log_tokens(context, result)\n        except Exception as e:\n            logger.debug(f\"Failed to extract tokens for call: {e}\")\n\n    def _extract_and_log_tokens(self, context: Any, result: Any) -> None:\n        \"\"\"Extract token usage from response and log it.\"\"\"\n        # Extract provider info from the context if available\n        provider_info = self._get_provider_info(context)\n        if not provider_info or \"provider\" not in provider_info:\n            return\n\n        try:\n            tokens = self._extract_tokens_from_response(result, provider_info)\n            if tokens is None and self._tiktoken_available:\n                # Fall back to estimation using Tiktoken\n                estimated_tokens = self._estimate_tokens(provider_info, result)\n                if estimated_tokens:\n                    tokens = estimated_tokens\n            elif tokens is None:\n                return  # No token data available or estimations failed\n\n            # Log the tokens - in a real system this would go to metrics collection\n            logger.debug(\n                f\"Token usage for {provider_info.get('provider')}/{provider_info.get('model', 'unknown')} - \"\n                f\"prompt: {tokens.get('prompt_tokens', 0)}, completion: {tokens.get('completion_tokens', 0)}\"\n            )\n        except Exception as e:\n            logger.debug(f\"Error extracting tokens from response: {e}\")\n\n    def _get_provider_info(self, context: Any) -> Optional[Dict[str, str]]:\n        \"\"\"Extract provider information from the instrumentation context.\"\"\"\n        # The context is a tuple of (layer, plugin_name, method) from InstrumentedProxy._wrap_method\n        if hasattr(context, '__len__') and len(context) >= 3:\n            layer = context[0] if isinstance(context[0], str) else None\n            plugin_name = context[1] if isinstance(context[1], str) else None\n\n            # Extract model information from the provider name or method calls if possible\n            info: Dict[str, str] = {\"provider\": layer or \"unknown\"}\n\n            if hasattr(self, '_model_from_context') and callable(getattr(self, '_model_from_context')):\n                try:\n                    model_info = self._model_from_context(context)\n                    if model_info.get('model_name'):\n                        info['model'] = model_info['model_name']\n                except Exception as e:\n                    logger.debug(f\"Failed to extract model from context: {e}\")\n\n            return info\n        elif hasattr(context, 'provider') and hasattr(context, 'model'):  # Directly passed provider data\n            return {\"provider\": getattr(context, \"provider\"), \"model\": getattr(context, \"model\")}\n        else:\n            # Fallback to generic information from context\n            if isinstance(context, dict) and 'layer' in context and 'plugin_name' in context:\n                return {\n                    \"provider\": context.get('layer', 'unknown'), \n                    \"model\": context.get('plugin_name', 'unknown')\n                }\n        return {\"provider\": \"unknown\", \"model\": \"unknown\"}\n\n    def _extract_tokens_from_response(self, result: Any, provider_info: Dict[str, str]) -> Optional[Dict[str, int]]:\n        \"\"\"Extract token usage from response objects for different providers.\"\"\"\n        if not result or not isinstance(result, (str, dict)):\n            return None\n\n        provider = provider_info.get(\"provider\", \"\").lower()\n        \n        # Handle OpenAI-style responses - check for metadata in response dicts\n        if \"openai\" in provider and isinstance(result, dict):\n            # Check for OpenAI usage fields in response structure\n            usage = result.get('usage', {})\n            if isinstance(usage, dict):\n                tokens = {}\n                if 'prompt_tokens' in usage:\n                    tokens['prompt_tokens'] = usage['prompt_tokens']\n                if 'completion_tokens' in usage:  \n                    tokens['completion_tokens'] = usage['completion_tokens']\n                if 'total_tokens' in usage:\n                    tokens['total_tokens'] = usage['total_tokens']\n                return tokens if tokens else None\n\n        # Handle Anthropic-style responses - check for metadata fields\n        elif \"anthropic\" in provider and isinstance(result, dict):\n            # Anthropic may have response headers or structured data with token counts\n            # This is a simplified check; real implementation would need to be more specific\n            if 'usage' in result:\n                usage = result['usage']\n                if isinstance(usage, dict):\n                    tokens = {}\n                    if 'input_tokens' in usage:\n                        tokens['prompt_tokens'] = usage['input_tokens']\n                    if 'output_tokens' in usage:  \n                        tokens['completion_tokens'] = usage['output_tokens']\n                    return tokens if tokens else None\n\n        # Handle Cohere-style responses - check for metadata fields\n        elif \"cohere\" in provider and isinstance(result, dict):\n            if 'meta' in result and isinstance(result['meta'], dict) and 'tokens' in result['meta']:\n                tokens = result['meta']['tokens']\n                if isinstance(tokens, dict):  \n                    extracted_tokens = {}\n                    if 'prompt_tokens' in tokens:\n                        extracted_tokens['prompt_tokens'] = tokens['prompt_tokens']\n                    if 'completion_tokens' in tokens:  \n                        extracted_tokens['completion_tokens'] = tokens['completion_tokens']\n                    return extracted_tokens if extracted_tokens else None\n\n        # Handle Ollama-style responses - check for usage information or other metadata\n        elif \"ollama\" in provider and isinstance(result, dict):\n            if 'prompt_eval_count' in result or 'eval_count' in result:\n                tokens = {}\n                if 'prompt_eval_count' in result:  # Ollama uses prompt_eval_count for prompt tokens\n                    tokens['prompt_tokens'] = result['prompt_eval_count']\n                if 'eval_count' in result:  # Ollama uses eval_count for completion tokens (if available)\n                    tokens['completion_tokens'] = result['eval_count']\n                return tokens if tokens else None\n\n        # Handle text-based responses - try to extract from string formats that might contain token info\n        elif isinstance(result, str) and \"tokens\" in result.lower():\n            # Try parsing common token count patterns (basic approach)\n            pattern = r'(prompt|input)_tokens?[:\\s]+(\\d+)'\n            match = re.search(pattern, result, re.IGNORECASE)\n            if match:\n                prompt_tokens = int(match.group(2))\n                return {\"prompt_tokens\": prompt_tokens}\n\n        # For other provider types or when no specific parsing is available, try to estimate using Tiktoken\n        return None\n\n    def _estimate_tokens(self, provider_info: Dict[str, str], result: Any) -> Optional[Dict[str, int]]:\n        \"\"\"Estimate tokens using Tiktoken if available.\"\"\"\n        try:\n            import tiktoken\n        except ImportError:\n            logger.debug(\"Tiktoken not installed - cannot estimate tokens\")\n            return None\n\n        # For text responses, we'll count tokens based on the result string content\n        if isinstance(result, str):\n            # Get model name from provider info for encoding selection\n            model_name = provider_info.get(\"model\", \"gpt-4o\")  # Default fallback\n            \n            try:\n                # Select appropriate tokenizer (fallback to gpt-4o if unknown)\n                enc = tiktoken.encoding_for_model(model_name) if 'gpt' in model_name else tiktoken.get_encoding('cl100k_base')\n                token_count = len(enc.encode(result))\n                return {\"completion_tokens\": token_count, \"total_tokens\": token_count}\n            except Exception as e:\n                logger.debug(f\"Failed to estimate tokens with Tiktoken: {e}\")\n        elif isinstance(result, dict) and 'content' in result:\n            # For structured responses that include content field\n            content = str(result.get('content', ''))\n            model_name = provider_info.get(\"model\", \"gpt-4o\")\n            try:\n                enc = tiktoken.encoding_for_model(model_name) if 'gpt' in model_name else tiktoken.get_encoding('cl100k_base')\n                token_count = len(enc.encode(content)) if content else 0\n                return {\"completion_tokens\": token_count, \"total_tokens\": token_count}\n            except Exception as e:\n                logger.debug(f\"Failed to estimate tokens with Tiktoken: {e}\")\n        elif hasattr(result, '__dict__') and hasattr(result, 'content'):  # Check for common fields in objects\n            content = str(getattr(result, 'content', ''))\n            model_name = provider_info.get(\"model\", \"gpt-4o\")\n            try:\n                enc = tiktoken.encoding_for_model(model_name) if 'gpt' in model_name else tiktoken.get_encoding('cl100k_base')\n                token_count = len(enc.encode(content)) if content else 0\n                return {\"completion_tokens\": token_count, \"total_tokens\": token_count}\n            except Exception as e:\n                logger.debug(f\"Failed to estimate tokens with Tiktoken: {e}\")\n\n        return None\n",
+        "purpose": "Implements a BenchmarkHook for tracking LLM token usage across different providers, extracting native metrics when available and falling back to Tiktoken estimation"
+      }
+    ]
+  },
+  "roadmap_risk": {
+    "roadmap": {
+      "phases": [
+        {
+          "number": 0,
+          "name": "Read Before Writing",
+          "objective": "Verify integration points by reading source",
+          "deliverables": [
+            "Verified: fitz_ai/llm/providers/base.py",
+            "Verified: fitz_ai/llm/providers/openai.py",
+            "Verified: fitz_ai/llm/providers/anthropic.py",
+            "Verified: fitz_ai/llm/providers/cohere.py",
+            "Verified: fitz_ai/llm/providers/ollama.py"
+          ],
+          "dependencies": [],
+          "estimated_complexity": "low",
+          "key_risks": [],
+          "verification_command": "pytest tests/test_providers.py -v",
+          "estimated_effort": "~15 min"
+        },
+        {
+          "number": 2,
+          "name": "Instrument Provider Interfaces",
+          "objective": "Add token usage tracking to LLM chat providers by leveraging existing instrumentation system",
+          "deliverables": [
+            "TokenTrackingHook implementation using BenchmarkHook protocol",
+            "InstrumentedProxy wrapper for ChatProvider instances"
+          ],
+          "dependencies": [],
+          "estimated_complexity": "medium",
+          "key_risks": [
+            "Token extraction varies by provider implementation",
+            "Performance overhead from instrumentation"
+          ],
+          "verification_command": "pytest tests/test_instrumentation.py -v",
+          "estimated_effort": "~4 hours"
+        },
+        {
+          "number": 3,
+          "name": "Implement Token Extraction Logic",
+          "objective": "Extract token usage information from responses for each LLM provider",
+          "deliverables": [
+            "Provider-specific token extraction functions for OpenAI, Anthropic, Cohere, Ollama",
+            "Unified interface for accessing token counts"
+          ],
+          "dependencies": [],
+          "estimated_complexity": "high",
+          "key_risks": [
+            "Provider response format differences",
+            "Missing token metadata in some responses"
+          ],
+          "verification_command": "pytest tests/test_token_extraction.py -v",
+          "estimated_effort": "~6 hours"
+        },
+        {
+          "number": 4,
+          "name": "Integrate with LLM Client Factory",
+          "objective": "Automatically instrument all chat providers during initialization",
+          "deliverables": [
+            "Modified LLM client factory to wrap ChatProvider instances",
+            "Configuration option for enabling/disabling token tracking"
+          ],
+          "dependencies": [],
+          "estimated_complexity": "medium",
+          "key_risks": [
+            "Breaking changes to existing provider interfaces",
+            "Instrumentation conflicts with other hooks"
+          ],
+          "verification_command": "pytest tests/test_llm_client_factory.py -v",
+          "estimated_effort": "~3 hours"
+        }
+      ],
+      "critical_path": [
+        0,
+        2,
+        3,
+        5
+      ],
+      "parallel_opportunities": [
+        [
+          4,
+          6
+        ]
+      ],
+      "total_phases": 4
+    },
+    "risk": {
+      "risks": [
+        {
+          "category": "technical",
+          "description": "Different LLM providers return token usage in varying formats and locations within their responses, requiring provider-specific parsing logic that may break if response structures change.",
+          "impact": "high",
+          "likelihood": "medium",
+          "mitigation": "Implement robust fallback mechanisms with comprehensive error handling for each provider's token extraction logic to prevent failures when response schemas vary or are updated by providers.",
+          "contingency": "If parsing fails, default to logging 'unknown' or 0 tokens and alert monitoring system to investigate the specific provider response format change.",
+          "affected_phases": [
+            1,
+            3
+          ],
+          "verification": "Verify that token usage extraction works correctly for OpenAI, Anthropic, Cohere, and Ollama providers by creating unit tests with mock responses from each provider."
+        },
+        {
+          "category": "technical",
+          "description": "Instrumentation system may introduce performance overhead or race conditions when tracking token counts across concurrent queries.",
+          "impact": "medium",
+          "likelihood": "low",
+          "mitigation": "Use thread-safe data structures for storing token usage and minimize instrumentation overhead by only instrumenting necessary methods (chat, chat_stream).",
+          "contingency": "If performance degradation is observed, add sampling logic to track only a percentage of queries or disable tracking in production environments.",
+          "affected_phases": [
+            1,
+            3
+          ],
+          "verification": "Run load tests with instrumentation enabled to confirm no significant impact on query processing throughput."
+        },
+        {
+          "category": "external",
+          "description": "LLM provider API changes could break token extraction logic if they alter response schemas or remove usage metadata fields.",
+          "impact": "high",
+          "likelihood": "low",
+          "mitigation": "Implement versioned parsing logic and monitor provider release notes for schema changes that might affect token reporting.",
+          "contingency": "Establish a process to quickly update token extraction methods upon provider API breaking changes, with rollback capability to previous working versions.",
+          "affected_phases": [
+            1,
+            3
+          ],
+          "verification": "Verify parsing resilience by simulating schema modifications in test environments and confirm graceful degradation when fields are missing."
+        }
+      ],
+      "overall_risk_level": "medium",
+      "recommended_contingencies": [
+        "Implement comprehensive fallback logic that defaults to tracking token usage as 'unknown' or 0 if provider-specific extraction fails",
+        "Create a monitoring alert for any failures in token parsing across different LLM providers during query execution"
+      ]
+    }
+  },
+  "roadmap": {
+    "phases": [
+      {
+        "number": 0,
+        "name": "Read Before Writing",
+        "objective": "Verify integration points by reading source",
+        "deliverables": [
+          "Verified: fitz_ai/llm/providers/base.py",
+          "Verified: fitz_ai/llm/providers/openai.py",
+          "Verified: fitz_ai/llm/providers/anthropic.py",
+          "Verified: fitz_ai/llm/providers/cohere.py",
+          "Verified: fitz_ai/llm/providers/ollama.py"
+        ],
+        "dependencies": [],
+        "estimated_complexity": "low",
+        "key_risks": [],
+        "verification_command": "pytest tests/test_providers.py -v",
+        "estimated_effort": "~15 min"
+      },
+      {
+        "number": 2,
+        "name": "Instrument Provider Interfaces",
+        "objective": "Add token usage tracking to LLM chat providers by leveraging existing instrumentation system",
+        "deliverables": [
+          "TokenTrackingHook implementation using BenchmarkHook protocol",
+          "InstrumentedProxy wrapper for ChatProvider instances"
+        ],
+        "dependencies": [],
+        "estimated_complexity": "medium",
+        "key_risks": [
+          "Token extraction varies by provider implementation",
+          "Performance overhead from instrumentation"
+        ],
+        "verification_command": "pytest tests/test_instrumentation.py -v",
+        "estimated_effort": "~4 hours"
+      },
+      {
+        "number": 3,
+        "name": "Implement Token Extraction Logic",
+        "objective": "Extract token usage information from responses for each LLM provider",
+        "deliverables": [
+          "Provider-specific token extraction functions for OpenAI, Anthropic, Cohere, Ollama",
+          "Unified interface for accessing token counts"
+        ],
+        "dependencies": [],
+        "estimated_complexity": "high",
+        "key_risks": [
+          "Provider response format differences",
+          "Missing token metadata in some responses"
+        ],
+        "verification_command": "pytest tests/test_token_extraction.py -v",
+        "estimated_effort": "~6 hours"
+      },
+      {
+        "number": 4,
+        "name": "Integrate with LLM Client Factory",
+        "objective": "Automatically instrument all chat providers during initialization",
+        "deliverables": [
+          "Modified LLM client factory to wrap ChatProvider instances",
+          "Configuration option for enabling/disabling token tracking"
+        ],
+        "dependencies": [],
+        "estimated_complexity": "medium",
+        "key_risks": [
+          "Breaking changes to existing provider interfaces",
+          "Instrumentation conflicts with other hooks"
+        ],
+        "verification_command": "pytest tests/test_llm_client_factory.py -v",
+        "estimated_effort": "~3 hours"
+      }
+    ],
+    "critical_path": [
+      0,
+      2,
+      3,
+      5
+    ],
+    "parallel_opportunities": [
+      [
+        4,
+        6
+      ]
+    ],
+    "total_phases": 4
+  },
+  "risk": {
+    "risks": [
+      {
+        "category": "technical",
+        "description": "Different LLM providers return token usage in varying formats and locations within their responses, requiring provider-specific parsing logic that may break if response structures change.",
+        "impact": "high",
+        "likelihood": "medium",
+        "mitigation": "Implement robust fallback mechanisms with comprehensive error handling for each provider's token extraction logic to prevent failures when response schemas vary or are updated by providers.",
+        "contingency": "If parsing fails, default to logging 'unknown' or 0 tokens and alert monitoring system to investigate the specific provider response format change.",
+        "affected_phases": [
+          1,
+          3
+        ],
+        "verification": "Verify that token usage extraction works correctly for OpenAI, Anthropic, Cohere, and Ollama providers by creating unit tests with mock responses from each provider."
+      },
+      {
+        "category": "technical",
+        "description": "Instrumentation system may introduce performance overhead or race conditions when tracking token counts across concurrent queries.",
+        "impact": "medium",
+        "likelihood": "low",
+        "mitigation": "Use thread-safe data structures for storing token usage and minimize instrumentation overhead by only instrumenting necessary methods (chat, chat_stream).",
+        "contingency": "If performance degradation is observed, add sampling logic to track only a percentage of queries or disable tracking in production environments.",
+        "affected_phases": [
+          1,
+          3
+        ],
+        "verification": "Run load tests with instrumentation enabled to confirm no significant impact on query processing throughput."
+      },
+      {
+        "category": "external",
+        "description": "LLM provider API changes could break token extraction logic if they alter response schemas or remove usage metadata fields.",
+        "impact": "high",
+        "likelihood": "low",
+        "mitigation": "Implement versioned parsing logic and monitor provider release notes for schema changes that might affect token reporting.",
+        "contingency": "Establish a process to quickly update token extraction methods upon provider API breaking changes, with rollback capability to previous working versions.",
+        "affected_phases": [
+          1,
+          3
+        ],
+        "verification": "Verify parsing resilience by simulating schema modifications in test environments and confirm graceful degradation when fields are missing."
+      }
+    ],
+    "overall_risk_level": "medium",
+    "recommended_contingencies": [
+      "Implement comprehensive fallback logic that defaults to tracking token usage as 'unknown' or 0 if provider-specific extraction fails",
+      "Create a monitoring alert for any failures in token parsing across different LLM providers during query execution"
+    ]
+  }
+}
