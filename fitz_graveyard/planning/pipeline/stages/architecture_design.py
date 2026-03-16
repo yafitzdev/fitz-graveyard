@@ -502,6 +502,20 @@ class ArchitectureDesignStage(PipelineStage):
                     bp.append(f"Out of scope: {', '.join(out_of_scope)}")
             binding = "\n".join(bp) if bp else "No specific constraints from context stage."
 
+        # Inject artifact duplicate warnings if any proposed files match existing code
+        dupes = prior_outputs.get("_artifact_duplicates", [])
+        if dupes:
+            dupe_lines = [
+                "\nWARNING — EXISTING CODE DETECTED for proposed new files:"
+            ]
+            for d in dupes:
+                dupe_lines.append(f"\n  Proposed: {d['proposed']} (keywords: {', '.join(d['keywords'])})")
+                dupe_lines.append("  Already exists in codebase:")
+                for match in d["existing_matches"]:
+                    dupe_lines.append(f"    - {match}")
+                dupe_lines.append("  → CHECK these files before creating new ones. Extend existing code if possible.")
+            binding += "\n".join(dupe_lines)
+
         raw_summaries = self._get_raw_summaries(prior_outputs)
         gathered_context = self._get_gathered_context(prior_outputs)
         full_krag = (findings + "\n\n" + raw_summaries) if findings else raw_summaries

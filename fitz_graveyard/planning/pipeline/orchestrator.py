@@ -243,6 +243,30 @@ class PlanningPipeline:
                 f"Implementation check: already_implemented={check.get('already_implemented', False)}"
             )
 
+        # Duplicate artifact check: after context stage extracts needed_artifacts,
+        # search the structural index for existing files with matching names or
+        # functions. Prevents the model from proposing new files when equivalent
+        # functionality already exists in the codebase.
+        if (
+            "context" in prior_outputs
+            and "_artifact_duplicates" not in prior_outputs
+            and prior_outputs.get("_gathered_context")
+        ):
+            ctx = prior_outputs.get("context", {})
+            if isinstance(ctx, str):
+                try:
+                    ctx = json.loads(ctx)
+                except (json.JSONDecodeError, TypeError):
+                    ctx = {}
+            artifacts = ctx.get("needed_artifacts", [])
+            if artifacts:
+                dupes = self._check_artifact_duplicates(
+                    artifacts, prior_outputs["_gathered_context"],
+                )
+                if dupes:
+                    prior_outputs["_artifact_duplicates"] = dupes
+                    logger.info(f"Artifact duplicate check: {len(dupes)} potential matches found")
+
         # Flatten merged stage outputs from checkpoint (same as live execution)
         # Merged stages store e.g. {"architecture_design": {"architecture": {}, "design": {}}}
         # but downstream code expects flattened keys like "architecture", "design"
@@ -435,6 +459,61 @@ class PlanningPipeline:
         except Exception as e:
             logger.warning(f"Implementation check failed (non-fatal): {e}")
             return {"already_implemented": False, "evidence": "", "gaps": []}
+
+    @staticmethod
+    def _check_artifact_duplicates(
+        proposed_artifacts: list[str],
+        structural_index: str,
+    ) -> list[dict[str, str]]:
+        """Check proposed new files against the structural index for duplicates.
+
+        Searches for:
+        1. Files with matching basenames (e.g. "cache.py" matches "cloud/client.py"
+           if it contains cache-related functions)
+        2. Functions/classes with matching keywords in the structural index
+
+        Pure Python — no LLM call. Returns list of matches for injection
+        into the architecture stage prompt.
+        """
+        import re
+
+        if not proposed_artifacts or not structural_index:
+            return []
+
+        # Extract keywords from proposed artifact names
+        # e.g. "fitz_ai/engines/fitz_krag/cache.py" → ["cache"]
+        # e.g. "fitz_ai/core/token_tracking.py" → ["token", "tracking"]
+        matches: list[dict[str, str]] = []
+
+        for artifact in proposed_artifacts:
+            basename = artifact.rsplit("/", 1)[-1].replace(".py", "")
+            keywords = [k for k in re.split(r"[_\-.]", basename) if len(k) > 2]
+            if not keywords:
+                continue
+
+            # Search structural index for files containing these keywords
+            # in function names, class names, or file paths
+            hits: list[str] = []
+            current_file = ""
+            for line in structural_index.splitlines():
+                if line.startswith("## "):
+                    current_file = line[3:].strip()
+                elif current_file:
+                    line_lower = line.lower()
+                    for kw in keywords:
+                        if kw.lower() in line_lower:
+                            # Found a keyword match in a function/class signature
+                            hits.append(f"{current_file}: {line.strip()}")
+                            break
+
+            if hits:
+                matches.append({
+                    "proposed": artifact,
+                    "keywords": keywords,
+                    "existing_matches": hits[:10],  # cap to avoid bloat
+                })
+
+        return matches
 
     async def _coherence_check(
         self,
