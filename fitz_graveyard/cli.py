@@ -595,6 +595,26 @@ def plan(
     except KeyboardInterrupt:
         typer.echo("\nCancelled.", err=True)
         raise typer.Exit(130)
+    except RuntimeError as e:
+        msg = str(e)
+        if "Failed to load model" in msg:
+            model = msg.split('"')[1] if '"' in msg else "unknown"
+            typer.echo(
+                f"\nERROR: Could not load model '{model}'. "
+                f"Try restarting LM Studio and running again.",
+                err=True,
+            )
+        elif "Pipeline failed" in msg:
+            typer.echo(f"\nERROR: {msg}", err=True)
+        else:
+            typer.echo(f"\nERROR: {msg}", err=True)
+        raise typer.Exit(1)
+    except ConnectionError as e:
+        typer.echo(f"\nERROR: LLM server not reachable. Is LM Studio running?\n  {e}", err=True)
+        raise typer.Exit(1)
+    except Exception as e:
+        typer.echo(f"\nERROR: {type(e).__name__}: {e}", err=True)
+        raise typer.Exit(1)
 
 
 @app.command("run")
