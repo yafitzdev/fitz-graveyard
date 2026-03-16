@@ -260,8 +260,14 @@ class PlanningPipeline:
                     ctx = {}
             artifacts = ctx.get("needed_artifacts", [])
             if artifacts:
+                # Use the full structural index from the agent (covers ALL
+                # indexed files, not just the 30 selected ones). Falls back
+                # to _gathered_context which only covers selected files.
+                agent_ctx = prior_outputs.get("_agent_context", {})
+                full_index = agent_ctx.get("full_structural_index", "")
+                search_index = full_index or prior_outputs["_gathered_context"]
                 dupes = self._check_artifact_duplicates(
-                    artifacts, prior_outputs["_gathered_context"],
+                    artifacts, search_index,
                 )
                 if dupes:
                     prior_outputs["_artifact_duplicates"] = dupes

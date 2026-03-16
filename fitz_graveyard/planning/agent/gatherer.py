@@ -327,10 +327,18 @@ class AgentContextGatherer:
                 f"pipeline total {t_total:.1f}s"
             )
 
+            # Build full structural index (all files, not just selected)
+            # for artifact duplicate checking downstream
+            full_index = build_structural_index(
+                Path(self._source_dir), file_paths,
+                max_file_bytes=self._config.max_file_bytes,
+            )
+
             return {
                 "synthesized": structural_overview,
                 "raw_summaries": raw_summaries,
                 "file_contents": file_contents,
+                "full_structural_index": full_index,
                 "agent_files": {
                     "total_screened": len(file_paths),
                     "scan_hits": scan_hits,
