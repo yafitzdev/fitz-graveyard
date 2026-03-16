@@ -190,23 +190,18 @@ class LMStudioClient:
             logger.error(f"LM Studio health check failed: {e}")
             return False
 
-        # Load the first model needed.  If smart_model differs from model,
-        # the agent runs first on smart_model, so load that.  Otherwise
-        # load the planning model.  The orchestrator handles switching
-        # between agent and planning stages.
-        loaded = await self.get_loaded_model()
+        # Accept any loaded model. The orchestrator handles switching
+        # to the right model before each stage. Health check only loads
+        # a model if NOTHING is loaded — never unloads/reloads.
+        if await self.is_model_loaded():
+            return True
+        # Nothing loaded — load smart_model (agent runs first) or model
         first_model = (
             self.smart_model
             if self._smart_model and self._smart_model != self.model
             else self.model
         )
-        if loaded == first_model:
-            return True
-        if loaded:
-            # Wrong model loaded — switch
-            logger.info(f"Health check: switching {loaded} -> {first_model}")
-            return await self.switch_model(first_model)
-        logger.info(f"No model loaded, auto-loading {first_model} (ctx={self._context_length})")
+        logger.info(f"No model loaded, auto-loading {first_model}")
         return await self._load_model_via_cli(first_model)
 
     async def get_loaded_model(self) -> str | None:
@@ -310,7 +305,20 @@ class LMStudioClient:
             return True
         logger.info(f"Switching model: {loaded} -> {model_name}")
         await self.unload_model()
-        return await self._load_model_via_cli(model_name)
+        # Wait for VRAM to be fully released before loading
+        await asyncio.sleep(3)
+        ok = await self._load_model_via_cli(model_name)
+        if not ok:
+            # Retry once after longer cooldown (CUDA context cleanup)
+            logger.warning(f"Model load failed, retrying after 10s cooldown...")
+            await asyncio.sleep(10)
+            ok = await self._load_model_via_cli(model_name)
+        if not ok:
+            raise RuntimeError(
+                f"Failed to load model '{model_name}' after retry. "
+                f"Try restarting LM Studio or reducing context_length."
+            )
+        return True
 
     async def unload_model(self) -> bool:
         """Unload the current model via ``lms unload`` to free VRAM."""
