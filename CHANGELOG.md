@@ -23,8 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Split Reasoning** — Arch+design and roadmap+risk stages can each split into two sequential LLM calls (architecture then design, roadmap then risk). Reduces peak context from ~29K to ~8K tokens per call, enabling dense 27B models at 32K context. Auto-enabled when `context_length < 32768`. Benchmarked at 5/5 correct architecture decisions with 5 seed files.
 
+**Artifact Duplicate Check** — Before the arch+design stage, proposed new files are searched against the full codebase structural index (all files, not just selected ones). When the model proposes `cache.py`, the checker finds `cloud/client.py: invalidate_cache(reason, scope)` and warns the architecture stage to extend existing code instead of building from scratch. Pure Python — no LLM call.
+
 ### 🚀 Added
 
+- Artifact duplicate check: searches full structural index for existing files matching proposed deliverables (`f80a965a`)
+- Full structural index stored in agent output for downstream duplicate checking (`162dcd8b`)
+- Hub import expansion: hub files' imports are now followed to catch orchestrated subsystems (`fitz-ai 6085578`)
+- Post-limit facade swap: `__init__.py` files replaced with actual implementations in final selection (`fitz-ai 6085578`)
 - Split reasoning mode for arch+design stage: `ArchitectureDesignStage(split_reasoning=True)` (`ae7ecaa7`)
 - Split reasoning mode for roadmap+risk stage: `RoadmapRiskStage(split_reasoning=True)` (`f50dfec3`)
 - `create_stages(split_reasoning=True)` factory function for both splits (`f50dfec3`)
