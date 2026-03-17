@@ -223,6 +223,7 @@ class PlanningPipeline:
                 prior_outputs["_gathered_context"] = agent_ctx.get("synthesized", "")
                 prior_outputs["_raw_summaries"] = agent_ctx.get("raw_summaries", "")
                 prior_outputs["_file_contents"] = agent_ctx.get("file_contents", {})
+                prior_outputs["_file_index_entries"] = agent_ctx.get("file_index_entries", {})
 
         # Implementation check: does the codebase already solve this task?
         if (

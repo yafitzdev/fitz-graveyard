@@ -866,6 +866,7 @@ class PipelineStage(ABC):
             Reasoning text (str).
         """
         file_contents = prior_outputs.get("_file_contents", {})
+        file_index_entries = prior_outputs.get("_file_index_entries", {})
         source_dir = self._get_source_dir(prior_outputs)
         generate_with_tools = getattr(client, "generate_with_tools", None)
 
@@ -931,27 +932,46 @@ class PipelineStage(ABC):
                 results.append(f"### {p}\n{content}")
             return "\n\n".join(results)
 
+        def inspect_files(paths: list[str]) -> str:
+            """Get structural detail (classes, methods, imports) for files without reading full source. Use this to decide which files to read_file() for full source."""
+            results: list[str] = []
+            for p in paths:
+                entry = file_index_entries.get(p)
+                if entry:
+                    results.append(f"## {p}\n{entry}")
+                else:
+                    results.append(f"## {p}\n(not in structural index)")
+            return "\n\n".join(results) if results else "(no valid paths)"
+
         tools = [read_file, read_files]
+        if file_index_entries:
+            tools.append(inspect_files)
 
         # Build tool hint emphasizing exploration
         available = sorted(file_contents.keys())
         tool_hint = (
             "\n\n--- TOOL ACCESS ---\n"
-            "IMPORTANT: The source files above are an intentionally sparse SEED SET. "
-            "The structural overview shows ALL files with their signatures. "
-            "You MUST use read_files(paths=[...]) to inspect any additional files "
-            "you need for your analysis. Do NOT guess at implementation details — "
-            "read the actual source.\n\n"
+            "The file manifest above shows all selected files by path and docstring. "
+            "Use tools to get structural detail or full source before reasoning.\n\n"
             "Tools available:\n"
-            "- read_file(path: str) — read one file\n"
-            "- read_files(paths: list[str]) — read multiple files at once (preferred)\n\n"
+        )
+        if file_index_entries:
+            tool_hint += (
+                "- inspect_files(paths: list[str]) — get classes, methods, imports "
+                "(fast, use FIRST to understand file structure)\n"
+            )
+        tool_hint += (
+            "- read_file(path: str) — read full source of one file\n"
+            "- read_files(paths: list[str]) — read full source of multiple files at once\n\n"
+            "Workflow: inspect_files first to understand structure, "
+            "then read_file/read_files for implementation details you need.\n\n"
             f"Files in tool pool ({len(available)} available): "
             + ", ".join(available)
         )
         if source_dir:
             tool_hint += (
                 "\n\nYou can also request files NOT in the pool above — "
-                "any file visible in the structural overview can be read from disk."
+                "any file visible in the file manifest can be read from disk."
             )
 
         messages = [m.copy() for m in messages]
@@ -990,6 +1010,12 @@ class PipelineStage(ABC):
                     paths = tc.arguments.get("paths", [])
                     result = read_files(paths)
                     round_files.extend(paths)
+                elif tc.name == "inspect_files":
+                    paths = tc.arguments.get("paths", [])
+                    result = inspect_files(paths)
+                    logger.info(
+                        f"Stage '{self.name}': inspect_files({len(paths)} files)"
+                    )
                 else:
                     result = f"Unknown tool: {tc.name}"
                 messages.append(

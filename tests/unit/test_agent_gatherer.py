@@ -161,8 +161,10 @@ class TestGatherEndToEnd:
             result = await gatherer.gather(mock_client, "how does run work?")
 
         assert "STRUCTURAL OVERVIEW" in result["synthesized"]
-        assert "### main.py" in result["raw_summaries"]
+        assert "FILE MANIFEST" in result["raw_summaries"]
+        assert "main.py" in result["raw_summaries"]
         assert "main.py" in result["file_contents"]
+        assert "file_index_entries" in result
         assert "agent_files" in result
         agent_files = result["agent_files"]
         assert agent_files["total_screened"] == 2
@@ -343,9 +345,9 @@ class TestSeedAndFetch:
             )
             result = await gatherer.gather(mock_client, "run helper")
 
-        assert "### main.py" in result["raw_summaries"]
-        assert "### util.py" in result["raw_summaries"]
-        assert "SEED FILES" in result["raw_summaries"]
+        assert "main.py" in result["raw_summaries"]
+        assert "util.py" in result["raw_summaries"]
+        assert "FILE MANIFEST" in result["raw_summaries"]
 
     @pytest.mark.asyncio
     async def test_seed_cap_defers_excess_to_tool_pool(self, tmp_path, mock_client):
@@ -375,10 +377,10 @@ class TestSeedAndFetch:
         # All 5 in file_contents for tool access
         for i in range(5):
             assert f"file{i}.py" in result["file_contents"]
-        # But only 2 in raw_summaries as seeds
+        # All 5 in manifest (no seed/pool split — all files in manifest)
         raw = result["raw_summaries"]
-        seed_count = sum(1 for i in range(5) if f"### file{i}.py" in raw)
-        assert seed_count == 2
+        for i in range(5):
+            assert f"file{i}.py" in raw
 
     @pytest.mark.asyncio
     async def test_scan_hits_prioritized_in_seed_set(self, tmp_path, mock_client):
@@ -406,9 +408,9 @@ class TestSeedAndFetch:
             result = await gatherer.gather(mock_client, "scanned")
 
         raw = result["raw_summaries"]
-        assert "### scan_hit.py" in raw
-        # neighbor should NOT be in raw_summaries (over seed cap)
-        assert "### neighbor.py" not in raw
+        # Both files in manifest (no seed cap — all files listed)
+        assert "scan_hit.py" in raw
+        assert "neighbor.py" in raw
 
     @pytest.mark.asyncio
     async def test_provenance_tracks_seed_vs_pool(self, tmp_path, mock_client):
@@ -436,6 +438,8 @@ class TestSeedAndFetch:
             result = await gatherer.gather(mock_client, "func")
 
         prov = result["agent_files"]["file_provenance"]
-        # First 2 scan hits should be in_prompt=True (seeds)
+        # No files inlined in prompt (manifest-only approach)
         in_prompt_count = sum(1 for p in prov.values() if p["in_prompt"])
-        assert in_prompt_count == 2
+        assert in_prompt_count == 0
+        # All files should have provenance
+        assert len(prov) == 4

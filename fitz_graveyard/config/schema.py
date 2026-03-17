@@ -59,11 +59,11 @@ class AgentConfig(BaseModel):
         ),
     )
     max_seed_files: int = Field(
-        default=30,
+        default=50,
         description=(
-            "Maximum files included as full source in the planning prompt (seed set). "
-            "Remaining files are available via read_file tool during reasoning. "
-            "Lower values force the LLM to actively explore via tool calls."
+            "Maximum files selected by the retrieval pipeline for context. "
+            "All files get full structural index entries; source is available "
+            "via read_file tool during reasoning."
         ),
     )
 

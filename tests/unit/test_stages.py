@@ -1787,6 +1787,6 @@ class TestReasonWithTools:
         # Check the messages passed to generate_with_tools
         call_args = client.generate_with_tools.call_args
         last_msg = call_args.kwargs["messages"][-1]["content"]
-        assert "SEED SET" in last_msg
+        assert "TOOL ACCESS" in last_msg
         assert "read_files" in last_msg
 
