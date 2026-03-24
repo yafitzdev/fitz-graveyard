@@ -1,0 +1,434 @@
+# fitz_graveyard/planning/pipeline/stages/synthesis.py
+"""
+Synthesis stage: narrate pre-solved decisions into the final plan.
+
+Receives all committed decision records + constraints. The model is narrating
+pre-solved problems, not discovering anything new. Uses existing per-field
+extraction, self-critique, and coherence checking.
+
+Output: same PlanOutput format (ContextOutput + ArchitectureOutput + DesignOutput
++ RoadmapOutput + RiskOutput).
+"""
+
+import difflib
+import json
+import logging
+import time
+from typing import Any
+
+from fitz_graveyard.planning.pipeline.stages.base import (
+    PipelineStage,
+    StageResult,
+    extract_json,
+)
+from fitz_graveyard.planning.prompts import load_prompt
+from fitz_graveyard.planning.schemas import (
+    ArchitectureOutput,
+    ContextOutput,
+    DesignOutput,
+    RiskOutput,
+    RoadmapOutput,
+)
+
+logger = logging.getLogger(__name__)
+
+# Field groups for per-field extraction (same schemas as classic pipeline).
+
+_CONTEXT_FIELD_GROUPS = [
+    {
+        "label": "description",
+        "fields": ["project_description", "key_requirements", "constraints", "existing_context"],
+        "schema": json.dumps({
+            "project_description": "1-3 sentence specific description of what is being built",
+            "key_requirements": ["concrete testable requirement 1", "requirement 2"],
+            "constraints": ["real binding constraint 1", "constraint 2"],
+            "existing_context": "existing codebase or tech context, or empty string if none",
+        }, indent=2),
+    },
+    {
+        "label": "stakeholders",
+        "fields": ["stakeholders", "scope_boundaries"],
+        "schema": json.dumps({
+            "stakeholders": ["stakeholder with specific concern"],
+            "scope_boundaries": {
+                "in_scope": ["specific feature or capability"],
+                "out_of_scope": ["explicitly excluded feature"],
+            },
+        }, indent=2),
+    },
+    {
+        "label": "files",
+        "fields": ["existing_files", "needed_artifacts"],
+        "schema": json.dumps({
+            "existing_files": ["path/to/relevant/file.py -- what it does"],
+            "needed_artifacts": ["new_file.py -- what it produces (empty list [] if already implemented)"],
+        }, indent=2),
+    },
+    {
+        "label": "assumptions",
+        "fields": ["assumptions"],
+        "schema": json.dumps({
+            "assumptions": [
+                {"assumption": "what you assumed", "impact": "what changes if wrong", "confidence": "low|medium|high"}
+            ],
+        }, indent=2),
+    },
+]
+
+_ARCH_FIELD_GROUPS = [
+    {
+        "label": "approaches",
+        "fields": ["approaches", "recommended", "reasoning", "scope_statement"],
+        "schema": json.dumps({
+            "approaches": [
+                {
+                    "name": "Approach A",
+                    "description": "What it looks like in production",
+                    "pros": ["advantage"],
+                    "cons": ["disadvantage"],
+                    "complexity": "low|medium|high",
+                    "best_for": ["scenario"],
+                },
+            ],
+            "recommended": "must match one approach name exactly",
+            "reasoning": "why this approach is right AND why the other is wrong",
+            "scope_statement": "1-2 sentences characterizing the effort",
+        }, indent=2),
+    },
+    {
+        "label": "tradeoffs",
+        "fields": ["key_tradeoffs", "technology_considerations"],
+        "schema": json.dumps({
+            "key_tradeoffs": {"tradeoff_name": "description"},
+            "technology_considerations": ["technology with reason"],
+        }, indent=2),
+    },
+]
+
+_DESIGN_FIELD_GROUPS = [
+    {
+        "label": "adrs",
+        "fields": ["adrs"],
+        "schema": json.dumps({
+            "adrs": [
+                {
+                    "title": "ADR: Decision Title",
+                    "context": "What problem this solves",
+                    "decision": "What was decided",
+                    "rationale": "Why this is right",
+                    "consequences": ["consequence"],
+                    "alternatives_considered": ["Alternative -- rejected because reason"],
+                }
+            ],
+        }, indent=2),
+    },
+    {
+        "label": "components",
+        "fields": ["components", "data_model"],
+        "schema": json.dumps({
+            "components": [
+                {
+                    "name": "ComponentName",
+                    "purpose": "What it does",
+                    "responsibilities": ["responsibility"],
+                    "interfaces": ["methodName(param: Type) -> ReturnType"],
+                    "dependencies": ["OtherComponent"],
+                }
+            ],
+            "data_model": {"EntityName": ["field: type"]},
+        }, indent=2),
+    },
+    {
+        "label": "integrations",
+        "fields": ["integration_points"],
+        "schema": json.dumps({
+            "integration_points": ["ExternalSystem -- what and how"],
+        }, indent=2),
+    },
+    {
+        "label": "artifacts",
+        "fields": ["artifacts"],
+        "schema": json.dumps({
+            "artifacts": [
+                {
+                    "filename": "path/to/file",
+                    "content": "complete file content",
+                    "purpose": "why this artifact exists",
+                }
+            ],
+        }, indent=2),
+    },
+]
+
+_ROADMAP_FIELD_GROUPS = [
+    {
+        "label": "phases",
+        "fields": ["phases"],
+        "schema": json.dumps({
+            "phases": [
+                {
+                    "number": 1,
+                    "name": "Phase Name",
+                    "objective": "What this phase achieves",
+                    "deliverables": ["specific deliverable"],
+                    "dependencies": [],
+                    "estimated_complexity": "low|medium|high",
+                    "key_risks": ["risk"],
+                    "verification_command": "pytest tests/test_something.py -v",
+                    "estimated_effort": "~2 hours",
+                }
+            ],
+        }, indent=2),
+    },
+    {
+        "label": "scheduling",
+        "fields": ["critical_path", "parallel_opportunities", "total_phases"],
+        "schema": json.dumps({
+            "critical_path": [1, 2, 4],
+            "parallel_opportunities": [[3, 5]],
+            "total_phases": 5,
+        }, indent=2),
+    },
+]
+
+_RISK_FIELD_GROUPS = [
+    {
+        "label": "risks",
+        "fields": ["risks", "overall_risk_level", "recommended_contingencies"],
+        "schema": json.dumps({
+            "risks": [
+                {
+                    "category": "technical|external|resource|schedule|quality|security",
+                    "description": "What could go wrong",
+                    "impact": "low|medium|high|critical",
+                    "likelihood": "low|medium|high",
+                    "mitigation": "Specific mitigation action",
+                    "contingency": "What to do if it happens",
+                    "affected_phases": [1, 3],
+                    "verification": "assert something",
+                }
+            ],
+            "overall_risk_level": "low|medium|high",
+            "recommended_contingencies": ["contingency action"],
+        }, indent=2),
+    },
+]
+
+
+class SynthesisStage(PipelineStage):
+    """Synthesize resolved decisions into the final PlanOutput.
+
+    The model receives ALL committed decision records and narrates them into
+    a coherent plan. Then per-field extraction pulls structured data.
+
+    This stage does NOT do original reasoning -- it organizes pre-solved answers.
+    """
+
+    @property
+    def name(self) -> str:
+        return "synthesis"
+
+    @property
+    def progress_range(self) -> tuple[float, float]:
+        return (0.75, 0.95)
+
+    def build_prompt(
+        self, job_description: str, prior_outputs: dict[str, Any],
+    ) -> list[dict]:
+        resolution_output = prior_outputs.get("decision_resolution", {})
+        resolutions = resolution_output.get("resolutions", [])
+
+        decision_text = self._format_resolutions(resolutions)
+        call_graph_text = prior_outputs.get("_call_graph_text", "")
+        gathered_context = self._get_gathered_context(prior_outputs)
+
+        prompt_template = load_prompt("synthesis")
+        prompt = prompt_template.format(
+            task_description=job_description,
+            resolved_decisions=decision_text,
+            call_graph=call_graph_text,
+            gathered_context=gathered_context,
+        )
+        return self._make_messages(prompt)
+
+    def parse_output(self, raw_output: str) -> dict[str, Any]:
+        return extract_json(raw_output)
+
+    def _format_resolutions(self, resolutions: list[dict]) -> str:
+        """Format resolved decisions for the synthesis prompt."""
+        lines = []
+        for r in resolutions:
+            lines.append(f"### Decision {r.get('decision_id', '?')}")
+            lines.append(f"**Decided:** {r.get('decision', '')}")
+            lines.append(f"**Reasoning:** {r.get('reasoning', '')}")
+            evidence = r.get("evidence", [])
+            if evidence:
+                lines.append("**Evidence:**")
+                for e in evidence:
+                    lines.append(f"  - {e}")
+            constraints = r.get("constraints_for_downstream", [])
+            if constraints:
+                lines.append("**Constraints:**")
+                for c in constraints:
+                    lines.append(f"  - {c}")
+            lines.append("")
+        return "\n".join(lines)
+
+    async def execute(
+        self,
+        client: Any,
+        job_description: str,
+        prior_outputs: dict[str, Any],
+    ) -> StageResult:
+        try:
+            # 1. Synthesis reasoning -- narrate pre-solved decisions
+            messages = self.build_prompt(job_description, prior_outputs)
+            await self._report_substep("synthesizing")
+            t0 = time.monotonic()
+            reasoning = await client.generate(messages=messages)
+            t1 = time.monotonic()
+            logger.info(
+                f"Stage '{self.name}': synthesis took "
+                f"{t1 - t0:.1f}s ({len(reasoning)} chars)"
+            )
+
+            # 2. Self-critique (catches formatting issues, not architectural)
+            krag_context = self._get_gathered_context(prior_outputs)
+            reasoning = await self._self_critique(
+                client, reasoning, job_description, krag_context=krag_context,
+            )
+
+            # 3. Per-field extraction into all five schema sections
+            extract_context = krag_context
+
+            # Context fields
+            context_merged: dict[str, Any] = {}
+            for group in _CONTEXT_FIELD_GROUPS:
+                extra = extract_context if group["label"] in {"files", "description"} else ""
+                partial = await self._extract_field_group(
+                    client, reasoning, group["fields"],
+                    group["schema"], group["label"],
+                    extra_context=extra,
+                )
+                context_merged.update(partial)
+
+            # Architecture fields
+            arch_merged: dict[str, Any] = {}
+            for group in _ARCH_FIELD_GROUPS:
+                partial = await self._extract_field_group(
+                    client, reasoning, group["fields"],
+                    group["schema"], group["label"],
+                    extra_context=extract_context,
+                )
+                arch_merged.update(partial)
+
+            # Design fields
+            design_merged: dict[str, Any] = {}
+            for group in _DESIGN_FIELD_GROUPS:
+                extra = extract_context if group["label"] in {"adrs", "artifacts", "components", "integrations"} else ""
+                partial = await self._extract_field_group(
+                    client, reasoning, group["fields"],
+                    group["schema"], group["label"],
+                    extra_context=extra,
+                )
+                design_merged.update(partial)
+
+            # Roadmap fields
+            roadmap_merged: dict[str, Any] = {}
+            for group in _ROADMAP_FIELD_GROUPS:
+                extra = extract_context if group["label"] == "phases" else ""
+                partial = await self._extract_field_group(
+                    client, reasoning, group["fields"],
+                    group["schema"], group["label"],
+                    extra_context=extra,
+                )
+                roadmap_merged.update(partial)
+
+            # Risk fields
+            risk_merged: dict[str, Any] = {}
+            for group in _RISK_FIELD_GROUPS:
+                partial = await self._extract_field_group(
+                    client, reasoning, group["fields"],
+                    group["schema"], group["label"],
+                    extra_context=extract_context,
+                )
+                risk_merged.update(partial)
+
+            # 4. Validate through Pydantic
+            context = ContextOutput(**context_merged).model_dump()
+
+            # Handle recommended approach matching
+            approach_names = [a["name"] for a in arch_merged.get("approaches", [])]
+            recommended = arch_merged.get("recommended", "")
+            if recommended not in approach_names and approach_names:
+                matches = difflib.get_close_matches(
+                    recommended, approach_names, n=1, cutoff=0.4,
+                )
+                if matches:
+                    arch_merged["recommended"] = matches[0]
+                else:
+                    arch_merged["recommended"] = approach_names[0]
+
+            arch_merged.setdefault("approaches", [])
+            arch_merged.setdefault("recommended", "")
+            arch_merged.setdefault("reasoning", "")
+            arch_merged.setdefault("key_tradeoffs", {})
+            arch_merged.setdefault("technology_considerations", [])
+            arch_merged.setdefault("scope_statement", "")
+            architecture = ArchitectureOutput(**arch_merged).model_dump()
+
+            design_merged.setdefault("adrs", [])
+            design_merged.setdefault("components", [])
+            design_merged.setdefault("data_model", {})
+            design_merged.setdefault("integration_points", [])
+            design_merged.setdefault("artifacts", [])
+            design = DesignOutput(**design_merged).model_dump()
+
+            # Fix roadmap
+            from fitz_graveyard.planning.pipeline.stages.roadmap_risk import (
+                _remove_dependency_cycles,
+            )
+            if "phases" in roadmap_merged:
+                for phase in roadmap_merged["phases"]:
+                    if "num" in phase and "number" not in phase:
+                        phase["number"] = phase.pop("num")
+                roadmap_merged["phases"] = _remove_dependency_cycles(
+                    roadmap_merged["phases"]
+                )
+            roadmap_merged.setdefault("phases", [])
+            roadmap_merged.setdefault("critical_path", [])
+            roadmap_merged.setdefault("parallel_opportunities", [])
+            roadmap_merged.setdefault(
+                "total_phases", len(roadmap_merged.get("phases", []))
+            )
+            roadmap = RoadmapOutput(**roadmap_merged).model_dump()
+
+            risk_merged.setdefault("risks", [])
+            risk_merged.setdefault("overall_risk_level", "medium")
+            risk_merged.setdefault("recommended_contingencies", [])
+            risk = RiskOutput(**risk_merged).model_dump()
+
+            # 5. Combine into the output format expected by the orchestrator
+            output = {
+                "context": context,
+                "architecture": architecture,
+                "design": design,
+                "roadmap": roadmap,
+                "risk": risk,
+            }
+
+            return StageResult(
+                stage_name=self.name,
+                success=True,
+                output=output,
+                raw_output=reasoning,
+            )
+        except Exception as e:
+            logger.error(f"Stage '{self.name}' failed: {e}", exc_info=True)
+            return StageResult(
+                stage_name=self.name,
+                success=False,
+                output={},
+                raw_output="",
+                error=str(e),
+            )

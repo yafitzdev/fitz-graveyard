@@ -1,0 +1,37 @@
+You are resolving a single architectural decision. You have the full source code of the relevant files. Make a concrete, committed decision based on what the code actually shows.
+
+TASK CONTEXT: {task_description}
+
+DECISION {decision_id} ({decision_category}):
+{decision_question}
+
+{upstream_constraints}
+
+{call_graph_segment}
+
+--- SOURCE CODE (ground truth -- base your decision on this) ---
+{source_code}
+
+## Instructions
+
+1. Read the source code carefully. Note exact method signatures, return types, and data flow.
+2. Answer the decision question concretely. Do not hedge or say "it depends."
+3. Cite specific evidence from the source code (file:method, line references, types).
+4. State what constraints this decision creates for downstream decisions.
+
+CRITICAL: Do NOT invent methods, classes, or APIs that don't exist in the source code above. If the source code doesn't contain what you need, say so explicitly.
+
+Respond with ONLY valid JSON:
+{{
+  "decision_id": "{decision_id}",
+  "decision": "What you decided -- a concrete, specific answer",
+  "reasoning": "Why, citing specific source code evidence",
+  "evidence": [
+    "file.py: MethodName() returns Type -- proves X",
+    "other.py: ClassDef shows pattern Y"
+  ],
+  "constraints_for_downstream": [
+    "Constraint that downstream decisions must respect",
+    "e.g., 'generate_stream() must return Iterator[str] because chat_stream() returns Iterator[str]'"
+  ]
+}}

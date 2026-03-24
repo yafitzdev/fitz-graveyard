@@ -25,7 +25,7 @@ if _TC:
 from fitz_graveyard.models.jobs import JobState
 from fitz_graveyard.models.store import JobStore
 from fitz_graveyard.planning.pipeline.checkpoint import CheckpointManager
-from fitz_graveyard.planning.pipeline.orchestrator import PlanningPipeline
+from fitz_graveyard.planning.pipeline.orchestrator import DecomposedPipeline, PlanningPipeline
 from fitz_graveyard.planning.pipeline.output import PlanRenderer
 from fitz_graveyard.planning.agent import AgentContextGatherer
 from fitz_graveyard.planning.pipeline.stages import DEFAULT_STAGES, create_stages
@@ -91,16 +91,8 @@ class BackgroundWorker:
                 logger.warning("Store does not support checkpointing (no db_path)")
                 return
 
-            # Create pipeline with stages
-            # Auto-enable split reasoning for small context windows
-            split = False
-            if self._config and hasattr(self._config, 'lm_studio'):
-                ctx_len = getattr(self._config.lm_studio, 'context_length', 65536)
-                if ctx_len < 32768:
-                    split = True
-                    logger.info(f"Split reasoning enabled (context_length={ctx_len})")
-            stages = create_stages(split_reasoning=split)
-            self._pipeline = PlanningPipeline(stages, self._checkpoint_mgr)
+            # Create decomposed pipeline (replaces classic 3-stage pipeline)
+            self._pipeline = DecomposedPipeline(self._checkpoint_mgr)
 
             # Create plan renderer
             self._renderer = PlanRenderer()

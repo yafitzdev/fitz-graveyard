@@ -1,0 +1,49 @@
+You are decomposing a planning task into atomic decisions that can each be resolved independently with focused context.
+
+TASK: {task_description}
+
+{call_graph}
+
+{file_manifest}
+
+## Instructions
+
+Break this task into 5-15 atomic decisions. Each decision is a QUESTION, not an answer. The question must be specific enough that it can be resolved by reading 1-3 source files.
+
+For each decision, specify:
+- **id**: Short unique identifier (d1, d2, d3, ...)
+- **question**: The specific question to answer. Must be concrete and answerable from code.
+- **relevant_files**: 1-3 file paths from the call graph or manifest needed to answer this question.
+- **depends_on**: IDs of decisions whose answers constrain this one. Most decisions should depend on at least one earlier decision. Decision d1 has no dependencies.
+- **category**: One of: interface, pattern, integration, scope, technical
+
+## Decision ordering rules
+
+1. Start with PATTERN decisions: "What is the right architectural approach?" comes before design details.
+2. Then INTERFACE decisions: "What method signature changes are needed on X?" depends on the pattern choice.
+3. Then INTEGRATION decisions: "How does component A connect to component B?" depends on interface decisions.
+4. Then SCOPE decisions: "What is out of scope for v1?" can reference earlier decisions.
+5. Finally TECHNICAL decisions: implementation details depend on all above.
+
+## Good decisions look like:
+- "What existing method in synthesizer.py should be extended/wrapped for streaming?"
+- "What is the return type contract for the new streaming interface on engine.py?"
+- "How does the governance check in engine.py interact with the proposed streaming flow?"
+
+## Bad decisions look like:
+- "How should we implement streaming?" (too vague, not answerable from 1-3 files)
+- "What is the best approach?" (should be split into pattern + interface + integration)
+- "Should we use async?" (yes/no questions don't produce useful constraints)
+
+Respond with ONLY valid JSON matching this schema:
+{{
+  "decisions": [
+    {{
+      "id": "d1",
+      "question": "specific question",
+      "relevant_files": ["path/to/file.py"],
+      "depends_on": [],
+      "category": "pattern"
+    }}
+  ]
+}}

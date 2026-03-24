@@ -461,5 +461,110 @@ def _print_reasoning_summary(results: list[dict], out_dir: Path) -> None:
     print(summary)
 
 
+async def _run_decomposed_once(
+    source_dir: str,
+    query: str,
+    context: dict,
+    run_id: int,
+    out_dir: Path,
+) -> dict:
+    """Run the decomposed planning pipeline with fixed retrieval files."""
+    from fitz_graveyard.config import load_config
+    from fitz_graveyard.llm.factory import create_llm_client
+    from fitz_graveyard.planning.agent import AgentContextGatherer
+    from fitz_graveyard.planning.pipeline.orchestrator import DecomposedPipeline
+
+    config = load_config()
+    client = create_llm_client(config)
+
+    if hasattr(client, "health_check"):
+        await client.health_check()
+
+    pipeline = DecomposedPipeline(
+        checkpoint_manager=_NullCheckpointManager(),
+    )
+    job_id = f"decomp_{run_id:03d}"
+
+    agent = AgentContextGatherer(
+        config=config.agent,
+        source_dir=source_dir,
+    )
+
+    t0 = time.monotonic()
+    result = await pipeline.execute(
+        client=client,
+        job_id=job_id,
+        job_description=query,
+        resume=False,
+        agent=agent,
+        _bench_override_files=context.get("file_list"),
+    )
+    elapsed = time.monotonic() - t0
+
+    plan_text = ""
+    if result.success:
+        plan_data = {
+            k: v for k, v in result.outputs.items()
+            if not k.startswith("_")
+        }
+        plan_text = json.dumps(plan_data, indent=2, default=str)
+        plan_file = out_dir / f"plan_{run_id:02d}.json"
+        plan_file.write_text(plan_text)
+
+    arch = result.outputs.get("architecture", {})
+    recommended = arch.get("recommended", "")
+
+    return {
+        "run": run_id,
+        "elapsed_s": round(elapsed, 1),
+        "success": result.success,
+        "recommended": recommended,
+        "plan_size": len(plan_text),
+        "stage_timings": result.stage_timings,
+        "error": result.error,
+        "num_decisions": len(
+            result.outputs.get("decision_decomposition", {}).get("decisions", [])
+        ),
+    }
+
+
+@app.command()
+def decomposed(
+    runs: int = typer.Option(3, help="Number of decomposed runs"),
+    source_dir: str = typer.Option(..., help="Codebase source dir"),
+    context_file: str = typer.Option(..., help="JSON file with pre-gathered context"),
+    query: str = typer.Option(
+        "Add token usage tracking so I can see how many LLM tokens each query costs",
+        help="Job description / query",
+    ),
+):
+    """Run decomposed pipeline benchmarks with fixed retrieval context."""
+    context = json.loads(Path(context_file).read_text())
+    out_dir = _results_dir("decomposed")
+    logger.info(f"Running {runs} decomposed benchmarks -> {out_dir}")
+
+    all_results = []
+
+    async def _run_all():
+        for i in range(runs):
+            logger.info(f"--- Decomposed run {i + 1}/{runs} ---")
+            result = await _run_decomposed_once(
+                source_dir, query, context, i + 1, out_dir,
+            )
+            all_results.append(result)
+
+            run_file = out_dir / f"run_{i + 1:02d}.json"
+            run_file.write_text(json.dumps(result, indent=2))
+
+            logger.info(
+                f"Run {i + 1}: {result['recommended']} "
+                f"({result['elapsed_s']}s, {result['num_decisions']} decisions, "
+                f"success={result['success']})"
+            )
+
+    asyncio.run(_run_all())
+    _print_reasoning_summary(all_results, out_dir)
+
+
 if __name__ == "__main__":
     app()

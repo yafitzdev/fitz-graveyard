@@ -1,0 +1,53 @@
+You are writing a comprehensive architectural plan. All the hard decisions have already been made and resolved below. Your job is to narrate these decisions into a coherent, complete plan.
+
+TASK: {task_description}
+
+{call_graph}
+
+## Resolved Decisions
+
+The following decisions were made by analyzing the actual source code. Each decision includes evidence and constraints. DO NOT contradict these decisions -- they are based on ground truth from the codebase.
+
+{resolved_decisions}
+
+## Codebase Context
+
+{gathered_context}
+
+## Instructions
+
+Write a complete architectural analysis covering ALL of the following sections. For each section, use the resolved decisions above as your primary source. Do not discover new things -- organize what has already been decided.
+
+### Section 1: Context
+- Project description (what is being built, based on the task and decisions)
+- Key requirements (derived from the decisions and their constraints)
+- Constraints (from upstream decisions and codebase structure)
+- Existing files (referenced in decisions' evidence)
+- Needed artifacts (new files identified in the decisions)
+- Assumptions (any remaining uncertainty after decisions)
+
+### Section 2: Architecture
+- At least 2 approaches considered (the chosen pattern + at least 1 rejected alternative)
+- Clear recommendation with reasoning (from the pattern decisions)
+- Key tradeoffs
+- Scope statement (1-2 sentences on effort level)
+
+### Section 3: Design
+- ADRs for 3-5 key decisions that someone might disagree with (from the resolved decisions, excluding the architecture choice itself)
+- Components with interfaces (from interface and integration decisions)
+- Data model if applicable
+- Integration points
+- Artifacts (config files, schemas -- write the complete content)
+
+### Section 4: Roadmap
+- Implementation phases (ordered by decision dependencies)
+- Each phase: objective, deliverables, verification command, effort estimate
+- Critical path and parallel opportunities
+
+### Section 5: Risk
+- Technical risks (from decision constraints and evidence)
+- Each risk: impact, likelihood, mitigation, contingency, affected phases
+
+ACCURACY RULE: Every file path, method name, and return type you write MUST come from the resolved decisions' evidence above or the codebase context. Do not invent.
+
+Write your complete analysis as flowing prose. Do not output JSON -- the extraction step will handle that.

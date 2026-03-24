@@ -36,6 +36,27 @@ def create_stages(*, split_reasoning: bool = False) -> list[PipelineStage]:
     ]
 
 
+def create_decomposed_stages() -> list[PipelineStage]:
+    """Create the three decomposed pipeline stages.
+
+    Returns:
+        List of [DecisionDecompositionStage, DecisionResolutionStage, SynthesisStage].
+    """
+    from fitz_graveyard.planning.pipeline.stages.decision_decomposition import (
+        DecisionDecompositionStage,
+    )
+    from fitz_graveyard.planning.pipeline.stages.decision_resolution import (
+        DecisionResolutionStage,
+    )
+    from fitz_graveyard.planning.pipeline.stages.synthesis import SynthesisStage
+
+    return [
+        DecisionDecompositionStage(),
+        DecisionResolutionStage(),
+        SynthesisStage(),
+    ]
+
+
 __all__ = [
     "PipelineStage",
     "extract_json",
@@ -44,4 +65,5 @@ __all__ = [
     "RoadmapRiskStage",
     "DEFAULT_STAGES",
     "create_stages",
+    "create_decomposed_stages",
 ]

@@ -633,3 +633,283 @@ class PlanningPipeline:
 
         # Return the end of that stage's progress range
         return self._stages[last_completed_idx].progress_range[1]
+
+
+class DecomposedPipeline:
+    """Decomposed planning pipeline: call graph + decision decomposition +
+    per-decision resolution + synthesis.
+
+    Replaces PlanningPipeline with smaller, focused reasoning steps.
+    """
+
+    def __init__(
+        self,
+        checkpoint_manager: CheckpointManager,
+    ) -> None:
+        from fitz_graveyard.planning.pipeline.stages.decision_decomposition import (
+            DecisionDecompositionStage,
+        )
+        from fitz_graveyard.planning.pipeline.stages.decision_resolution import (
+            DecisionResolutionStage,
+        )
+        from fitz_graveyard.planning.pipeline.stages.synthesis import (
+            SynthesisStage,
+        )
+
+        self._stages = [
+            DecisionDecompositionStage(),
+            DecisionResolutionStage(),
+            SynthesisStage(),
+        ]
+        self._checkpoint_mgr = checkpoint_manager
+        logger.info("Created DecomposedPipeline")
+
+    async def execute(
+        self,
+        client: Any,
+        job_id: str,
+        job_description: str,
+        resume: bool = False,
+        progress_callback: Callable[[float, str], None]
+            | Callable[[float, str], Any] | None = None,
+        agent: "AgentContextGatherer | None" = None,
+        pre_gathered_context: str | None = None,
+        _bench_override_files: list[str] | None = None,
+    ) -> PipelineResult:
+        """Execute the decomposed planning pipeline.
+
+        Same signature as PlanningPipeline.execute() for drop-in replacement.
+        """
+        start_sha = get_git_sha()
+        stage_timings: dict[str, float] = {}
+
+        # Load or initialize prior_outputs
+        if resume:
+            prior_outputs = await self._checkpoint_mgr.load_checkpoint(job_id)
+        else:
+            prior_outputs = {}
+            await self._checkpoint_mgr.clear_checkpoint(job_id)
+
+        # Pre-gathered context injection
+        if pre_gathered_context is not None and "_agent_context" not in prior_outputs:
+            prior_outputs["_agent_context"] = {
+                "synthesized": pre_gathered_context,
+                "raw_summaries": pre_gathered_context,
+            }
+
+        # Agent context gathering (identical to PlanningPipeline)
+        if agent is not None and "_agent_context" not in prior_outputs:
+            _needs_switch = (
+                not _bench_override_files
+                and hasattr(client, "switch_model")
+                and hasattr(client, "smart_model")
+                and client.smart_model != client.model
+            )
+            if _needs_switch:
+                await client.switch_model(client.smart_model)
+
+            t_agent = time.monotonic()
+            gathered = await agent.gather(
+                client=client,
+                job_description=job_description,
+                progress_callback=progress_callback,
+                override_files=_bench_override_files,
+            )
+            await self._checkpoint_mgr.save_stage(
+                job_id, "_agent_context", gathered,
+            )
+            prior_outputs["_agent_context"] = gathered
+            stage_timings["agent_gathering"] = time.monotonic() - t_agent
+
+            if _needs_switch:
+                await client.switch_model(client.model)
+        elif "_agent_context" in prior_outputs:
+            if progress_callback:
+                result_or_coro = progress_callback(0.09, "agent_exploring_complete")
+                if hasattr(result_or_coro, '__await__'):
+                    await result_or_coro
+
+        # Inject gathered context for stages
+        if "_agent_context" in prior_outputs:
+            agent_ctx = prior_outputs["_agent_context"]
+            if "text" in agent_ctx and "synthesized" not in agent_ctx:
+                prior_outputs["_gathered_context"] = agent_ctx.get("text", "")
+                prior_outputs["_raw_summaries"] = agent_ctx.get("text", "")
+            else:
+                prior_outputs["_gathered_context"] = agent_ctx.get("synthesized", "")
+                prior_outputs["_raw_summaries"] = agent_ctx.get("raw_summaries", "")
+                prior_outputs["_file_contents"] = agent_ctx.get("file_contents", {})
+                prior_outputs["_file_index_entries"] = agent_ctx.get("file_index_entries", {})
+
+        if agent is not None:
+            prior_outputs["_source_dir"] = agent._source_dir
+
+        # Implementation check (reuse PlanningPipeline logic)
+        if (
+            prior_outputs.get("_gathered_context")
+            and "_implementation_check" not in prior_outputs
+        ):
+            if progress_callback:
+                result_or_coro = progress_callback(0.092, "agent:checking_existing")
+                if hasattr(result_or_coro, '__await__'):
+                    await result_or_coro
+            t_impl = time.monotonic()
+            helper = PlanningPipeline([], self._checkpoint_mgr)
+            check = await helper._implementation_check(
+                client, prior_outputs["_gathered_context"], job_description,
+            )
+            stage_timings["implementation_check"] = time.monotonic() - t_impl
+            prior_outputs["_implementation_check"] = check
+
+        # CALL GRAPH EXTRACTION (deterministic, no LLM)
+        if "_call_graph" not in prior_outputs:
+            t_cg = time.monotonic()
+            if progress_callback:
+                result_or_coro = progress_callback(0.095, "call_graph_extraction")
+                if hasattr(result_or_coro, '__await__'):
+                    await result_or_coro
+
+            from fitz_graveyard.planning.pipeline.call_graph import extract_call_graph
+            from fitz_graveyard.planning.agent.indexer import build_import_graph
+
+            source_dir = prior_outputs.get("_source_dir", "")
+            agent_ctx = prior_outputs.get("_agent_context", {})
+            agent_files = agent_ctx.get("agent_files", {})
+            included = agent_files.get("included", [])
+
+            if source_dir and included:
+                forward_map_raw, _ = build_import_graph(source_dir, included)
+                forward_map = {k: v for k, v in forward_map_raw.items()}
+            else:
+                forward_map = {}
+
+            synthesized = prior_outputs.get("_gathered_context", "")
+            file_index_entries = prior_outputs.get("_file_index_entries", {})
+
+            call_graph = extract_call_graph(
+                task_description=job_description,
+                structural_index=synthesized,
+                forward_map=forward_map,
+                file_index_entries=file_index_entries,
+                max_depth=3,
+            )
+            prior_outputs["_call_graph"] = call_graph
+            prior_outputs["_call_graph_text"] = call_graph.format_for_prompt()
+            stage_timings["call_graph"] = time.monotonic() - t_cg
+
+        # Execute stages sequentially
+        _EXPECTED_SUBSTEPS = {
+            "decision_decomposition": 2,
+            "decision_resolution": 15,
+            "synthesis": 20,
+        }
+
+        completed_stages = {
+            k for k in prior_outputs.keys() if not k.startswith("_")
+        }
+        remaining_stages = [
+            s for s in self._stages if s.name not in completed_stages
+        ]
+
+        for stage in remaining_stages:
+            if progress_callback:
+                result_or_coro = progress_callback(
+                    stage.progress_range[0], stage.name,
+                )
+                if hasattr(result_or_coro, '__await__'):
+                    await result_or_coro
+
+            substep_counter = [0]
+
+            async def _substep_cb(phase_detail: str, _stage=stage) -> None:
+                if progress_callback:
+                    substep_counter[0] += 1
+                    lo, hi = _stage.progress_range
+                    expected = _EXPECTED_SUBSTEPS.get(_stage.name, 5)
+                    frac = min(substep_counter[0] / (expected + 1), 0.95)
+                    interpolated = lo + frac * (hi - lo)
+                    result_or_coro = progress_callback(
+                        interpolated, phase_detail,
+                    )
+                    if hasattr(result_or_coro, '__await__'):
+                        await result_or_coro
+
+            stage.set_substep_callback(_substep_cb)
+
+            t_stage = time.monotonic()
+            result = await stage.execute(client, job_description, prior_outputs)
+            stage_timings[stage.name] = time.monotonic() - t_stage
+
+            if not result.success:
+                return PipelineResult(
+                    success=False,
+                    outputs=prior_outputs,
+                    failed_stage=stage.name,
+                    error=result.error,
+                    git_sha=get_git_sha(),
+                    stage_timings=stage_timings,
+                )
+
+            await self._checkpoint_mgr.save_stage(
+                job_id, stage.name, result.output,
+            )
+            prior_outputs[stage.name] = result.output
+
+            # Synthesis stage produces combined output -- flatten sub-keys
+            if stage.name == "synthesis" and isinstance(result.output, dict):
+                for sub_key in ("context", "architecture", "design", "roadmap", "risk"):
+                    if sub_key in result.output:
+                        prior_outputs[sub_key] = result.output[sub_key]
+
+            if progress_callback:
+                result_or_coro = progress_callback(
+                    stage.progress_range[1], f"{stage.name}_complete",
+                )
+                if hasattr(result_or_coro, '__await__'):
+                    await result_or_coro
+
+        # Coherence check (reuse PlanningPipeline._coherence_check)
+        if progress_callback:
+            result_or_coro = progress_callback(0.955, "coherence_check")
+            if hasattr(result_or_coro, '__await__'):
+                await result_or_coro
+
+        t_coherence = time.monotonic()
+        coherence_pipeline = PlanningPipeline([], self._checkpoint_mgr)
+        coherence_fixes = await coherence_pipeline._coherence_check(
+            client, prior_outputs,
+        )
+        stage_timings["coherence_check"] = time.monotonic() - t_coherence
+        if coherence_fixes:
+            _PROTECTED_KEYS = {
+                "risks", "phases", "approaches", "adrs", "components",
+                "key_requirements", "constraints", "deliverables",
+            }
+            for section, fixes in coherence_fixes.items():
+                if not isinstance(fixes, dict):
+                    continue
+                if section not in prior_outputs or not isinstance(
+                    prior_outputs[section], dict
+                ):
+                    continue
+                safe_fixes = {
+                    k: v for k, v in fixes.items()
+                    if k not in _PROTECTED_KEYS
+                }
+                if safe_fixes:
+                    prior_outputs[section].update(safe_fixes)
+
+        end_sha = get_git_sha()
+        head_advanced = (
+            start_sha is not None
+            and end_sha is not None
+            and start_sha != end_sha
+        )
+
+        return PipelineResult(
+            success=True,
+            outputs=prior_outputs,
+            git_sha=start_sha,
+            head_advanced=head_advanced,
+            stage_timings=stage_timings,
+        )
