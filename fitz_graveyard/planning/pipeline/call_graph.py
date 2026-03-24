@@ -21,6 +21,7 @@ class CallGraphNode:
     symbols: list[str]
     one_line_summary: str
     depth: int
+    class_detail: str = ""  # e.g. "FitzKragEngine [answer -> Answer, ...]"
 
 
 @dataclass
@@ -45,7 +46,7 @@ class CallGraph:
             max_depth=self.max_depth,
         )
 
-    def format_for_prompt(self, max_nodes: int = 40) -> str:
+    def format_for_prompt(self, max_nodes: int = 60) -> str:
         """Format call graph as text for LLM prompt injection.
 
         Args:
@@ -53,20 +54,35 @@ class CallGraph:
                 by depth so closer files (entry points, depth-1 callees)
                 always appear before distant ones.
         """
-        # Only show edges between displayed nodes
-        shown = {n.file_path for n in self.nodes[:max_nodes]}
+        displayed = self.nodes[:max_nodes]
+        shown = {n.file_path for n in displayed}
+        node_map = {n.file_path: n for n in displayed}
+
+        # Annotate edges with class/method symbols when both sides
+        # have detail and the annotation isn't too long.
         lines = ["CALL GRAPH (caller -> callee):"]
         for src, tgt in self.edges:
-            if src in shown and tgt in shown:
-                lines.append(f"  {src} -> {tgt}")
+            if src not in shown or tgt not in shown:
+                continue
+            src_node = node_map.get(src)
+            tgt_node = node_map.get(tgt)
+            annotation = ""
+            if (
+                src_node and tgt_node
+                and src_node.class_detail and tgt_node.class_detail
+                and len(src_node.class_detail) + len(tgt_node.class_detail) < 400
+            ):
+                annotation = f"  # {src_node.class_detail} uses {tgt_node.class_detail}"
+            lines.append(f"  {src} -> {tgt}{annotation}")
+
         lines.append("")
         lines.append("FILES IN GRAPH:")
-        for node in self.nodes[:max_nodes]:
-            sym_str = ", ".join(node.symbols[:5])
+        for node in displayed:
+            detail = node.class_detail or ", ".join(node.symbols[:5])
             lines.append(
                 f"  [{node.depth}] {node.file_path}: "
                 f"{node.one_line_summary} "
-                f"({sym_str})"
+                f"({detail})"
             )
         if len(self.nodes) > max_nodes:
             lines.append(f"  ... and {len(self.nodes) - max_nodes} more files at deeper levels")
@@ -81,6 +97,7 @@ def extract_call_graph(
     max_depth: int = 3,
     max_nodes: int = 80,
     seed_files: list[str] | None = None,
+    source_dir: str | None = None,
 ) -> CallGraph:
     """Extract a call graph from task description + structural data.
 
@@ -182,17 +199,49 @@ def extract_call_graph(
         for neighbor, _score in scored:
             queue.append((neighbor, depth + 1))
 
+    # Parse raw (non-lowercased) structural index for class detail extraction
+    raw_entries = _parse_structural_index(structural_index, lowercase=False)
+
+    # For files missing class detail in the structural index (truncated
+    # large files), build a mini index entry from source via AST.
+    _disk_index_cache: dict[str, str] = {}
+
+    def _get_class_detail(file_path: str) -> str:
+        entry = raw_entries.get(file_path, "") or file_index_entries.get(file_path, "")
+        detail = _extract_class_detail(entry)
+        # If detail has no brackets (methods truncated), try disk fallback
+        if (detail and "[" in detail) or not source_dir:
+            return detail
+        # Disk fallback: build index entry for this one file.
+        # Use 200KB limit (vs default 50KB) since we're indexing
+        # single files — large files like engine.py are exactly the
+        # ones where class detail matters most.
+        if file_path not in _disk_index_cache:
+            try:
+                from fitz_graveyard.planning.agent.indexer import build_structural_index
+                idx = build_structural_index(
+                    source_dir, [file_path], max_file_bytes=200_000,
+                )
+                parsed = _parse_structural_index(idx, lowercase=False)
+                _disk_index_cache[file_path] = parsed.get(file_path, "")
+            except Exception:
+                _disk_index_cache[file_path] = ""
+        return _extract_class_detail(_disk_index_cache[file_path])
+
     # Build nodes and edges
     nodes = []
     for file_path, depth in sorted(visited.items(), key=lambda x: x[1]):
         entry = file_index_entries.get(file_path, "")
-        symbols = _extract_symbols(entry)
-        doc_line = _extract_doc_line(entry)
+        raw_entry = raw_entries.get(file_path, "") or entry
+        symbols = _extract_symbols(raw_entry or entry)
+        doc_line = _extract_doc_line(raw_entry or entry)
+        class_detail = _get_class_detail(file_path)
         nodes.append(CallGraphNode(
             file_path=file_path,
             symbols=symbols,
             one_line_summary=doc_line,
             depth=depth,
+            class_detail=class_detail,
         ))
 
     edges = []
@@ -258,8 +307,15 @@ def _extract_task_keywords(description: str) -> list[str]:
     return sorted(set(keywords))
 
 
-def _parse_structural_index(structural_index: str) -> dict[str, str]:
-    """Parse structural index into per-file lowercased text entries."""
+def _parse_structural_index(
+    structural_index: str, lowercase: bool = True,
+) -> dict[str, str]:
+    """Parse structural index into per-file text entries.
+
+    Args:
+        lowercase: If True, lowercases entry text (for keyword matching).
+            If False, preserves original case (for class detail extraction).
+    """
     current_file = ""
     file_entries: dict[str, str] = {}
     for line in structural_index.splitlines():
@@ -267,7 +323,7 @@ def _parse_structural_index(structural_index: str) -> dict[str, str]:
             current_file = line[3:].strip()
             file_entries[current_file] = ""
         elif current_file:
-            file_entries[current_file] += line.lower() + "\n"
+            file_entries[current_file] += (line.lower() if lowercase else line) + "\n"
     return file_entries
 
 
@@ -316,6 +372,59 @@ def _extract_symbols(index_entry: str) -> list[str]:
                 if name_match:
                     symbols.append(name_match.group(1))
     return symbols
+
+
+def _extract_class_detail(index_entry: str) -> str:
+    """Extract compact class detail from index entry.
+
+    Returns strings like 'FitzKragEngine [answer -> Answer, ...]'
+    preserving public method signatures from the structural index.
+    Private methods (starting with _) are stripped to keep detail compact.
+    Semicolon-separated when multiple classes exist.
+    """
+    parts = []
+    for line in index_entry.splitlines():
+        if line.startswith("classes:"):
+            raw = line[len("classes:"):].strip()
+            for cls_str in raw.split(";"):
+                cls_str = cls_str.strip()
+                if cls_str:
+                    parts.append(_strip_private_methods(cls_str))
+    if not parts:
+        for line in index_entry.splitlines():
+            if line.startswith("functions:"):
+                raw = line[len("functions:"):].strip()
+                if raw:
+                    # Strip private functions too
+                    funcs = [f.strip() for f in raw.split(",")]
+                    public = [f for f in funcs if f and not f.startswith("_")]
+                    parts.append(", ".join(public[:5]) if public else raw[:120])
+    return "; ".join(parts[:3])
+
+
+def _strip_private_methods(cls_str: str) -> str:
+    """Remove private methods from a class detail string.
+
+    'ClassName [__init__, _private -> None, public -> str]'
+    becomes 'ClassName [public -> str]'
+    """
+    bracket_start = cls_str.find("[")
+    if bracket_start == -1:
+        return cls_str
+    bracket_end = cls_str.rfind("]")
+    if bracket_end == -1:
+        return cls_str
+
+    prefix = cls_str[:bracket_start]
+    methods_str = cls_str[bracket_start + 1:bracket_end]
+
+    # Split on commas, keeping "method -> Type" together
+    methods = [m.strip() for m in methods_str.split(",")]
+    public = [m for m in methods if m and not m.startswith("_")]
+
+    if not public:
+        return prefix.strip()
+    return f"{prefix.strip()} [{', '.join(public)}]"
 
 
 def _extract_doc_line(index_entry: str) -> str:

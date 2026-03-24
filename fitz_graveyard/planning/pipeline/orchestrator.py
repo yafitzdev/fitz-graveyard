@@ -802,6 +802,7 @@ class DecomposedPipeline:
                 file_index_entries=file_index_entries,
                 max_depth=3,
                 seed_files=included,
+                source_dir=source_dir,
             )
             prior_outputs["_call_graph"] = call_graph
             prior_outputs["_call_graph_text"] = call_graph.format_for_prompt()
