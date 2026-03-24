@@ -21,7 +21,7 @@
 ```bash
 pip install fitz-graveyard
 
-fitz-graveyard plan "Add OAuth2 authentication with Google and GitHub providers"
+fitz plan "Add OAuth2 authentication with Google and GitHub providers"
 ```
 
 ---
@@ -65,11 +65,11 @@ And the best part: **as local models improve, your plans improve for free.**
 
 ### Why fitz-graveyard?
 
-**Hybrid model pipeline 🔀**
-> Use a small model (Qwen3.5-4B) for fast code retrieval and a larger model (Qwen3-Coder-30B or dense Qwen3.5-27B) for architectural reasoning. The orchestrator auto-switches between models via LM Studio CLI. Split reasoning mode breaks large LLM calls into ~8K-token pieces, enabling dense 27B models at 32K context.
+**Single model, zero swapping 🔀**
+> Qwen3-Coder-30B (MoE, 3B active) handles both retrieval and reasoning — benchmarked at 89% critical recall across 40 queries, faster than the 4B it replaced. No model switching, no VRAM churn. Split reasoning mode breaks large LLM calls into ~8K-token pieces, enabling dense 27B models at 32K context.
 
 **Reads your codebase first 🔍**
-> An agent builds a structural index of your codebase (classes, functions, imports), selects relevant files via LLM scan, expands through import chains and `__init__.py` facades, and auto-includes architectural hub files (files importing many subsystems). Every planning stage sees your actual code with tool access to read more on demand.
+> An agent builds a structural index of your codebase (classes, functions, imports), selects relevant files via LLM scan, expands through import chains and `__init__.py` facades, and auto-includes architectural hub files. Reasoning stages see a compact file manifest (~4K tokens) with on-demand `inspect_files` and `read_file` tools — 50+ files fit in 32K context.
 
 **Per-field extraction that small models can handle 🧩**
 > Each stage does 1 reasoning pass + 1 self-critique + N tiny JSON extractions (<2000 chars each). Even a 3B model can reliably produce structured output at this scale. Failed extractions get Pydantic defaults instead of crashing the stage — partial plan > no plan.
@@ -135,16 +135,16 @@ A retrieval agent pre-stage followed by 3 planning stages. Split reasoning mode 
 pip install fitz-graveyard
 
 # Queue a job
-fitz-graveyard plan "Build a plugin system for data transformations"
+fitz plan "Build a plugin system for data transformations"
 
 # Start the background worker
-fitz-graveyard run
+fitz run
 
 # Check on it
-fitz-graveyard status 1
+fitz status 1
 
 # Read the plan
-fitz-graveyard get 1
+fitz get 1
 ```
 
 **Optional extras:**
@@ -170,15 +170,15 @@ pip install "fitz-graveyard[dev]"          # pytest, build tools
 <br>
 
 ```bash
-fitz-graveyard plan "description"   # Queue a planning job
-fitz-graveyard run                  # Start background worker (Ctrl+C to stop)
-fitz-graveyard list                 # Show all jobs
-fitz-graveyard status <id>          # Check progress
-fitz-graveyard get <id>             # Print completed plan as markdown
-fitz-graveyard retry <id>           # Re-queue failed/interrupted job
-fitz-graveyard confirm <id>         # Approve optional API review
-fitz-graveyard cancel <id>          # Skip API review, finalize plan
-fitz-graveyard serve                # Start MCP server
+fitz plan "description"   # Queue a planning job
+fitz run                  # Start background worker (Ctrl+C to stop)
+fitz list                 # Show all jobs
+fitz status <id>          # Check progress
+fitz get <id>             # Print completed plan as markdown
+fitz retry <id>           # Re-queue failed/interrupted job
+fitz confirm <id>         # Approve optional API review
+fitz cancel <id>          # Skip API review, finalize plan
+fitz serve                # Start MCP server
 ```
 
 **Job lifecycle:**
@@ -204,7 +204,7 @@ Plug into Claude Code or Claude Desktop:
 {
   "mcpServers": {
     "fitz-graveyard": {
-      "command": "fitz-graveyard",
+      "command": "fitz",
       "args": ["serve"]
     }
   }
@@ -249,9 +249,9 @@ provider: lm_studio
 
 lm_studio:
   base_url: http://localhost:1234/v1
-  model: qwen3-coder-30b-a3b-instruct    # planning model
-  smart_model: qwen3.5-4b                 # retrieval model (null = use model)
-  fast_model: null                         # screening model (null = use model)
+  model: qwen3-coder-30b-a3b-instruct    # single model for retrieval + reasoning
+  smart_model: null                        # null = use model for all tiers
+  fast_model: null                         # null = use model for all tiers
   timeout: 600
   context_length: 65536                    # split reasoning auto-enables below 32768
 
@@ -277,7 +277,7 @@ llama_cpp:
 agent:
   enabled: true
   max_file_bytes: 50000
-  max_seed_files: 30    # files included inline in prompt (rest via tool-use)
+  max_seed_files: 50    # files available via inspect_files/read_file tools
   source_dir: null      # null = cwd at runtime
 
 confidence:

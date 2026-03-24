@@ -924,16 +924,28 @@ class PipelineStage(ABC):
             """Read the full source code of a file. Use this to inspect implementation details beyond the seed set."""
             return _resolve_file(path)
 
+        _MAX_READ_BATCH = 10  # prevent context blowup from reading too many files at once
+
         def read_files(paths: list[str]) -> str:
-            """Read multiple files at once. More efficient than calling read_file repeatedly. Returns each file with a header."""
+            """Read up to 10 files at once. Returns each file with a header."""
+            if len(paths) > _MAX_READ_BATCH:
+                paths = paths[:_MAX_READ_BATCH]
             results: list[str] = []
             for p in paths:
                 content = _resolve_file(p)
                 results.append(f"### {p}\n{content}")
             return "\n\n".join(results)
 
+        _MAX_INSPECT = 15  # prevent context blowup — model can call multiple times
+
         def inspect_files(paths: list[str]) -> str:
-            """Get structural detail (classes, methods, imports) for files without reading full source. Use this to decide which files to read_file() for full source."""
+            """Get structural detail (classes, methods, imports) for up to 15 files per call. Call multiple times for more files."""
+            if len(paths) > _MAX_INSPECT:
+                skipped = len(paths) - _MAX_INSPECT
+                paths = paths[:_MAX_INSPECT]
+                suffix = f"\n\n(Showing {_MAX_INSPECT} of {_MAX_INSPECT + skipped} requested. Call again with remaining paths.)"
+            else:
+                suffix = ""
             results: list[str] = []
             for p in paths:
                 entry = file_index_entries.get(p)
@@ -941,7 +953,7 @@ class PipelineStage(ABC):
                     results.append(f"## {p}\n{entry}")
                 else:
                     results.append(f"## {p}\n(not in structural index)")
-            return "\n\n".join(results) if results else "(no valid paths)"
+            return ("\n\n".join(results) if results else "(no valid paths)") + suffix
 
         tools = [read_file, read_files]
         if file_index_entries:

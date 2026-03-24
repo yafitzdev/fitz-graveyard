@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fitz-graveyard"
-version = "0.4.0"
+version = "0.4.1"
 description = "MCP server for local-first AI architectural planning using local LLMs"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -59,7 +59,7 @@ Issues = "https://github.com/yafitzdev/fitz-graveyard/issues"
 Documentation = "https://github.com/yafitzdev/fitz-graveyard#readme"
 
 [project.scripts]
-fitz-graveyard = "fitz_graveyard.cli:app"
+fitz = "fitz_graveyard.cli:app"
 
 [tool.pytest.ini_options]
 # -p fitz_graveyard: forces early import of fitz_graveyard/__init__.py which

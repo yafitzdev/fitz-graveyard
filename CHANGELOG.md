@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.4.1] - 2026-03-24
+
+### 🎉 Highlights
+
+**Single Model Pipeline** — The hybrid 4B/30B model split is gone. Qwen3-Coder-30B (MoE, 3B active) handles both retrieval and reasoning — benchmarked at 89% critical recall across 40 queries, actually faster than the 4B (18s vs 22s per query). No model switching, no VRAM churn, no CUDA context destruction.
+
+**Manifest + inspect_files Tool** — A/B tested 3 context delivery approaches (10 runs each, temp=0). Inline seed source was noise the model ignored (5K tokens wasted). Full structural index in the prompt was load-bearing but expensive. Solution: one-liner file manifest in prompt (~4K tokens) + `inspect_files(paths)` tool for on-demand structural detail. 40% faster reasoning, 10/10 consistency, zero quality regression. 50+ files now fit in 32K context with headroom for tool use.
+
+**Retrieval Quality Benchmark** — 40-query ground truth eval for code retrieval with critical/relevant file scoring, per-category breakdown, and most-missed file tracking. Used to systematically evaluate all optimization candidates.
+
+### 🚀 Added
+
+- `inspect_files(paths)` tool in reasoning pipeline — returns classes, methods, imports for requested files on demand (`8dd1dfde`)
+- File manifest context delivery: one-liner (path + docstring) replaces full structural index in `raw_summaries` (`8dd1dfde`)
+- `file_index_entries` dict in agent output for `inspect_files` tool serving (`8dd1dfde`)
+- 40-query retrieval quality benchmark with ground truth (`12c9de50`)
+
+### 🔄 Changed
+
+- Default `max_seed_files` bumped from 30 to 50 — manifest approach makes more files cheap (`8dd1dfde`)
+- Reasoning prompts no longer include inline seed file source (~5K tokens saved per call) (`8dd1dfde`)
+- Tool hint updated: inspect-first workflow (inspect_files → read_file) replaces seed-set exploration (`8dd1dfde`)
+- Health check retries on model load failure instead of crashing (`e904b587`)
+- Error messages show clean text instead of full tracebacks (`664e48dc`)
+
+### 🗑️ Removed
+
+- Hybrid model pipeline (separate 4B retrieval + 30B reasoning) — single model handles both (`8dd1dfde`)
+- Inline seed file source in `raw_summaries` — replaced by manifest + inspect_files tool (`8dd1dfde`)
+
+### 🐛 Fixed
+
+- `health_check` no longer force-switches models when checking provider availability (`e904b587`)
+
+---
+
 ## [0.4.0] - 2026-03-15
 
 ### 🎉 Highlights
@@ -208,7 +244,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - 391 tests
 
-[Unreleased]: https://github.com/yafitzdev/fitz-graveyard/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/yafitzdev/fitz-graveyard/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/yafitzdev/fitz-graveyard/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/yafitzdev/fitz-graveyard/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/yafitzdev/fitz-graveyard/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/yafitzdev/fitz-graveyard/compare/v0.1.0...v0.2.0
