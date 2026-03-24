@@ -111,6 +111,7 @@ class LMStudioClient:
         gpu_guard: "GPUTemperatureGuard | None" = None,
         fast_model: str | None = None,
         smart_model: str | None = None,
+        api_key: str | None = None,
     ):
         if AsyncOpenAI is None:
             raise ImportError(
@@ -126,7 +127,7 @@ class LMStudioClient:
         self._gpu_guard = gpu_guard
         self._fast_model = fast_model
         self._smart_model = smart_model
-        self._client = AsyncOpenAI(base_url=base_url, api_key="lm-studio", timeout=timeout)
+        self._client = AsyncOpenAI(base_url=base_url, api_key=api_key or "lm-studio", timeout=timeout)
         self._call_metrics: list[dict] = []
 
     @property

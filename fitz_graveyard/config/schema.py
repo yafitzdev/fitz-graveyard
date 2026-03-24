@@ -147,6 +147,10 @@ class LMStudioConfig(BaseModel):
         default=65536,
         description="Context length to use when auto-loading the model via lms CLI",
     )
+    api_key: str | None = Field(
+        default=None,
+        description="API key for OpenAI-compatible endpoints (OpenRouter, etc.)",
+    )
 
 
 class LlamaCppModelConfig(BaseModel):
