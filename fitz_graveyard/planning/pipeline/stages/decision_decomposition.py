@@ -110,6 +110,18 @@ class DecisionDecompositionStage(PipelineStage):
                         if dep in ids
                     ]
 
+            # Validate completeness and inject synthetic decisions
+            call_graph = prior_outputs.get("_call_graph")
+            if call_graph:
+                from fitz_graveyard.planning.pipeline.decomposition_validator import (
+                    validate_and_augment,
+                )
+                decisions = validate_and_augment(decisions, call_graph)
+                parsed["decisions"] = decisions
+                logger.info(
+                    f"Stage '{self.name}': {len(decisions)} decisions after validation"
+                )
+
             return StageResult(
                 stage_name=self.name,
                 success=True,
