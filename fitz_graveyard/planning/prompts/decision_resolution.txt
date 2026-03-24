@@ -19,6 +19,12 @@ DECISION {decision_id} ({decision_category}):
 3. Cite specific evidence from the source code (file:method, line references, types).
 4. State what constraints this decision creates for downstream decisions.
 
+## Contract preservation rules
+
+- NEVER modify the signature or return type of an existing public method. Callers depend on the current contract.
+- When adding new capability (e.g., streaming), add a PARALLEL method (e.g., generate_stream() alongside generate()). The existing method must continue to work identically.
+- Emit "existing method X() must not be modified" as a downstream constraint so all subsequent decisions respect this.
+
 CRITICAL: Do NOT invent methods, classes, or APIs that don't exist in the source code above. If the source code doesn't contain what you need, say so explicitly.
 
 Respond with ONLY valid JSON:
