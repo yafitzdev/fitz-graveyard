@@ -115,7 +115,10 @@ class TestCallGraphExtraction:
 
     def test_format_for_prompt(self):
         graph = CallGraph(
-            nodes=[],
+            nodes=[
+                CallGraphNode("a.py", ["X"], "doc a", 0),
+                CallGraphNode("b.py", ["Y"], "doc b", 1),
+            ],
             edges=[("a.py", "b.py")],
             entry_points=["a.py"],
             max_depth=1,
@@ -123,6 +126,7 @@ class TestCallGraphExtraction:
         text = graph.format_for_prompt()
         assert "a.py" in text
         assert "b.py" in text
+        assert "a.py -> b.py" in text
 
     def test_segment_for_files(self):
         graph = CallGraph(

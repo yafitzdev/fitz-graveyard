@@ -367,6 +367,7 @@ class AgentContextGatherer:
                 "full_structural_index": full_index,
                 "agent_files": {
                     "total_screened": len(file_paths),
+                    "all_files": file_paths,
                     "scan_hits": scan_hits,
                     "selected": included,
                     "included": included,

@@ -85,6 +85,25 @@ class DecisionResolutionStage(PipelineStage):
     Token budget per call: ~4-8K input
     """
 
+    @staticmethod
+    def _read_from_disk(source_dir: str, rel_path: str) -> str | None:
+        """Read a file from disk as fallback for files not in the agent pool."""
+        from pathlib import Path
+        full = Path(source_dir) / rel_path
+        if not full.is_file():
+            return None
+        try:
+            text = full.read_bytes()[:50_000].decode("utf-8", errors="replace")
+            try:
+                from fitz_ai.engines.fitz_krag.context.compressor import compress_python
+                if rel_path.endswith(".py"):
+                    text = compress_python(text)
+            except ImportError:
+                pass
+            return text
+        except OSError:
+            return None
+
     @property
     def name(self) -> str:
         return "decision_resolution"
@@ -111,6 +130,7 @@ class DecisionResolutionStage(PipelineStage):
         file_contents: dict[str, str],
         upstream_constraints: list[str],
         file_index_entries: dict[str, str],
+        source_dir: str | None = None,
     ) -> list[dict]:
         """Build prompt for resolving one atomic decision."""
         relevant_files = decision.get("relevant_files", [])
@@ -124,6 +144,10 @@ class DecisionResolutionStage(PipelineStage):
         source_blocks = []
         for fpath in relevant_files[:3]:
             content = file_contents.get(fpath)
+            if not content and source_dir:
+                # Disk fallback for files discovered by call graph BFS
+                # beyond the selected set
+                content = self._read_from_disk(source_dir, fpath)
             if content:
                 source_blocks.append(f"### {fpath}\n```python\n{content}\n```")
             else:
@@ -178,6 +202,7 @@ class DecisionResolutionStage(PipelineStage):
                 )
             file_contents = prior_outputs.get("_file_contents", {})
             file_index_entries = prior_outputs.get("_file_index_entries", {})
+            source_dir = prior_outputs.get("_source_dir")
 
             # Restore partial resolutions from checkpoint (crash recovery)
             already_resolved: dict[str, dict] = {}
@@ -220,6 +245,7 @@ class DecisionResolutionStage(PipelineStage):
                     file_contents=file_contents,
                     upstream_constraints=upstream,
                     file_index_entries=file_index_entries,
+                    source_dir=source_dir,
                 )
 
                 t0 = time.monotonic()

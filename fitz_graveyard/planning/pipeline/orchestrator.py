@@ -775,23 +775,33 @@ class DecomposedPipeline:
             source_dir = prior_outputs.get("_source_dir", "")
             agent_ctx = prior_outputs.get("_agent_context", {})
             agent_files = agent_ctx.get("agent_files", {})
-            included = agent_files.get("included", [])
 
-            if source_dir and included:
-                forward_map_raw, _ = build_import_graph(source_dir, included)
+            # Build import graph from ALL indexed files so BFS can
+            # traverse edges beyond the selected 30 (e.g. engine.py ->
+            # synthesizer.py when synthesizer.py wasn't selected).
+            # Keyword matching stays on the selected-only structural
+            # index to keep entry points focused.
+            all_files = agent_files.get("all_files", [])
+            if not all_files:
+                all_files = agent_files.get("included", [])
+
+            if source_dir and all_files:
+                forward_map_raw, _ = build_import_graph(source_dir, all_files)
                 forward_map = {k: v for k, v in forward_map_raw.items()}
             else:
                 forward_map = {}
 
-            synthesized = prior_outputs.get("_gathered_context", "")
+            structural_index = prior_outputs.get("_gathered_context", "")
             file_index_entries = prior_outputs.get("_file_index_entries", {})
+            included = agent_files.get("included", [])
 
             call_graph = extract_call_graph(
                 task_description=job_description,
-                structural_index=synthesized,
+                structural_index=structural_index,
                 forward_map=forward_map,
                 file_index_entries=file_index_entries,
                 max_depth=3,
+                seed_files=included,
             )
             prior_outputs["_call_graph"] = call_graph
             prior_outputs["_call_graph_text"] = call_graph.format_for_prompt()
