@@ -16,13 +16,14 @@ DECISION {decision_id} ({decision_category}):
 
 1. Read the source code carefully. Note exact method signatures, return types, and data flow.
 2. Answer the decision question concretely. Do not hedge or say "it depends."
-3. Cite specific evidence from the source code (file:method, line references, types).
+3. Cite specific evidence with FULL method signatures — never abbreviate with "...". Write every parameter name and type.
 4. State what constraints this decision creates for downstream decisions.
 
 ## Contract preservation rules
 
 - NEVER modify the signature or return type of an existing public method. Callers depend on the current contract.
 - When adding new capability (e.g., streaming), add a PARALLEL method (e.g., generate_stream() alongside generate()). The existing method must continue to work identically.
+- A parallel method MUST accept the SAME parameters as the original. Do not simplify or remove parameters. If generate() takes (query, context, results, answer_mode, gap_context, conflict_context), then generate_stream() must take those same parameters.
 - Emit "existing method X() must not be modified" as a downstream constraint so all subsequent decisions respect this.
 
 CRITICAL: Do NOT invent methods, classes, or APIs that don't exist in the source code above. If the source code doesn't contain what you need, say so explicitly.
@@ -33,8 +34,8 @@ Respond with ONLY valid JSON:
   "decision": "What you decided -- a concrete, specific answer",
   "reasoning": "Why, citing specific source code evidence",
   "evidence": [
-    "file.py: MethodName() returns Type -- proves X",
-    "other.py: ClassDef shows pattern Y"
+    "file.py: ClassName.method_name(param1: Type1, param2: Type2) -> ReturnType -- proves X",
+    "other.py: function_name(param1, param2, param3) -> Type -- shows Y"
   ],
   "constraints_for_downstream": [
     "Constraint that downstream decisions must respect",

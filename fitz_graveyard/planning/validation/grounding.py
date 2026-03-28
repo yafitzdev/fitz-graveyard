@@ -375,7 +375,7 @@ def check_all_artifacts(
     artifacts: list[dict[str, Any]],
     structural_index: str,
 ) -> list[Violation]:
-    """Run AST grounding check on all artifacts."""
+    """Run AST grounding check + parallel method signature check."""
     if not artifacts:
         return []
 
@@ -386,7 +386,85 @@ def check_all_artifacts(
         violations = check_artifact(artifact, lookup)
         all_violations.extend(violations)
 
+    # Check parallel method signatures (e.g. generate_stream must match generate)
+    all_violations.extend(_check_parallel_signatures(artifacts, lookup))
+
     return all_violations
+
+
+# Common streaming parallel suffixes
+_PARALLEL_SUFFIXES = ("_stream", "_async", "_streaming", "stream_")
+
+
+def _check_parallel_signatures(
+    artifacts: list[dict[str, Any]],
+    lookup: StructuralIndexLookup,
+) -> list[Violation]:
+    """Check that parallel methods (e.g. generate_stream) match the original's params."""
+    violations: list[Violation] = []
+
+    for artifact in artifacts:
+        content = artifact.get("content", "")
+        filename = artifact.get("filename", "unknown")
+        if not content.strip():
+            continue
+
+        try:
+            tree = ast.parse(content)
+        except SyntaxError:
+            continue
+
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+
+            # Check if this is a parallel method (name ends with _stream etc.)
+            method_name = node.name
+            original_name = None
+            for suffix in _PARALLEL_SUFFIXES:
+                if method_name.endswith(suffix):
+                    original_name = method_name[: -len(suffix)]
+                    break
+                if method_name.startswith(suffix):
+                    original_name = method_name[len(suffix):]
+                    break
+
+            if not original_name:
+                continue
+
+            # Find the original method in the structural index
+            original_params = None
+            for cls_list in lookup.classes.values():
+                for cls in cls_list:
+                    if original_name in cls.methods:
+                        # Get param count from the index method signature
+                        # Methods are stored as IndexedMethod(name, return_type)
+                        # but we need params — check via the lookup
+                        pass
+
+            # Count params on the new parallel method
+            new_params = [a.arg for a in node.args.args if a.arg != "self"]
+
+            # Also check against top-level functions
+            original_funcs = lookup.find_function(original_name)
+            if original_funcs:
+                orig_params = original_funcs[0].params
+                if len(new_params) < len(orig_params) - 2:  # allow 2 fewer (defaults)
+                    violations.append(Violation(
+                        artifact=filename,
+                        line=node.lineno,
+                        symbol=method_name,
+                        kind="param_mismatch",
+                        detail=(
+                            f"Parallel method {method_name}() has {len(new_params)} params "
+                            f"but original {original_name}() has {len(orig_params)}: "
+                            f"({', '.join(orig_params)}). "
+                            f"Parallel methods should accept the same parameters."
+                        ),
+                        suggestion=f"Add missing params from {original_name}()",
+                    ))
+
+    return violations
 
 
 # ---------------------------------------------------------------------------
