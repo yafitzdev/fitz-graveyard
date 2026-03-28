@@ -879,6 +879,43 @@ class DecomposedPipeline:
                 if hasattr(result_or_coro, '__await__'):
                     await result_or_coro
 
+        # Grounding validation (AST + LLM)
+        if progress_callback:
+            result_or_coro = progress_callback(0.94, "grounding_validation")
+            if hasattr(result_or_coro, '__await__'):
+                await result_or_coro
+
+        t_grounding = time.monotonic()
+        try:
+            from fitz_graveyard.planning.validation.grounding import validate_grounding
+
+            artifacts = prior_outputs.get("design", {}).get("artifacts", [])
+            full_index = prior_outputs.get(
+                "_agent_context", {},
+            ).get("full_structural_index", "")
+            # Fall back to gathered context if full index unavailable
+            if not full_index:
+                full_index = prior_outputs.get("_gathered_context", "")
+            resolutions = prior_outputs.get(
+                "decision_resolution", {},
+            ).get("resolutions", [])
+
+            grounding_report = await validate_grounding(
+                artifacts=artifacts,
+                structural_index=full_index,
+                resolutions=resolutions,
+                client=client,
+            )
+            prior_outputs["_grounding_validation"] = grounding_report.to_dict()
+            logger.info(
+                f"Grounding validation: {grounding_report.total_violations} "
+                f"AST violations"
+            )
+        except Exception as e:
+            logger.warning(f"Grounding validation failed (non-fatal): {e}")
+            prior_outputs["_grounding_validation"] = {"error": str(e)}
+        stage_timings["grounding_validation"] = time.monotonic() - t_grounding
+
         # Coherence check (reuse PlanningPipeline._coherence_check)
         if progress_callback:
             result_or_coro = progress_callback(0.955, "coherence_check")

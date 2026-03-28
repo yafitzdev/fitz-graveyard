@@ -537,6 +537,9 @@ def decomposed(
         "Add token usage tracking so I can see how many LLM tokens each query costs",
         help="Job description / query",
     ),
+    score_plans: bool = typer.Option(
+        False, "--score", help="Prepare scoring prompts after generation",
+    ),
 ):
     """Run decomposed pipeline benchmarks with fixed retrieval context."""
     context = json.loads(Path(context_file).read_text())
@@ -564,6 +567,57 @@ def decomposed(
 
     asyncio.run(_run_all())
     _print_reasoning_summary(all_results, out_dir)
+
+    if score_plans:
+        structural_index = context.get("synthesized", "")
+        _prepare_scoring(str(out_dir), source_dir, query, structural_index)
+
+
+# ------------------------------------------------------------------
+# Sonnet-as-Judge scoring (prompt preparation)
+# ------------------------------------------------------------------
+
+def _prepare_scoring(
+    results_dir: str,
+    source_dir: str,
+    query: str,
+    structural_index: str,
+) -> None:
+    """Prepare scoring prompts for Claude Code evaluation."""
+    from .eval_plans import prepare_batch
+
+    plan_dir = Path(results_dir)
+    prompts = prepare_batch(
+        plan_dir, query, structural_index, Path(source_dir),
+    )
+    logger.info(
+        f"Wrote {len(prompts)} scoring prompts to {plan_dir}. "
+        f"Score them via Claude Code subagents."
+    )
+
+
+@app.command("prepare-scoring")
+def prepare_scoring(
+    results_dir: str = typer.Option(..., help="Directory containing plan_*.json files"),
+    source_dir: str = typer.Option(..., help="Target codebase directory"),
+    context_file: str = typer.Option(..., help="ideal_context.json for structural index"),
+    query: str = typer.Option(
+        "Add token usage tracking so I can see how many LLM tokens each query costs",
+        help="The task query these plans address",
+    ),
+):
+    """Prepare scoring prompts for Claude Code evaluation.
+
+    Writes score_prompt_NN.md files alongside the plans. Feed these
+    to Claude Code subagents or read them in conversation to score.
+    """
+    context = json.loads(Path(context_file).read_text())
+    structural_index = context.get("synthesized", "")
+    if not structural_index:
+        logger.error("No 'synthesized' field in context file")
+        raise typer.Exit(1)
+
+    _prepare_scoring(results_dir, source_dir, query, structural_index)
 
 
 if __name__ == "__main__":

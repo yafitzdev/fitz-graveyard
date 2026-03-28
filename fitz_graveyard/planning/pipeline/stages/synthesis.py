@@ -254,6 +254,79 @@ class SynthesisStage(PipelineStage):
     def parse_output(self, raw_output: str) -> dict[str, Any]:
         return extract_json(raw_output)
 
+    @staticmethod
+    def _build_artifact_source_context(
+        prior_outputs: dict[str, Any],
+    ) -> str:
+        """Build a focused cheat sheet of real symbols for artifact writing.
+
+        Extracts class names, method names, and function signatures from the
+        structural index for files referenced in decision resolutions. Compact
+        (~30-50 lines) so the model knows what exists without being overwhelmed.
+        """
+        # Collect file paths from decision resolutions
+        resolution_output = prior_outputs.get("decision_resolution", {})
+        resolutions = resolution_output.get("resolutions", [])
+        referenced_files: set[str] = set()
+        for r in resolutions:
+            for ev in r.get("evidence", []):
+                if ":" in ev:
+                    path = ev.split(":")[0].strip()
+                    if path.endswith(".py"):
+                        referenced_files.add(path)
+
+        if not referenced_files:
+            return ""
+
+        # Get full structural index (covers all codebase files)
+        full_index = prior_outputs.get(
+            "_agent_context", {},
+        ).get("full_structural_index", "")
+        if not full_index:
+            full_index = prior_outputs.get("_gathered_context", "")
+        if not full_index:
+            return ""
+
+        # Parse index into per-file sections
+        sections: dict[str, list[str]] = {}
+        current_file = ""
+        for line in full_index.split("\n"):
+            if line.startswith("## "):
+                current_file = line[3:].strip()
+            elif current_file and line.strip():
+                sections.setdefault(current_file, []).append(line)
+
+        # Build compact cheat sheet — only files referenced in decisions
+        parts = [
+            "## ARTIFACT REFERENCE — real symbols from the codebase\n"
+            "When writing artifact code, use ONLY these class names, method "
+            "names, field names, and function signatures. If a method is not "
+            "listed here, it does NOT exist — do not invent it.\n"
+        ]
+        matched = 0
+        for ref_path in sorted(referenced_files):
+            # Match against index sections (may need partial match)
+            for idx_path, lines in sections.items():
+                if ref_path == idx_path or ref_path.endswith(idx_path) or idx_path.endswith(ref_path):
+                    parts.append(f"\n### {idx_path}")
+                    for line in lines:
+                        # Include classes and functions lines, skip imports/exports
+                        if line.startswith(("classes:", "functions:", "doc:")):
+                            parts.append(f"  {line}")
+                    matched += 1
+                    break
+
+        if matched == 0:
+            return ""
+
+        result = "\n".join(parts)
+        logger.info(
+            f"Stage 'synthesis': artifact cheat sheet: "
+            f"{len(referenced_files)} files referenced, "
+            f"{matched} matched ({len(result)} chars)"
+        )
+        return result
+
     def _format_resolutions(self, resolutions: list[dict]) -> str:
         """Format resolved decisions for the synthesis prompt."""
         lines = []
@@ -322,10 +395,18 @@ class SynthesisStage(PipelineStage):
                 )
                 arch_merged.update(partial)
 
-            # Design fields
+            # Design fields — artifacts get source code of relevant files
+            artifact_source_context = self._build_artifact_source_context(
+                prior_outputs,
+            )
             design_merged: dict[str, Any] = {}
             for group in _DESIGN_FIELD_GROUPS:
-                extra = extract_context if group["label"] in {"adrs", "artifacts", "components", "integrations"} else ""
+                if group["label"] == "artifacts" and artifact_source_context:
+                    extra = artifact_source_context
+                elif group["label"] in {"adrs", "artifacts", "components", "integrations"}:
+                    extra = extract_context
+                else:
+                    extra = ""
                 partial = await self._extract_field_group(
                     client, reasoning, group["fields"],
                     group["schema"], group["label"],
