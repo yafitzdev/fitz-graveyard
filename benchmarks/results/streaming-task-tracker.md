@@ -27,6 +27,10 @@
 | 13a-e | 2026-03-28 | qwen3-coder-next-reap (40B) | Q5_K_S | 65K | `65977d5` | `81b5abf` | same as run 12 (5-run variance test) | 12-14 | 287-328s | 6.8 | 7.6 | 6.4 | 4.2 | 4.4 | 7.2 | **36.6 avg (30-41)** | 5 runs: 30, 39, 41, 33, 40. Stdev=4.8. Median=39. Contract consistently strong (5-9, avg 7.6). Codebase alignment consistently weak (3-5, avg 4.2). Run 9's 39 was NOT an outlier — it's near the median. |
 | 14a-e | 2026-03-28 | qwen3-coder-next-reap (40B) | Q5_K_S | 65K | `65977d5` | `81b5abf` | baseline no fixes (5-run variance) | 11-14 | 260-344s | 6.6 | 7.4 | 5.6 | 4.4 | 4.6 | 7.0 | **35.6 avg (33-43)** | 5 runs: 34, 33, 43, 33, 35. Stdev=4.2. Baseline without any fixes. |
 | 15a-j | 2026-03-28 | qwen3-coder-next-reap (40B) | Q5_K_S | 65K | `65977d5` | `81b5abf` | template-constrained attrs (10-run) | 10-13 | 247-343s | 7.3 | 8.0 | 5.4 | 4.8 | 5.0 | 7.3 | **37.8 avg (29-47)** | 10 runs. TWO plans hit 45+ (47, 45). Alignment 4.8 vs baseline 4.4 (+0.4). Implementability 5.0 vs 4.6 (+0.4). Contract 8.0 vs 7.4 (+0.6). Higher variance (stdev 5.7) but higher ceiling. |
+| # | Date | Model | Quant | Ctx | Pipeline SHA | Codebase SHA | Pipeline | Decisions | Time | Files | Contract | Consistency | Alignment | Implement | Scope | **Total** | Notes |
+| 16a-j | 2026-03-28 | qwen3-coder-next-reap (40B) | Q5_K_S | 65K | `65977d5` | `81b5abf` | artifact resolution BROKEN (12-21 arts) | 11-14 | 331-505s | 6.4 | 6.1 | 4.3 | 4.4 | 4.4 | 6.5 | **32.1 avg (25-48)** | 10 runs. BUG: _infer_needed_artifacts fell back to all evidence files → 12-21 artifacts per plan, rewriting entire codebase. Artifacts contradicted decisions. One outlier at 48 (plan 6 with alignment 8). Mostly worse — artifacts too long, too many files, more fabrication surface. |
+| 17a-j | 2026-03-28 | qwen3-coder-next-reap (40B) | Q5_K_S | 65K | `65977d5` | `81b5abf` | artifact resolution BUGFIX (context not in prior_outputs) | 10-15 | 251-344s | 7.3 | 8.0 | 5.4 | 4.8 | 5.0 | 7.3 | **37.8 avg (29-47)** | 10 runs. BUG: prior_outputs["context"] not populated before resolve_artifacts(). All 10 runs fell through to template-constrained fallback. Results identical to run 15. Bug not artifact resolution — was never tested. |
+| 18a-j | 2026-03-28 | qwen3-coder-next-reap (40B) | Q5_K_S | 65K | `65977d5` | `81b5abf` | artifact resolution FIXED (3-5 arts, context injected) | 12-15 | 270-344s | 7.1 | 7.8 | 4.8 | 3.8 | 4.0 | 7.0 | **34.5 avg (30-41)** | 10 runs. Artifact resolution finally working (3-5 artifacts). REGRESSION vs template (37.8→34.5). Alignment DROPPED 4.8→3.8. More detailed code = more surface area for fabrication. Model writes longer engine artifacts with real-looking but wrong method calls. Lowest stdev (3.7) but lowest mean. |
 
 ### Column Key
 
@@ -58,6 +62,38 @@ Track pipeline or codebase changes that affect comparability between runs.
 | Date | Component | SHA | Change | Expected Impact |
 |------|-----------|-----|--------|-----------------|
 | 2026-03-27 | — | — | Baseline run — no changes | — |
+| 2026-03-28 | synthesis.py | — | Source code injection (27K chars) into artifact extraction | HURT (32 vs 36). Too much context confused model. |
+| 2026-03-28 | synthesis.py | — | Compact cheat sheet (4K, class/method names only) | HELPED slightly (+1). Less noise than source dump. |
+| 2026-03-28 | synthesis.py | — | Template-constrained: auto-extract instance attrs from __init__ via AST | HELPED (+2.2 mean, +4 ceiling). Model uses real attr names 10x more. |
+| 2026-03-28 | indexer.py | — | Method flow extraction (extract_method_flows) — NOT wired in | HURT when wired (both in index and cheat sheet). Available as utility. |
+| 2026-03-28 | decision_resolution.txt | — | Ban line numbers in evidence citations | NO EFFECT within variance. |
+| 2026-03-28 | indexer.py | — | Add param names to class method signatures | NO EFFECT within variance. |
+| 2026-03-28 | artifact_resolution.py | — | New stage: per-artifact LLM calls from resolutions + source code | HURT (-3.3 mean). More detailed code = more fabrication surface. |
+| 2026-03-28 | artifact_resolution.py | — | Fixed: cap at needed_artifacts only, no full-file rewrites | Still HURT (-3.3). Detailed artifacts with wrong method names. |
+
+## Conclusions (as of 2026-03-28)
+
+**Winner: Template-constrained extraction** (run 15, mean 37.8/60)
+- Auto-extracts instance attributes from __init__ via AST
+- Injects compact list of `self._xxx = ClassName(...)` into artifact extraction prompt
+- Model uses real attribute names instead of fabricating
+
+**What we learned about this model (qwen3-coder-next-reap 40B Q5_K_S):**
+- Contract preservation is reliably strong (7-9, mean 8.0)
+- File identification is solid (6-8, mean 7.3)
+- Scope calibration is good (6-8, mean 7.3)
+- Codebase alignment is the bottleneck (3-8, mean 4.8) — model fabricates method names
+- More context HURTS: source dump (27K), method flows, detailed artifacts all regressed
+- Less is more: compact cheat sheet (4K) > source dump (27K) > method flows
+- The model has a fixed context budget — any additional info displaces something useful
+
+**Root cause of fabrication:**
+- Synthesis writes prose ("build context from chunks")
+- Extraction materializes prose into code (`self._build_context()` — doesn't exist)
+- Resolution stage gets it RIGHT (reads source, cites real attrs)
+- But synthesis loses the grounding by abstracting to prose
+- Direct code generation from structural index: 0 fabrications in 10 isolated runs
+- BUT when the model writes longer, more detailed code: MORE fabrication, not less
 
 ---
 

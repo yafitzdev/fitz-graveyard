@@ -522,7 +522,8 @@ class SynthesisStage(PipelineStage):
                 )
                 arch_merged.update(partial)
 
-            # Design fields — artifacts get source code of relevant files
+            # Design fields — artifacts get template-constrained cheat sheet
+            # (with auto-extracted instance attributes from __init__)
             artifact_source_context = self._build_artifact_source_context(
                 prior_outputs,
             )
