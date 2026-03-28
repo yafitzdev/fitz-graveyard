@@ -223,6 +223,144 @@ def _extract_python(content: str) -> str:
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# Method flow extraction — internal pipeline of complex methods
+# ---------------------------------------------------------------------------
+
+_FLOW_SKIP_METHODS = frozenset({
+    "info", "debug", "warning", "error", "exception",
+    "get", "set", "append", "extend", "update", "pop", "items", "keys", "values",
+    "strip", "lower", "upper", "replace", "split", "join", "format", "encode", "decode",
+    "result", "submit", "add", "remove", "clear", "copy",
+    "startswith", "endswith", "isinstance", "issubclass",
+})
+
+_FLOW_SKIP_OBJECTS = frozenset({
+    "logger", "log", "timings", "time", "uuid", "re", "os", "sys", "json",
+    "pool", "math", "hashlib", "threading",
+})
+
+# Minimum method body lines to extract flow (short methods aren't pipelines)
+_MIN_METHOD_LINES = 30
+
+
+def extract_method_flows(content: str, min_lines: int = _MIN_METHOD_LINES) -> str:
+    """Extract internal pipeline flow of complex methods via AST.
+
+    For each method longer than min_lines, resolves self._component.method()
+    calls to their component types (from __init__ assignments) and produces
+    a compact step list showing the method's internal pipeline.
+
+    Returns a multi-line string with one section per complex method, or
+    empty string if no complex methods found.
+    """
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        return ""
+
+    results: list[str] = []
+
+    for cls_node in ast.iter_child_nodes(tree):
+        if not isinstance(cls_node, ast.ClassDef):
+            continue
+
+        # Build component type map from __init__ assignments:
+        # self._synthesizer = CodeSynthesizer(...) → _synthesizer → CodeSynthesizer
+        component_types: dict[str, str] = {}
+        for method in ast.iter_child_nodes(cls_node):
+            if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)) and method.name == "__init__":
+                for node in ast.walk(method):
+                    if not isinstance(node, ast.Assign):
+                        continue
+                    for target in node.targets:
+                        if (isinstance(target, ast.Attribute)
+                                and isinstance(target.value, ast.Name)
+                                and target.value.id == "self"
+                                and target.attr.startswith("_")):
+                            if isinstance(node.value, ast.Call):
+                                if isinstance(node.value.func, ast.Name):
+                                    component_types[target.attr] = node.value.func.id
+                                elif isinstance(node.value.func, ast.Attribute):
+                                    component_types[target.attr] = node.value.func.attr
+
+        # Extract flow for each complex method
+        for method in ast.iter_child_nodes(cls_node):
+            if not isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if method.name.startswith("__"):
+                continue
+            body_lines = (method.end_lineno or 0) - (method.lineno or 0)
+            if body_lines < min_lines:
+                continue
+
+            steps = _extract_flow_steps(method, component_types)
+            if len(steps) < 3:
+                continue
+
+            results.append(
+                f"flow {cls_node.name}.{method.name}(): "
+                + " → ".join(steps)
+            )
+
+    return "\n".join(results)
+
+
+def _extract_flow_steps(
+    method: ast.FunctionDef | ast.AsyncFunctionDef,
+    component_types: dict[str, str],
+) -> list[str]:
+    """Extract ordered pipeline steps from a method body."""
+    calls: list[tuple[int, str]] = []
+
+    for node in ast.walk(method):
+        if not isinstance(node, ast.Call):
+            continue
+
+        line = getattr(node, "lineno", 0)
+
+        if isinstance(node.func, ast.Attribute):
+            attr = node.func.attr
+            if attr in _FLOW_SKIP_METHODS:
+                continue
+
+            # self._component.method()
+            if (isinstance(node.func.value, ast.Attribute)
+                    and isinstance(node.func.value.value, ast.Name)
+                    and node.func.value.value.id == "self"):
+                component = node.func.value.attr
+                if component in _FLOW_SKIP_OBJECTS:
+                    continue
+                comp_type = component_types.get(component, component.lstrip("_"))
+                calls.append((line, f"{comp_type}.{attr}()"))
+
+            # self.method()
+            elif (isinstance(node.func.value, ast.Name)
+                  and node.func.value.id == "self"):
+                if not attr.startswith("__"):
+                    calls.append((line, f"self.{attr}()"))
+
+        elif isinstance(node.func, ast.Name):
+            name = node.func.id
+            if name in _FLOW_SKIP_OBJECTS:
+                continue
+            # Include constructors and notable functions
+            if name[0].isupper() or name in (
+                "run_constraints", "extract_features", "compress_results",
+                "build_retrieval_profile",
+            ):
+                calls.append((line, f"{name}()"))
+
+    # Deduplicate preserving order
+    seen: set[str] = set()
+    steps: list[str] = []
+    for _, call in sorted(calls):
+        if call not in seen:
+            seen.add(call)
+            steps.append(call)
+    return steps
+
+
 def _ast_name(node: ast.expr) -> str:
     """Get a human-readable name from an AST node."""
     if isinstance(node, ast.Name):

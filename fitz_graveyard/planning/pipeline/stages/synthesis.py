@@ -215,6 +215,117 @@ _RISK_FIELD_GROUPS = [
 ]
 
 
+def _build_attribute_template(
+    referenced_files: set[str],
+    prior_outputs: dict[str, Any],
+    sections: dict[str, list[str]],
+) -> str:
+    """Extract instance attributes from source code of referenced files.
+
+    Parses __init__ and setup methods to find self._xxx = ClassName(...)
+    assignments. Produces a compact template telling the model what
+    attributes actually exist on each class.
+
+    This prevents the model from fabricating method names like
+    self._build_context() when the real attribute is self._assembler.
+    """
+    import ast as _ast
+
+    agent_ctx = prior_outputs.get("_agent_context", {})
+    file_contents = agent_ctx.get("file_contents", {})
+    if not file_contents:
+        return ""
+
+    lines = [
+        "\n## INSTANCE ATTRIBUTES — real self._ attributes on key classes\n"
+        "When writing new methods on these classes, use ONLY the attributes "
+        "listed below. Do NOT invent helper methods or attributes.\n"
+    ]
+    found_any = False
+
+    for ref_path in sorted(referenced_files):
+        # Find source content
+        content = file_contents.get(ref_path, "")
+        if not content:
+            for key in file_contents:
+                if key.endswith(ref_path) or ref_path.endswith(key):
+                    content = file_contents[key]
+                    break
+        if not content:
+            continue
+
+        try:
+            tree = _ast.parse(content)
+        except SyntaxError:
+            continue
+
+        for cls_node in _ast.iter_child_nodes(tree):
+            if not isinstance(cls_node, _ast.ClassDef):
+                continue
+
+            # Extract self._xxx = ... assignments from __init__ and setup methods
+            attrs: dict[str, str] = {}  # attr_name -> type_hint
+            for method in _ast.iter_child_nodes(cls_node):
+                if not isinstance(method, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+                    continue
+                if method.name not in ("__init__", "_init_components", "setup", "_setup"):
+                    continue
+                for node in _ast.walk(method):
+                    if not isinstance(node, _ast.Assign):
+                        continue
+                    for target in node.targets:
+                        if (isinstance(target, _ast.Attribute)
+                                and isinstance(target.value, _ast.Name)
+                                and target.value.id == "self"
+                                and target.attr.startswith("_")
+                                and not target.attr.startswith("__")):
+                            # Resolve type from RHS
+                            rhs = ""
+                            if isinstance(node.value, _ast.Call):
+                                if isinstance(node.value.func, _ast.Name):
+                                    rhs = node.value.func.id
+                                elif isinstance(node.value.func, _ast.Attribute):
+                                    rhs = node.value.func.attr
+                            if rhs:
+                                attrs[target.attr] = rhs
+
+            if not attrs:
+                continue
+
+            # Also get method names from the structural index for this class
+            class_methods = []
+            for idx_path, idx_lines in sections.items():
+                if ref_path.endswith(idx_path) or idx_path.endswith(ref_path):
+                    for line in idx_lines:
+                        if line.startswith("classes:") and cls_node.name in line:
+                            # Extract method list from brackets
+                            import re
+                            bracket_match = re.search(
+                                rf'{cls_node.name}[^[]*\[([^\]]+)\]',
+                                line,
+                            )
+                            if bracket_match:
+                                for m in bracket_match.group(1).split(","):
+                                    m = m.strip().split("->")[0].split("(")[0].strip()
+                                    if m and not m.startswith("@"):
+                                        class_methods.append(m)
+                    break
+
+            lines.append(f"### {cls_node.name} ({ref_path})")
+            lines.append("  Attributes:")
+            for attr_name, type_name in sorted(attrs.items()):
+                lines.append(f"    self.{attr_name} = {type_name}(...)")
+            if class_methods:
+                lines.append(f"  Methods: {', '.join(class_methods)}")
+            lines.append("")
+            found_any = True
+
+    if not found_any:
+        return ""
+
+    return "\n".join(lines)
+
+
 class SynthesisStage(PipelineStage):
     """Synthesize resolved decisions into the final PlanOutput.
 
@@ -296,6 +407,14 @@ class SynthesisStage(PipelineStage):
             elif current_file and line.strip():
                 sections.setdefault(current_file, []).append(line)
 
+        # Also include service/dependency files that define how the API
+        # layer connects to the engine — models consistently miss this layer
+        _SERVICE_KEYWORDS = ("service", "dependencies", "factory")
+        for idx_path in sections:
+            base = idx_path.rsplit("/", 1)[-1].replace(".py", "").lower()
+            if any(kw in base for kw in _SERVICE_KEYWORDS):
+                referenced_files.add(idx_path)
+
         # Build compact cheat sheet — only files referenced in decisions
         parts = [
             "## ARTIFACT REFERENCE — real symbols from the codebase\n"
@@ -306,10 +425,10 @@ class SynthesisStage(PipelineStage):
         matched = 0
         for ref_path in sorted(referenced_files):
             # Match against index sections (may need partial match)
-            for idx_path, lines in sections.items():
+            for idx_path, idx_lines in sections.items():
                 if ref_path == idx_path or ref_path.endswith(idx_path) or idx_path.endswith(ref_path):
                     parts.append(f"\n### {idx_path}")
-                    for line in lines:
+                    for line in idx_lines:
                         # Include classes and functions lines, skip imports/exports
                         if line.startswith(("classes:", "functions:", "doc:")):
                             parts.append(f"  {line}")
@@ -318,6 +437,14 @@ class SynthesisStage(PipelineStage):
 
         if matched == 0:
             return ""
+
+        # Build instance attribute template from source code
+        # This tells the model what self._ attributes ACTUALLY exist
+        attr_template = _build_attribute_template(
+            referenced_files, prior_outputs, sections,
+        )
+        if attr_template:
+            parts.append(attr_template)
 
         result = "\n".join(parts)
         logger.info(
