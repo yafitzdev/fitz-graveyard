@@ -602,8 +602,10 @@ class SynthesisStage(PipelineStage):
             {"role": "user", "content": prompt},
         ]
 
-        max_rounds = 5
+        max_rounds = 10
         t0 = time.monotonic()
+        seen_calls: dict[str, str] = {}  # "func:args" -> result (dedup cache)
+        total_tool_calls = 0
 
         try:
             for round_num in range(max_rounds):
@@ -615,8 +617,8 @@ class SynthesisStage(PipelineStage):
                     elapsed = time.monotonic() - t0
                     logger.info(
                         f"Stage 'synthesis': tool-assisted artifacts "
-                        f"({round_num} tool rounds, {elapsed:.1f}s, "
-                        f"{len(raw)} chars)"
+                        f"({round_num} tool rounds, {total_tool_calls} calls, "
+                        f"{elapsed:.1f}s, {len(raw)} chars)"
                     )
                     try:
                         data = extract_json(raw)
@@ -630,27 +632,78 @@ class SynthesisStage(PipelineStage):
                         )
                     return None
 
-                # Execute tool calls
+                # Execute tool calls (with dedup)
                 messages.append(response.assistant_dict)
+                duplicates_this_round = 0
                 for tc in response.tool_calls:
-                    fn = tools_map.get(tc.name)
-                    if fn:
-                        try:
-                            result = fn(**tc.arguments)
-                        except Exception as e:
-                            result = f"Error: {e}"
+                    call_key = f"{tc.name}:{json.dumps(tc.arguments, sort_keys=True)}"
+
+                    if call_key in seen_calls:
+                        # Duplicate — return cached result + nudge
+                        result = (
+                            f"{seen_calls[call_key]}\n\n"
+                            "(You already asked this. You have enough "
+                            "information — produce the artifact JSON now.)"
+                        )
+                        duplicates_this_round += 1
                         logger.info(
-                            f"Stage 'synthesis': tool call {tc.name}"
-                            f"({', '.join(f'{k}={v!r}' for k, v in tc.arguments.items())}) "
-                            f"-> {len(result)} chars"
+                            f"Stage 'synthesis': DUPLICATE tool call "
+                            f"{tc.name} — returning cached result"
                         )
                     else:
-                        result = f"Unknown tool: {tc.name}"
+                        fn = tools_map.get(tc.name)
+                        if fn:
+                            try:
+                                result = fn(**tc.arguments)
+                            except Exception as e:
+                                result = f"Error: {e}"
+                            seen_calls[call_key] = result
+                            total_tool_calls += 1
+                            logger.info(
+                                f"Stage 'synthesis': tool call {tc.name}"
+                                f"({', '.join(f'{k}={v!r}' for k, v in tc.arguments.items())}) "
+                                f"-> {len(result)} chars"
+                            )
+                        else:
+                            result = f"Unknown tool: {tc.name}"
+
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
                         "content": result,
                     })
+
+                # If ALL calls this round were duplicates, force stop
+                if duplicates_this_round == len(response.tool_calls):
+                    logger.info(
+                        f"Stage 'synthesis': all tool calls were duplicates "
+                        f"— forcing final generation"
+                    )
+                    # Add a user message forcing JSON output
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "You are repeating tool calls you already made. "
+                            "You have all the information you need. "
+                            "Produce the artifact JSON NOW."
+                        ),
+                    })
+                    # One more call without tools to force JSON
+                    final = await client.generate(messages=messages, max_tokens=4096)
+                    elapsed = time.monotonic() - t0
+                    logger.info(
+                        f"Stage 'synthesis': tool-assisted artifacts "
+                        f"(forced after {round_num + 1} rounds, {elapsed:.1f}s, "
+                        f"{len(final)} chars)"
+                    )
+                    try:
+                        data = extract_json(final)
+                        artifacts = data.get("artifacts", [])
+                        if artifacts:
+                            return artifacts
+                    except ValueError:
+                        pass
+                    return None
 
             # Exhausted rounds without final answer
             logger.warning(
