@@ -606,6 +606,7 @@ class SynthesisStage(PipelineStage):
         t0 = time.monotonic()
         seen_calls: dict[str, str] = {}  # "func:args" -> result (dedup cache)
         total_tool_calls = 0
+        consecutive_no_new_info = 0  # rounds with zero new information
 
         try:
             for round_num in range(max_rounds):
@@ -632,23 +633,21 @@ class SynthesisStage(PipelineStage):
                         )
                     return None
 
-                # Execute tool calls (with dedup)
+                # Execute tool calls (with dedup cache)
                 messages.append(response.assistant_dict)
-                duplicates_this_round = 0
+                new_info_this_round = 0
                 for tc in response.tool_calls:
                     call_key = f"{tc.name}:{json.dumps(tc.arguments, sort_keys=True)}"
 
                     if call_key in seen_calls:
-                        # Duplicate — return cached result + nudge
+                        # Duplicate — return cached result + gentle nudge
                         result = (
                             f"{seen_calls[call_key]}\n\n"
-                            "(You already asked this. You have enough "
-                            "information — produce the artifact JSON now.)"
+                            "(You already checked this — see above.)"
                         )
-                        duplicates_this_round += 1
                         logger.info(
                             f"Stage 'synthesis': DUPLICATE tool call "
-                            f"{tc.name} — returning cached result"
+                            f"{tc.name} — returning cached"
                         )
                     else:
                         fn = tools_map.get(tc.name)
@@ -659,6 +658,7 @@ class SynthesisStage(PipelineStage):
                                 result = f"Error: {e}"
                             seen_calls[call_key] = result
                             total_tool_calls += 1
+                            new_info_this_round += 1
                             logger.info(
                                 f"Stage 'synthesis': tool call {tc.name}"
                                 f"({', '.join(f'{k}={v!r}' for k, v in tc.arguments.items())}) "
@@ -673,23 +673,28 @@ class SynthesisStage(PipelineStage):
                         "content": result,
                     })
 
-                # If ALL calls this round were duplicates, force stop
-                if duplicates_this_round == len(response.tool_calls):
+                # Track whether the model is still learning
+                if new_info_this_round == 0:
+                    consecutive_no_new_info += 1
+                else:
+                    consecutive_no_new_info = 0
+
+                # Stop condition: 2 consecutive rounds with zero new info
+                if consecutive_no_new_info >= 2:
                     logger.info(
-                        f"Stage 'synthesis': all tool calls were duplicates "
-                        f"— forcing final generation"
+                        f"Stage 'synthesis': {consecutive_no_new_info} "
+                        f"consecutive rounds with no new info — forcing output"
                     )
-                    # Add a user message forcing JSON output
                     messages.append({
                         "role": "user",
                         "content": (
-                            "You are repeating tool calls you already made. "
-                            "You have all the information you need. "
-                            "Produce the artifact JSON NOW."
+                            "You have gathered all available information. "
+                            "Produce the artifact JSON now."
                         ),
                     })
-                    # One more call without tools to force JSON
-                    final = await client.generate(messages=messages, max_tokens=4096)
+                    final = await client.generate(
+                        messages=messages, max_tokens=4096,
+                    )
                     elapsed = time.monotonic() - t0
                     logger.info(
                         f"Stage 'synthesis': tool-assisted artifacts "
