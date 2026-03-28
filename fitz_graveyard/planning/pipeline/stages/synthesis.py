@@ -17,6 +17,7 @@ import time
 from typing import Any
 
 from fitz_graveyard.planning.pipeline.stages.base import (
+    SYSTEM_PROMPT,
     PipelineStage,
     StageResult,
     extract_json,
@@ -532,6 +533,138 @@ class SynthesisStage(PipelineStage):
         )
         return result
 
+    async def _build_artifacts_with_tools(
+        self,
+        client: Any,
+        reasoning: str,
+        prior_outputs: dict[str, Any],
+        extract_context: str,
+    ) -> list[dict] | None:
+        """Build artifacts using tool-assisted generation.
+
+        The model gets codebase lookup tools (lookup_method, lookup_class,
+        check_exists, read_method_source) so it can verify real interfaces
+        before writing code. Returns artifact list or None if tool-use
+        is unavailable or fails.
+        """
+        if not hasattr(client, "generate_with_tools"):
+            return None
+
+        # Build tools from the codebase context
+        try:
+            from fitz_graveyard.planning.pipeline.tools.codebase_tools import (
+                make_codebase_tools,
+            )
+        except ImportError:
+            return None
+
+        agent_ctx = prior_outputs.get("_agent_context", {})
+        full_index = agent_ctx.get("full_structural_index", "")
+        if not full_index:
+            full_index = prior_outputs.get("_gathered_context", "")
+        file_contents = agent_ctx.get("file_contents", {})
+        source_dir = prior_outputs.get("_source_dir", "")
+
+        if not full_index:
+            return None
+
+        tools = make_codebase_tools(full_index, file_contents, source_dir)
+        tools_map = {fn.__name__: fn for fn in tools}
+
+        schema = json.dumps({
+            "artifacts": [{
+                "filename": "path/to/file.py",
+                "content": "ONLY the new methods/classes to add",
+                "purpose": "why this artifact exists",
+            }]
+        }, indent=2)
+
+        prompt = (
+            "You are writing implementation artifacts for a software plan.\n\n"
+            "IMPORTANT: Before writing ANY code, use the lookup tools to check:\n"
+            "- lookup_method(class, method): get the REAL signature of existing methods\n"
+            "- lookup_class(class): see real attributes and methods on a class\n"
+            "- check_exists(name): verify a class/method/function exists before using it\n\n"
+            "Rules:\n"
+            "- When adding a parallel method (e.g. generate_stream), call lookup_method\n"
+            "  on the original (generate) FIRST to get the exact parameter list.\n"
+            "- The parallel method MUST accept the same parameters.\n"
+            "- Only use self._ attributes that lookup_class confirms exist.\n"
+            "- If check_exists says something DOES NOT EXIST, do not use it.\n\n"
+            f"Return ONLY valid JSON matching this schema:\n{schema}\n\n"
+            "--- PLAN ANALYSIS (what to build) ---\n"
+            f"{reasoning[:8000]}\n\n"
+            f"--- CODEBASE CONTEXT ---\n{extract_context[:4000]}"
+        )
+
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ]
+
+        max_rounds = 5
+        t0 = time.monotonic()
+
+        try:
+            for round_num in range(max_rounds):
+                response = await client.generate_with_tools(messages, tools)
+
+                if not response.tool_calls:
+                    # Model returned final answer
+                    raw = response.content or ""
+                    elapsed = time.monotonic() - t0
+                    logger.info(
+                        f"Stage 'synthesis': tool-assisted artifacts "
+                        f"({round_num} tool rounds, {elapsed:.1f}s, "
+                        f"{len(raw)} chars)"
+                    )
+                    try:
+                        data = extract_json(raw)
+                        artifacts = data.get("artifacts", [])
+                        if artifacts:
+                            return artifacts
+                    except ValueError:
+                        logger.warning(
+                            f"Stage 'synthesis': tool-assisted artifacts "
+                            f"failed to parse JSON"
+                        )
+                    return None
+
+                # Execute tool calls
+                messages.append(response.assistant_dict)
+                for tc in response.tool_calls:
+                    fn = tools_map.get(tc.name)
+                    if fn:
+                        try:
+                            result = fn(**tc.arguments)
+                        except Exception as e:
+                            result = f"Error: {e}"
+                        logger.info(
+                            f"Stage 'synthesis': tool call {tc.name}"
+                            f"({', '.join(f'{k}={v!r}' for k, v in tc.arguments.items())}) "
+                            f"-> {len(result)} chars"
+                        )
+                    else:
+                        result = f"Unknown tool: {tc.name}"
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": result,
+                    })
+
+            # Exhausted rounds without final answer
+            logger.warning(
+                f"Stage 'synthesis': tool-assisted artifacts exhausted "
+                f"{max_rounds} rounds without producing JSON"
+            )
+            return None
+
+        except Exception as e:
+            logger.warning(
+                f"Stage 'synthesis': tool-assisted artifacts failed: {e}"
+            )
+            return None
+
     def _format_resolutions(self, resolutions: list[dict]) -> str:
         """Format resolved decisions for the synthesis prompt."""
         lines = []
@@ -600,22 +733,36 @@ class SynthesisStage(PipelineStage):
                 )
                 arch_merged.update(partial)
 
-            # Design fields — artifacts get template-constrained cheat sheet
-            # (with auto-extracted instance attributes from __init__)
-            artifact_source_context = self._build_artifact_source_context(
-                prior_outputs,
-            )
+            # Design fields — artifacts use tool-assisted building when available
             design_merged: dict[str, Any] = {}
             for group in _DESIGN_FIELD_GROUPS:
-                if group["label"] == "artifacts" and artifact_source_context:
-                    extra = artifact_source_context
-                elif group["label"] in {"adrs", "artifacts", "components", "integrations"}:
-                    extra = extract_context
-                else:
-                    extra = ""
+                if group["label"] == "artifacts":
+                    continue  # handled via tool-assisted loop below
+                extra = extract_context if group["label"] in {"adrs", "components", "integrations"} else ""
                 partial = await self._extract_field_group(
                     client, reasoning, group["fields"],
                     group["schema"], group["label"],
+                    extra_context=extra,
+                )
+                design_merged.update(partial)
+
+            # Artifact building: tool-assisted when model supports it,
+            # falls back to template-constrained extraction otherwise.
+            tool_artifacts = await self._build_artifacts_with_tools(
+                client, reasoning, prior_outputs, extract_context,
+            )
+            if tool_artifacts is not None:
+                design_merged["artifacts"] = tool_artifacts
+            else:
+                # Fallback: template-constrained extraction
+                artifact_source_context = self._build_artifact_source_context(
+                    prior_outputs,
+                )
+                extra = artifact_source_context or extract_context
+                partial = await self._extract_field_group(
+                    client, reasoning, ["artifacts"],
+                    _DESIGN_FIELD_GROUPS[-1]["schema"],
+                    "artifacts",
                     extra_context=extra,
                 )
                 design_merged.update(partial)
