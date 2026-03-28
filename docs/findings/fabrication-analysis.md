@@ -98,3 +98,69 @@ Options:
    attribute names pre-filled, ask it to fill in logic only
 3. **Single-pass artifact generation** — skip synthesis prose, generate artifacts
    directly from resolutions + structural index (tested: 0 fabrications in 10 runs)
+
+---
+
+## Update: Artifact Resolution Regression (2026-03-28)
+
+### What we tested
+Per-artifact LLM calls with actual source code + resolutions + attribute template.
+Each artifact gets its own focused call. 10 runs, 3-5 artifacts per run.
+
+### Result: WORSE (34.5/60 vs 37.8/60 template-constrained)
+
+### The surprising finding
+Artifact resolution has **fewer fabricated attribute names** (0.2/run vs 0.8/run)
+because the attribute template works — the model uses `self._retrieval_router`
+instead of inventing `self._retrieval_pipeline`.
+
+But it calls **wrong methods on those attributes**:
+```
+self._retrieval_router.route()      → real: .retrieve()
+self._assembler.assemble(q, ev, a)  → real: .assemble(q, results)  [2 args not 3]
+self._synthesizer.generate_stream(messages, evidence, query)
+                                    → real: .generate(query, context, results, answer_mode, ...)
+self._cloud_client.get()            → real: different pattern entirely
+```
+
+Our fabrication counter only checks `self._xxx` attribute names, not the methods
+called ON those attributes. So it reports 0 fabrications while the judge catches
+multiple codebase alignment failures.
+
+### Why template-constrained scores better despite MORE fabricated attrs
+
+Template-constrained artifacts are **short stubs with ellipsis**:
+```python
+constraint_results = run_constraints(query, expanded, self._constraints)
+features = extract_features(query, expanded, constraint_results, ...)
+governance = self._governor.decide(...)
+```
+
+The `...` placeholders DON'T call wrong methods because they DON'T call methods.
+The judge rates stubs with correct attribute names HIGHER than detailed code with
+wrong method signatures. **Vague but correct > detailed but wrong.**
+
+### The two levels of fabrication
+
+| Level | What's wrong | Template | Artres |
+|-------|-------------|----------|--------|
+| **Level 1: Attribute names** | `self._build_context()` (method doesn't exist) | 0.8/run | 0.2/run |
+| **Level 2: Method signatures** | `self._retrieval_router.route()` (attr exists, method wrong) | Rare (uses ...) | Common |
+
+Fixing Level 1 (attribute template) actually **exposed** Level 2. The model now
+uses real attributes but guesses method names and parameter lists. The method
+names are plausible (`route` vs `retrieve`, `assemble(q, evidence, analysis)` vs
+`assemble(q, results)`) but wrong in ways a human would immediately catch.
+
+### What would fix Level 2
+The cheat sheet shows `self._retrieval_router = RetrievalRouter(...)` but NOT
+what methods `RetrievalRouter` has. Adding method signatures to the attribute
+template would complete the picture:
+```
+self._retrieval_router = RetrievalRouter(...)  # has: retrieve()
+self._assembler = ContextAssembler(...)        # has: assemble(query, results) -> str
+self._synthesizer = CodeSynthesizer(...)       # has: generate(query, context, results, answer_mode, gap_context, conflict_context) -> Answer
+```
+
+But we've seen that more context can hurt. This needs isolated testing before
+wiring into the pipeline.
