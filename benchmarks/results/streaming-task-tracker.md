@@ -203,3 +203,54 @@ The model uses opaque special tokens for its cascade reasoning that are not mean
 - Roadmap critical_path references phase 4 but only 3 phases defined
 
 **Key insight:** The 80B model understands the architecture much better than the 30B (scores 36 vs 20), but still hallucinates method names and signatures in the implementation artifacts. The gap is in low-level codebase grounding, not architectural reasoning.
+
+---
+
+## Session Handoff
+
+### Session 2026-03-27/29 — Evaluation System + Pipeline Optimization
+
+**What was built:**
+1. **Sonnet-as-Judge evaluation system** (`benchmarks/eval_*.py`) — scores plans on 6 dimensions via Claude Code subagents. No Anthropic SDK needed.
+2. **Post-synthesis grounding validator** (`fitz_graveyard/planning/validation/grounding.py`) — AST path checks fabricated methods/classes, LLM path checks architectural gaps.
+3. **Template-constrained cheat sheet** — auto-extracts instance attrs from `__init__` via AST, injects into artifact extraction prompt. Also resolves component class methods from source on disk.
+4. **Full-signature evidence** — resolution prompt demands complete param lists (no `...`), parallel methods must match original params.
+5. **Tool-assisted artifact building** (`fitz_graveyard/planning/pipeline/tools/codebase_tools.py`) — 4 lookup tools (lookup_method, lookup_class, check_exists, read_method_source) used during artifact generation via `generate_with_tools()`.
+6. **Method flow extractor** (`indexer.py:extract_method_flows`) — AST-based pipeline step extraction. Built but NOT wired in (caused regressions when tested).
+
+**Current best config (run 21, mean 41.4/60):**
+- Model: `qwen3-coder-next-reap-40b-a3b-i1` (reaped 40B at Q5_K_S)
+- Pipeline: decomposed v4 + full-sig evidence + template-constrained attrs + tool-assisted artifacts
+- When tools work (40% of runs): scores 45/60
+- When tools exhaust (60%): falls back to template, scores ~39/60
+
+**Score progression:**
+```
+20/60  → 30B Q6 baseline
+35.6   → 40B reaped baseline (model upgrade)
+37.8   → + template-constrained attrs
+39.2   → + full-signature evidence in resolutions
+41.4   → + tool-assisted artifact building
+```
+
+**What to work on next:**
+1. **Fix tool reliability (40% → 80%+)** — the model over-researches (15+ check_exists calls) without producing JSON. Options:
+   - Reduce max_rounds from 5 to 2-3
+   - Add "STOP researching, produce JSON now" after round 2
+   - Pre-fill the first tool call (auto-lookup for each needed_artifact's class)
+   - If tools hit 80%+ success rate, mean should reach ~43-44/60
+2. **Fix the two config files problem** — `AppData\Local\fitz-graveyard\...` vs `AppData\Local\Packages\PythonSoftwareFoundation.Python.3.12_...\LocalCache\Local\fitz-graveyard\...`. Must update BOTH when changing models.
+3. **Try on a different benchmark task** — all testing was on "add query result streaming". Need to validate on 2-3 other tasks from the retrieval ground truth set to ensure generalization.
+4. **The FitzService gap** — every run misses the service layer between API and engine. Could add a heuristic to always include service/dependency files in the cheat sheet (partially implemented, needs full index which benchmark doesn't have).
+
+**Key findings documented in:**
+- `docs/findings/fabrication-analysis.md` — root cause of codebase alignment failures + Level 2 analysis
+- `docs/findings/findings-20260324.md` — original session findings (retrieval, decomposition, scoring)
+- `benchmarks/results/streaming-task-tracker.md` — this file, all 21 runs with scores
+
+**Critical files to read first in new session:**
+- This file (streaming-task-tracker.md) — the run log tells the full story
+- `fitz_graveyard/planning/pipeline/stages/synthesis.py` — where all the action is (cheat sheet, tool-assisted loop, artifact extraction)
+- `fitz_graveyard/planning/pipeline/tools/codebase_tools.py` — the 4 lookup tools
+- `fitz_graveyard/planning/validation/grounding.py` — AST grounding validator
+- `fitz_graveyard/planning/prompts/decision_resolution.txt` — full-sig evidence rules
