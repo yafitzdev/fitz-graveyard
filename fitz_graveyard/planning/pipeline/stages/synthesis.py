@@ -311,10 +311,88 @@ def _build_attribute_template(
                                         class_methods.append(m)
                     break
 
+            # Look up public methods for each component type.
+            # Search both the structural index AND source code (for classes
+            # not in the 30-file selected index).
+            import re as _re
+            component_methods: dict[str, list[str]] = {}  # type_name -> [method sigs]
+
+            # Strategy 1: structural index
+            for _idx_lines in sections.values():
+                for _line in _idx_lines:
+                    if not _line.startswith("classes:"):
+                        continue
+                    for type_name in set(attrs.values()):
+                        if type_name not in _line:
+                            continue
+                        pattern = rf'{type_name}(?:\([^)]*\))?\s*(?:\[[^\]]*\])?\s*\[([^\]]+)\]'
+                        _match = _re.search(pattern, _line)
+                        if _match:
+                            methods = []
+                            for m in _match.group(1).split(","):
+                                m = m.strip()
+                                if m and not m.startswith("@") and not m.startswith("__"):
+                                    methods.append(m)
+                            if methods:
+                                component_methods[type_name] = methods
+
+            # Strategy 2: parse source files for classes not found in index
+            # Search file_contents first, then fall back to disk via source_dir
+            missing_types = set(attrs.values()) - set(component_methods.keys())
+            source_dir = prior_outputs.get("_source_dir", "")
+            all_sources = list((agent_ctx.get("file_contents") or {}).values())
+
+            # Also read from disk for files not in the agent's pool
+            if missing_types and source_dir:
+                from pathlib import Path as _Path
+                for _py in _Path(source_dir).rglob("*.py"):
+                    if not missing_types:
+                        break
+                    # Quick check: does the filename hint at a missing type?
+                    _stem = _py.stem.lower()
+                    if not any(t.lower() in _stem or _stem in t.lower() for t in missing_types):
+                        continue
+                    try:
+                        all_sources.append(_py.read_text(encoding="utf-8", errors="replace"))
+                    except OSError:
+                        continue
+
+            for _src in all_sources:
+                if not missing_types:
+                    break
+                try:
+                    _tree = _ast.parse(_src)
+                except SyntaxError:
+                    continue
+                for _node in _ast.walk(_tree):
+                    if isinstance(_node, _ast.ClassDef) and _node.name in missing_types:
+                        meths = []
+                        for _child in _ast.iter_child_nodes(_node):
+                            if isinstance(_child, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+                                if _child.name.startswith("__"):
+                                    continue
+                                params = [a.arg for a in _child.args.args if a.arg != "self"]
+                                sig = f"{_child.name}({', '.join(params)})"
+                                if _child.returns:
+                                    try:
+                                        sig += f" -> {_ast.unparse(_child.returns)}"
+                                    except Exception:
+                                        pass
+                                meths.append(sig)
+                        if meths:
+                            component_methods[_node.name] = meths
+                            missing_types.discard(_node.name)
+
             lines.append(f"### {cls_node.name} ({ref_path})")
             lines.append("  Attributes:")
             for attr_name, type_name in sorted(attrs.items()):
-                lines.append(f"    self.{attr_name} = {type_name}(...)")
+                # Append component's public methods as inline comment
+                comp_meths = component_methods.get(type_name, [])
+                if comp_meths:
+                    sig_str = ", ".join(comp_meths[:5])
+                    lines.append(f"    self.{attr_name} = {type_name}  # has: {sig_str}")
+                else:
+                    lines.append(f"    self.{attr_name} = {type_name}(...)")
             if class_methods:
                 lines.append(f"  Methods: {', '.join(class_methods)}")
             lines.append("")
