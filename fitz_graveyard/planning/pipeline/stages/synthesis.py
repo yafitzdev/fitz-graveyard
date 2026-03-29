@@ -650,16 +650,20 @@ class SynthesisStage(PipelineStage):
         reasoning: str,
         prior_outputs: dict[str, Any],
         extract_context: str,
-    ) -> list[dict] | None:
+    ) -> tuple[list[dict] | None, str]:
         """Build artifacts using tool-assisted generation.
 
         The model gets codebase lookup tools (lookup_method, lookup_class,
-        check_exists, read_method_source) so it can verify real interfaces
-        before writing code. Returns artifact list or None if tool-use
-        is unavailable or fails.
+        read_method_source) so it can verify real interfaces before writing
+        code.
+
+        Returns (artifacts, tool_context):
+        - artifacts: list of artifact dicts if model produced JSON, else None
+        - tool_context: formatted string of all tool results gathered,
+          usable as enriched context for template fallback
         """
         if not hasattr(client, "generate_with_tools"):
-            return None
+            return None, ""
 
         # Build tools from the codebase context
         try:
@@ -667,7 +671,7 @@ class SynthesisStage(PipelineStage):
                 make_codebase_tools,
             )
         except ImportError:
-            return None
+            return None, ""
 
         agent_ctx = prior_outputs.get("_agent_context", {})
         full_index = agent_ctx.get("full_structural_index", "")
@@ -677,7 +681,7 @@ class SynthesisStage(PipelineStage):
         source_dir = prior_outputs.get("_source_dir", "")
 
         if not full_index:
-            return None
+            return None, ""
 
         tools = make_codebase_tools(full_index, file_contents, source_dir)
         # Remove check_exists — model over-uses it (15+ calls per run),
@@ -694,100 +698,114 @@ class SynthesisStage(PipelineStage):
             }]
         }, indent=2)
 
-        # Pre-fill key class lookups as tool history so every run
-        # starts with critical class info. Without this, 60% of runs
-        # waste tool rounds on framework classes or wrong names.
-        class_names = self._extract_class_names(reasoning, prior_outputs)
-        history_msgs, pre_seen = self._build_tool_history(
-            class_names, tools_map,
+        # Extract class names for deterministic coverage tracking.
+        # Once the model has looked up enough of these, we nudge it
+        # to produce JSON (but still via generate_with_tools, not
+        # the inferior client.generate path).
+        target_classes = set(
+            self._extract_class_names(reasoning, prior_outputs),
         )
 
-        initial_prompt = (
+        prompt = (
             "You are writing implementation artifacts for a software plan.\n\n"
-            "You have lookup tools available to verify real signatures:\n"
-            "- lookup_method(class, method): get the REAL signature\n"
-            "- lookup_class(class): see real attributes and methods\n"
-            "- read_method_source(class, method): read actual source code\n\n"
+            "IMPORTANT: Before writing ANY code, use the lookup tools to "
+            "verify real signatures:\n"
+            "- lookup_method(class, method): get the REAL signature of "
+            "an existing method\n"
+            "- lookup_class(class): see real attributes and methods on "
+            "a class\n"
+            "- read_method_source(class, method): read the actual source "
+            "code of a method\n\n"
             "Rules:\n"
             "- When adding a parallel method (e.g. generate_stream), call "
             "lookup_method\n"
-            "  on the original (generate) to get the exact parameter list.\n"
+            "  on the original (generate) FIRST to get the exact parameter "
+            "list.\n"
             "- The parallel method MUST accept the same parameters.\n"
             "- Only use self._ attributes that lookup_class confirms "
             "exist.\n"
-            "- Do NOT fabricate method names.\n\n"
+            "- Do NOT fabricate method names. If you are unsure whether a "
+            "method exists, call lookup_class or lookup_method to check.\n\n"
             f"Return ONLY valid JSON matching this schema:\n{schema}\n\n"
             "--- PLAN ANALYSIS (what to build) ---\n"
             f"{reasoning[:8000]}\n\n"
             f"--- CODEBASE CONTEXT ---\n{extract_context[:4000]}"
         )
 
-        if history_msgs:
-            # Model sees pre-filled tool results, then a directive
-            # to do targeted verification and produce artifacts.
-            messages = [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": initial_prompt},
-                *history_msgs,
-                {"role": "user", "content": (
-                    "You have verified the key classes above. Now:\n"
-                    "1. Call lookup_method for each method you plan to "
-                    "create a parallel version of (e.g. generate, answer) "
-                    "to get the exact parameter list.\n"
-                    "2. Call read_method_source for 1-2 key methods to see "
-                    "the actual implementation pattern.\n"
-                    "3. Then produce the artifact JSON."
-                )},
-            ]
-        else:
-            messages = [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": initial_prompt},
-            ]
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ]
 
-        max_rounds = 5
+        max_rounds = 10
         t0 = time.monotonic()
-        seen_calls: dict[str, str] = dict(pre_seen)  # seed dedup cache
+        seen_calls: dict[str, str] = {}
         total_tool_calls = 0
-        consecutive_no_new_info = 0  # rounds with zero new information
+        consecutive_stale = 0  # rounds with zero new info
+
+        def _format_tool_context(calls: dict[str, str]) -> str:
+            """Format collected tool results as context for template."""
+            if not calls:
+                return ""
+            parts = [
+                "## VERIFIED CODEBASE INFO (from tool lookups)\n"
+                "The following was verified by looking up real classes "
+                "and methods. Use these exact signatures and attributes.\n"
+            ]
+            for key, result in calls.items():
+                if "NOT FOUND" in result or "Error:" in result:
+                    continue
+                parts.append(result)
+            ctx = "\n\n".join(parts)
+            return ctx if len(parts) > 1 else ""
 
         try:
             for round_num in range(max_rounds):
-                response = await client.generate_with_tools(messages, tools)
+                response = await client.generate_with_tools(
+                    messages, tools,
+                )
 
                 if not response.tool_calls:
-                    # Model returned final answer
+                    # Model voluntarily produced final answer
                     raw = response.content or ""
                     elapsed = time.monotonic() - t0
+                    tool_ctx = _format_tool_context(seen_calls)
                     logger.info(
                         f"Stage 'synthesis': tool-assisted artifacts "
-                        f"({round_num} tool rounds, {total_tool_calls} calls, "
+                        f"(voluntary, {round_num} rounds, "
+                        f"{total_tool_calls} calls, "
                         f"{elapsed:.1f}s, {len(raw)} chars)"
                     )
                     try:
                         data = extract_json(raw)
                         artifacts = data.get("artifacts", [])
                         if artifacts:
-                            return artifacts
+                            return artifacts, tool_ctx
                     except ValueError:
                         logger.warning(
                             f"Stage 'synthesis': tool-assisted artifacts "
                             f"failed to parse JSON"
                         )
-                    return None
+                    return None, tool_ctx
 
-                # Execute tool calls (with dedup cache)
+                # Execute tool calls
                 messages.append(response.assistant_dict)
                 new_info_this_round = 0
                 for tc in response.tool_calls:
-                    call_key = f"{tc.name}:{json.dumps(tc.arguments, sort_keys=True)}"
+                    # Normalize cache keys: strip module paths so
+                    # lookup_class("fitz_ai.x.Foo") deduplicates with
+                    # lookup_class("Foo") — they return the same data.
+                    norm_args = {
+                        k: (v.rsplit(".", 1)[-1] if isinstance(v, str) else v)
+                        for k, v in tc.arguments.items()
+                    }
+                    call_key = (
+                        f"{tc.name}:"
+                        f"{json.dumps(norm_args, sort_keys=True)}"
+                    )
 
                     if call_key in seen_calls:
-                        # Duplicate — return cached result + gentle nudge
-                        result = (
-                            f"{seen_calls[call_key]}\n\n"
-                            "(You already checked this — see above.)"
-                        )
+                        result = seen_calls[call_key]
                         logger.info(
                             f"Stage 'synthesis': DUPLICATE tool call "
                             f"{tc.name} — returning cached"
@@ -816,88 +834,43 @@ class SynthesisStage(PipelineStage):
                         "content": result,
                     })
 
-                # Track whether the model is still learning
+                # Early exit: 2 consecutive all-duplicate rounds means
+                # the model has exhausted useful research. Return the
+                # collected tool results for template enrichment.
                 if new_info_this_round == 0:
-                    consecutive_no_new_info += 1
+                    consecutive_stale += 1
                 else:
-                    consecutive_no_new_info = 0
+                    consecutive_stale = 0
 
-                # Stop condition 1: with pre-fill, force after 3 tool rounds
-                # (model has class info from pre-fill + 3 rounds for
-                # method lookups + source reading — critical for quality)
-                if history_msgs and round_num >= 2:
-                    logger.info(
-                        f"Stage 'synthesis': forcing output after "
-                        f"{round_num + 1} tool rounds (pre-fill active)"
-                    )
-                    messages.append({
-                        "role": "user",
-                        "content": (
-                            "You have gathered enough information. "
-                            "Produce the artifact JSON now."
-                        ),
-                    })
-                    final = await client.generate(
-                        messages=messages, max_tokens=4096,
-                    )
+                if consecutive_stale >= 2:
                     elapsed = time.monotonic() - t0
+                    tool_ctx = _format_tool_context(seen_calls)
                     logger.info(
-                        f"Stage 'synthesis': tool-assisted artifacts "
-                        f"(forced after {round_num + 1} rounds + pre-fill, "
-                        f"{elapsed:.1f}s, {len(final)} chars)"
+                        f"Stage 'synthesis': tool early exit — "
+                        f"{consecutive_stale} stale rounds after "
+                        f"round {round_num + 1}, "
+                        f"{total_tool_calls} unique calls, "
+                        f"{elapsed:.1f}s, {len(tool_ctx)} chars "
+                        f"of verified context for template"
                     )
-                    try:
-                        data = extract_json(final)
-                        artifacts = data.get("artifacts", [])
-                        if artifacts:
-                            return artifacts
-                    except ValueError:
-                        pass
-                    return None
+                    return None, tool_ctx
 
-                # Stop condition 2: 2 consecutive rounds with zero new info
-                if consecutive_no_new_info >= 2:
-                    logger.info(
-                        f"Stage 'synthesis': {consecutive_no_new_info} "
-                        f"consecutive rounds with no new info — forcing output"
-                    )
-                    messages.append({
-                        "role": "user",
-                        "content": (
-                            "You have gathered all available information. "
-                            "Produce the artifact JSON now."
-                        ),
-                    })
-                    final = await client.generate(
-                        messages=messages, max_tokens=4096,
-                    )
-                    elapsed = time.monotonic() - t0
-                    logger.info(
-                        f"Stage 'synthesis': tool-assisted artifacts "
-                        f"(forced after {round_num + 1} rounds, {elapsed:.1f}s, "
-                        f"{len(final)} chars)"
-                    )
-                    try:
-                        data = extract_json(final)
-                        artifacts = data.get("artifacts", [])
-                        if artifacts:
-                            return artifacts
-                    except ValueError:
-                        pass
-                    return None
-
-            # Exhausted rounds without final answer
+            # Exhausted rounds — return collected tool results
+            elapsed = time.monotonic() - t0
+            tool_ctx = _format_tool_context(seen_calls)
             logger.warning(
                 f"Stage 'synthesis': tool-assisted artifacts exhausted "
-                f"{max_rounds} rounds without producing JSON"
+                f"{max_rounds} rounds without producing JSON "
+                f"({total_tool_calls} calls, {elapsed:.1f}s, "
+                f"{len(tool_ctx)} chars of verified context)"
             )
-            return None
+            return None, tool_ctx
 
         except Exception as e:
             logger.warning(
                 f"Stage 'synthesis': tool-assisted artifacts failed: {e}"
             )
-            return None
+            return None, ""
 
     def _format_resolutions(self, resolutions: list[dict]) -> str:
         """Format resolved decisions for the synthesis prompt."""
@@ -980,19 +953,24 @@ class SynthesisStage(PipelineStage):
                 )
                 design_merged.update(partial)
 
-            # Artifact building: tool-assisted when model supports it,
-            # falls back to template-constrained extraction otherwise.
-            tool_artifacts = await self._build_artifacts_with_tools(
+            # Artifact building: tool loop gathers verified codebase info,
+            # then template extraction uses it for grounded artifacts.
+            tool_artifacts, tool_context = await self._build_artifacts_with_tools(
                 client, reasoning, prior_outputs, extract_context,
             )
             if tool_artifacts is not None:
                 design_merged["artifacts"] = tool_artifacts
             else:
-                # Fallback: template-constrained extraction
+                # Template extraction enriched with tool-verified info
                 artifact_source_context = self._build_artifact_source_context(
                     prior_outputs,
                 )
-                extra = artifact_source_context or extract_context
+                # Combine: cheat sheet + tool-verified signatures
+                extra_parts = [
+                    p for p in [artifact_source_context, tool_context]
+                    if p
+                ]
+                extra = "\n\n".join(extra_parts) if extra_parts else extract_context
                 partial = await self._extract_field_group(
                     client, reasoning, ["artifacts"],
                     _DESIGN_FIELD_GROUPS[-1]["schema"],

@@ -434,6 +434,7 @@ class LMStudioClient:
         messages: list[dict],
         tools: list,
         model: str | None = None,
+        tool_choice: str = "auto",
     ) -> AgentMessage:
         """
         Single chat call with tool definitions, returns normalized AgentMessage.
@@ -442,6 +443,7 @@ class LMStudioClient:
             messages: Chat messages list
             tools:    Tool callables (converted to OpenAI schema automatically)
             model:    Model override (defaults to self.model)
+            tool_choice: "auto", "none", or "required"
 
         Returns:
             AgentMessage with .tool_calls or .content
@@ -453,14 +455,15 @@ class LMStudioClient:
         openai_tools = [_callable_to_openai_tool(fn) for fn in tools]
         logger.info(
             f"LMStudio.generate_with_tools: model={model}, "
-            f"messages={len(messages)}, tools={len(openai_tools)}"
+            f"messages={len(messages)}, tools={len(openai_tools)}, "
+            f"tool_choice={tool_choice}"
         )
 
         response = await self._client.chat.completions.create(
             model=model,
             messages=messages,
             tools=openai_tools,
-            tool_choice="auto",
+            tool_choice=tool_choice,
             stream=False,
         )
 

@@ -744,6 +744,7 @@ class LlamaCppClient:
         messages: list[dict],
         tools: list,
         model: str | None = None,
+        tool_choice: str = "auto",
     ) -> AgentMessage:
         """Single chat call with tool definitions.
 
@@ -751,6 +752,7 @@ class LlamaCppClient:
             messages: Chat messages list.
             tools:    Tool callables.
             model:    Model override.
+            tool_choice: "auto", "none", or "required".
 
         Returns:
             AgentMessage with .tool_calls or .content.
@@ -765,14 +767,15 @@ class LlamaCppClient:
         openai_tools = [_callable_to_openai_tool(fn) for fn in tools]
         logger.info(
             f"LlamaCpp.generate_with_tools: model={effective_model}, "
-            f"messages={len(messages)}, tools={len(openai_tools)}"
+            f"messages={len(messages)}, tools={len(openai_tools)}, "
+            f"tool_choice={tool_choice}"
         )
 
         response = await self._client.chat.completions.create(
             model=effective_model,
             messages=messages,
             tools=openai_tools,
-            tool_choice="auto",
+            tool_choice=tool_choice,
             max_tokens=16384,
             stream=False,
             extra_body={
