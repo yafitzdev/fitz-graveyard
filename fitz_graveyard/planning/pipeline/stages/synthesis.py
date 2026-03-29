@@ -533,6 +533,117 @@ class SynthesisStage(PipelineStage):
         )
         return result
 
+    @staticmethod
+    def _extract_class_names(
+        reasoning: str,
+        prior_outputs: dict[str, Any],
+    ) -> list[str]:
+        """Extract CamelCase class names from resolutions and reasoning.
+
+        Returns sorted list of likely project class names, filtering
+        out stdlib/framework names. Used by pre-fill and tool history
+        injection.
+        """
+        import re
+
+        resolution_output = prior_outputs.get("decision_resolution", {})
+        resolutions = resolution_output.get("resolutions", [])
+
+        # Extract CamelCase class names (2+ words, e.g. FitzKragEngine)
+        camel = re.compile(r'\b([A-Z][a-z]+(?:[A-Z][a-z0-9]+)+)\b')
+        names: set[str] = set()
+
+        for r in resolutions:
+            for ev in r.get("evidence", []):
+                names.update(camel.findall(ev))
+            names.update(camel.findall(r.get("decision", "")))
+            names.update(camel.findall(r.get("reasoning", "")))
+
+        # Also scan reasoning (synthesis output)
+        names.update(camel.findall(reasoning[:8000]))
+
+        # Filter out stdlib / framework / generic names
+        _SKIP = {
+            "True", "False", "None",
+            "Optional", "Dict", "List", "Tuple", "Type", "Any", "Union",
+            "Callable", "Iterator", "AsyncIterator", "Generator",
+            "AsyncGenerator", "Sequence", "Mapping", "Iterable",
+            "Exception", "ValueError", "TypeError", "KeyError",
+            "AttributeError", "NotImplementedError", "RuntimeError",
+            "ImportError", "FileNotFoundError", "IOError", "OSError",
+            "FastAPI", "BaseModel", "APIRouter", "StreamingResponse",
+            "JSONResponse", "HTTPException", "Depends", "Response",
+            "ReturnType", "TypeVar", "FieldInfo", "ConfigDict",
+        }
+        names -= _SKIP
+
+        return sorted(names)
+
+    @staticmethod
+    def _build_tool_history(
+        class_names: list[str],
+        tools_map: dict[str, Any],
+    ) -> tuple[list[dict], dict[str, str]]:
+        """Pre-call lookup_class and format results as tool history.
+
+        Returns (messages_to_inject, seen_calls_dict). The messages
+        look like the model already called lookup_class for each class,
+        keeping the model in verification mode rather than passive
+        reading mode.
+        """
+        lookup_class = tools_map.get("lookup_class")
+        if not lookup_class or not class_names:
+            return [], {}
+
+        tool_calls_list = []
+        tool_results = []
+        seen: dict[str, str] = {}
+        found = 0
+
+        for i, name in enumerate(class_names):
+            result = lookup_class(class_name=name)
+            call_key = (
+                f'lookup_class:'
+                f'{json.dumps({"class_name": name}, sort_keys=True)}'
+            )
+            seen[call_key] = result
+
+            if "NOT FOUND" in result:
+                continue
+
+            tc_id = f"pre_{i}"
+            tool_calls_list.append({
+                "id": tc_id,
+                "type": "function",
+                "function": {
+                    "name": "lookup_class",
+                    "arguments": json.dumps({"class_name": name}),
+                },
+            })
+            tool_results.append({
+                "role": "tool",
+                "tool_call_id": tc_id,
+                "content": result,
+            })
+            found += 1
+
+        if not tool_calls_list:
+            return [], seen
+
+        messages = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": tool_calls_list,
+            },
+            *tool_results,
+        ]
+        logger.info(
+            f"Stage 'synthesis': injected {found} class lookups "
+            f"as tool history"
+        )
+        return messages, seen
+
     async def _build_artifacts_with_tools(
         self,
         client: Any,
@@ -569,6 +680,10 @@ class SynthesisStage(PipelineStage):
             return None
 
         tools = make_codebase_tools(full_index, file_contents, source_dir)
+        # Remove check_exists — model over-uses it (15+ calls per run),
+        # checking stdlib types and re-checking things, causing degeneration.
+        # lookup_class returns richer info anyway.
+        tools = [fn for fn in tools if fn.__name__ != "check_exists"]
         tools_map = {fn.__name__: fn for fn in tools}
 
         schema = json.dumps({
@@ -579,32 +694,60 @@ class SynthesisStage(PipelineStage):
             }]
         }, indent=2)
 
-        prompt = (
+        # Pre-fill key class lookups as tool history so every run
+        # starts with critical class info. Without this, 60% of runs
+        # waste tool rounds on framework classes or wrong names.
+        class_names = self._extract_class_names(reasoning, prior_outputs)
+        history_msgs, pre_seen = self._build_tool_history(
+            class_names, tools_map,
+        )
+
+        initial_prompt = (
             "You are writing implementation artifacts for a software plan.\n\n"
-            "IMPORTANT: Before writing ANY code, use the lookup tools to check:\n"
-            "- lookup_method(class, method): get the REAL signature of existing methods\n"
-            "- lookup_class(class): see real attributes and methods on a class\n"
-            "- check_exists(name): verify a class/method/function exists before using it\n\n"
+            "You have lookup tools available to verify real signatures:\n"
+            "- lookup_method(class, method): get the REAL signature\n"
+            "- lookup_class(class): see real attributes and methods\n"
+            "- read_method_source(class, method): read actual source code\n\n"
             "Rules:\n"
-            "- When adding a parallel method (e.g. generate_stream), call lookup_method\n"
-            "  on the original (generate) FIRST to get the exact parameter list.\n"
+            "- When adding a parallel method (e.g. generate_stream), call "
+            "lookup_method\n"
+            "  on the original (generate) to get the exact parameter list.\n"
             "- The parallel method MUST accept the same parameters.\n"
-            "- Only use self._ attributes that lookup_class confirms exist.\n"
-            "- If check_exists says something DOES NOT EXIST, do not use it.\n\n"
+            "- Only use self._ attributes that lookup_class confirms "
+            "exist.\n"
+            "- Do NOT fabricate method names.\n\n"
             f"Return ONLY valid JSON matching this schema:\n{schema}\n\n"
             "--- PLAN ANALYSIS (what to build) ---\n"
             f"{reasoning[:8000]}\n\n"
             f"--- CODEBASE CONTEXT ---\n{extract_context[:4000]}"
         )
 
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
-        ]
+        if history_msgs:
+            # Model sees pre-filled tool results, then a directive
+            # to do targeted verification and produce artifacts.
+            messages = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": initial_prompt},
+                *history_msgs,
+                {"role": "user", "content": (
+                    "You have verified the key classes above. Now:\n"
+                    "1. Call lookup_method for each method you plan to "
+                    "create a parallel version of (e.g. generate, answer) "
+                    "to get the exact parameter list.\n"
+                    "2. Call read_method_source for 1-2 key methods to see "
+                    "the actual implementation pattern.\n"
+                    "3. Then produce the artifact JSON."
+                )},
+            ]
+        else:
+            messages = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": initial_prompt},
+            ]
 
-        max_rounds = 10
+        max_rounds = 5
         t0 = time.monotonic()
-        seen_calls: dict[str, str] = {}  # "func:args" -> result (dedup cache)
+        seen_calls: dict[str, str] = dict(pre_seen)  # seed dedup cache
         total_tool_calls = 0
         consecutive_no_new_info = 0  # rounds with zero new information
 
@@ -679,7 +822,40 @@ class SynthesisStage(PipelineStage):
                 else:
                     consecutive_no_new_info = 0
 
-                # Stop condition: 2 consecutive rounds with zero new info
+                # Stop condition 1: with pre-fill, force after 3 tool rounds
+                # (model has class info from pre-fill + 3 rounds for
+                # method lookups + source reading — critical for quality)
+                if history_msgs and round_num >= 2:
+                    logger.info(
+                        f"Stage 'synthesis': forcing output after "
+                        f"{round_num + 1} tool rounds (pre-fill active)"
+                    )
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "You have gathered enough information. "
+                            "Produce the artifact JSON now."
+                        ),
+                    })
+                    final = await client.generate(
+                        messages=messages, max_tokens=4096,
+                    )
+                    elapsed = time.monotonic() - t0
+                    logger.info(
+                        f"Stage 'synthesis': tool-assisted artifacts "
+                        f"(forced after {round_num + 1} rounds + pre-fill, "
+                        f"{elapsed:.1f}s, {len(final)} chars)"
+                    )
+                    try:
+                        data = extract_json(final)
+                        artifacts = data.get("artifacts", [])
+                        if artifacts:
+                            return artifacts
+                    except ValueError:
+                        pass
+                    return None
+
+                # Stop condition 2: 2 consecutive rounds with zero new info
                 if consecutive_no_new_info >= 2:
                     logger.info(
                         f"Stage 'synthesis': {consecutive_no_new_info} "

@@ -104,11 +104,25 @@ def make_codebase_tools(
                 pass
         return sig
 
+    def _strip_module(name: str) -> str:
+        """Strip module path from a class/function name.
+
+        Models often pass fully-qualified names like
+        'fitz_ai.engines.fitz_krag.engine.FitzKragEngine' but tools
+        index by simple name 'FitzKragEngine'. Also strips method
+        names passed as 'ClassName.method'.
+        """
+        if "." in name:
+            return name.rsplit(".", 1)[-1]
+        return name
+
     # ------------------------------------------------------------------
     # Tool 1: lookup_method
     # ------------------------------------------------------------------
     def lookup_method(class_name: str, method_name: str) -> str:
         """Look up the full signature of a method on a class in the codebase."""
+        class_name = _strip_module(class_name)
+        method_name = _strip_module(method_name)
         # Try AST from source code first (most accurate)
         src = _find_source(class_name)
         if src:
@@ -143,6 +157,7 @@ def make_codebase_tools(
     # ------------------------------------------------------------------
     def lookup_class(class_name: str) -> str:
         """Look up a class: its methods, instance attributes, and base classes."""
+        class_name = _strip_module(class_name)
         parts = []
 
         # AST-based (most accurate)
@@ -237,6 +252,8 @@ def make_codebase_tools(
     # ------------------------------------------------------------------
     def read_method_source(class_name: str, method_name: str) -> str:
         """Read the actual source code of a method (up to 2000 chars)."""
+        class_name = _strip_module(class_name)
+        method_name = _strip_module(method_name)
         src = _find_source(class_name)
         if not src:
             return f"SOURCE NOT AVAILABLE for {class_name}"
