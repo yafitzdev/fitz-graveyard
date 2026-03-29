@@ -231,27 +231,51 @@ The model uses opaque special tokens for its cascade reasoning that are not mean
 35.6   → 40B reaped baseline (model upgrade)
 37.8   → + template-constrained attrs
 39.2   → + full-signature evidence in resolutions
-41.4   → + tool-assisted artifact building
+41.4   → + tool-assisted artifact building (run 21)
+39.6   → + smart exit dedup (run 22, lowest variance 2.7)
 ```
 
-**What to work on next:**
-1. **Fix tool reliability (40% → 80%+)** — the model over-researches (15+ check_exists calls) without producing JSON. Options:
-   - Reduce max_rounds from 5 to 2-3
-   - Add "STOP researching, produce JSON now" after round 2
-   - Pre-fill the first tool call (auto-lookup for each needed_artifact's class)
-   - If tools hit 80%+ success rate, mean should reach ~43-44/60
-2. **Fix the two config files problem** — `AppData\Local\fitz-graveyard\...` vs `AppData\Local\Packages\PythonSoftwareFoundation.Python.3.12_...\LocalCache\Local\fitz-graveyard\...`. Must update BOTH when changing models.
-3. **Try on a different benchmark task** — all testing was on "add query result streaming". Need to validate on 2-3 other tasks from the retrieval ground truth set to ensure generalization.
-4. **The FitzService gap** — every run misses the service layer between API and engine. Could add a heuristic to always include service/dependency files in the cheat sheet (partially implemented, needs full index which benchmark doesn't have).
+**The tool-assisted breakthrough:**
+
+When the model uses the 4 codebase tools before writing artifacts, it scores 45/60 consistently (both successful tool runs in run 21 scored exactly 45). The tools (`lookup_method`, `lookup_class`, `check_exists`, `read_method_source`) are pure Python — zero LLM cost, <1s per call. The model verifies every reference before writing code, eliminating fabrication entirely.
+
+**Why tool reliability is only 40-60%:**
+
+The model gets stuck in a research loop. Typical failure pattern:
+- Round 1: `check_exists("FitzKragEngine")`, `check_exists("CodeSynthesizer")` ← useful
+- Round 2: `lookup_class("StreamingChatProvider")`, `check_exists("handle_api_errors")` ← useful
+- Round 3: `check_exists("Iterator")`, `check_exists("StreamingChatProvider")` ← DUPLICATE
+- Round 4: `check_exists("fitz_ai")`, `lookup_method("None", "query")` ← garbage
+- Round 5+: keeps calling tools, never produces JSON
+
+The model doesn't know when to stop researching and start writing. When it works (rounds 1-2 gather info, round 3 produces JSON), it's perfect. When it doesn't work, it degenerates into checking stdlib types, re-checking things it already checked, and passing garbage args.
+
+**What to try next to fix tool reliability:**
+
+1. **Pre-fill critical lookups** (HIGHEST PRIORITY) — before the model even starts, auto-call `lookup_class` for each class mentioned in `needed_artifacts`. Inject the results as the first tool round. The model starts with information instead of spending 2 rounds gathering it. This eliminates the "warm-up" rounds where the model is just checking what exists.
+
+2. **Reduce tools to 2** — the model over-uses `check_exists` (15+ calls). Remove it entirely. Keep only `lookup_method` and `lookup_class` which return actionable information. `check_exists` just returns "EXISTS/DOES NOT EXIST" which tempts the model to check everything.
+
+3. **Inject a stop signal after round 2** — after the model has called tools twice, add a user message: "You have gathered enough information. Write the artifact JSON now." This worked conceptually in the smart exit (run 22) but was triggered by no-new-info detection. Making it unconditional after N novel rounds would be more reliable.
+
+4. **One-shot tool use** — instead of a multi-turn loop, make ONE tool call that returns ALL relevant info at once. New tool: `prepare_artifact_context(class_names: list[str])` that returns a formatted block with all classes, their methods, attrs, and relevant source. The model gets everything in one shot, no loop needed.
+
+5. **The nuclear option** — skip `generate_with_tools` entirely. Instead, Python pre-fills ALL the tool results and injects them into the prompt as context (like the cheat sheet but with full method signatures from AST). The model never calls tools — it just reads the pre-gathered context. This is basically the template-constrained approach on steroids, using the same data the tools would return but without the tool-use loop. Downside: no model agency, can't handle unexpected lookups.
+
+**Other work items:**
+1. **Fix the two config files problem** — `AppData\Local\fitz-graveyard\...` vs `AppData\Local\Packages\PythonSoftwareFoundation.Python.3.12_...\LocalCache\Local\fitz-graveyard\...`. Must update BOTH when changing models.
+2. **Try on a different benchmark task** — all testing was on "add query result streaming". Need to validate on 2-3 other tasks from the retrieval ground truth set to ensure generalization.
+3. **The FitzService gap** — every run misses the service layer between API and engine. Could add a heuristic to always include service/dependency files in the cheat sheet (partially implemented, needs full index which benchmark doesn't have).
 
 **Key findings documented in:**
 - `docs/findings/fabrication-analysis.md` — root cause of codebase alignment failures + Level 2 analysis
 - `docs/findings/findings-20260324.md` — original session findings (retrieval, decomposition, scoring)
-- `benchmarks/results/streaming-task-tracker.md` — this file, all 21 runs with scores
+- `benchmarks/results/streaming-task-tracker.md` — this file, all 22 runs with scores
 
 **Critical files to read first in new session:**
 - This file (streaming-task-tracker.md) — the run log tells the full story
-- `fitz_graveyard/planning/pipeline/stages/synthesis.py` — where all the action is (cheat sheet, tool-assisted loop, artifact extraction)
-- `fitz_graveyard/planning/pipeline/tools/codebase_tools.py` — the 4 lookup tools
-- `fitz_graveyard/planning/validation/grounding.py` — AST grounding validator
-- `fitz_graveyard/planning/prompts/decision_resolution.txt` — full-sig evidence rules
+- `fitz_graveyard/planning/pipeline/stages/synthesis.py` — where all the action is (cheat sheet, tool-assisted loop, artifact extraction). The `_build_artifacts_with_tools` method is the tool-use loop.
+- `fitz_graveyard/planning/pipeline/tools/codebase_tools.py` — the 4 lookup tools. `_find_source` has the disk fallback logic with the `class X` marker fix.
+- `fitz_graveyard/planning/validation/grounding.py` — AST grounding validator + `StructuralIndexLookup` class
+- `fitz_graveyard/planning/prompts/decision_resolution.txt` — full-sig evidence rules + parallel param rule
+- `docs/findings/fabrication-analysis.md` — the full root cause analysis of why codebase alignment fails
