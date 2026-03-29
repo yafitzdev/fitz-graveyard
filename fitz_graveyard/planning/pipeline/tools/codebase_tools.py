@@ -40,36 +40,24 @@ def make_codebase_tools(
         for path, content in _source_pool.items():
             if class_marker in content:
                 return content
-        if not source_dir:
-            return None
-        # Disk fallback pass 1: match class name against filename
-        cn_lower = class_name.lower()
-        for py in Path(source_dir).rglob("*.py"):
-            parts_str = str(py)
-            if ".venv" in parts_str or "__pycache__" in parts_str or "site-packages" in parts_str:
-                continue
-            stem = py.stem.lower()
-            if len(stem) >= 4 and (cn_lower in stem or stem in cn_lower):
-                try:
-                    src = py.read_text(encoding="utf-8", errors="replace")
-                    if class_marker in src:
-                        return src
-                except OSError:
+        # Disk fallback — match class name against filename in both directions
+        if source_dir:
+            cn_lower = class_name.lower()
+            for py in Path(source_dir).rglob("*.py"):
+                # Skip venvs and hidden directories
+                parts_str = str(py)
+                if ".venv" in parts_str or "__pycache__" in parts_str or "site-packages" in parts_str:
                     continue
-        # Disk fallback pass 2: grep for "class ClassName" in all .py files.
-        # Catches classes in files with non-matching names (e.g. QueryRequest
-        # in schemas.py, Answer in answer.py with different casing).
-        for py in Path(source_dir).rglob("*.py"):
-            parts_str = str(py)
-            if ".venv" in parts_str or "__pycache__" in parts_str or "site-packages" in parts_str:
-                continue
-            try:
-                src = py.read_text(encoding="utf-8", errors="replace")
-                if class_marker in src:
-                    _source_pool[str(py)] = src  # cache for future lookups
-                    return src
-            except OSError:
-                continue
+                stem = py.stem.lower()
+                # Match: class name contains stem or stem contains class name
+                # Require minimum 4-char stem to avoid matching 'c.py', 'de.py' etc.
+                if len(stem) >= 4 and (cn_lower in stem or stem in cn_lower):
+                    try:
+                        src = py.read_text(encoding="utf-8", errors="replace")
+                        if f"class {class_name}" in src:
+                            return src
+                    except OSError:
+                        continue
         return None
 
     def _find_class_node(src: str, class_name: str) -> ast.ClassDef | None:
