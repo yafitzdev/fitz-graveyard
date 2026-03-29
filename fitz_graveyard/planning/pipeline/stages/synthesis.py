@@ -698,13 +698,11 @@ class SynthesisStage(PipelineStage):
             }]
         }, indent=2)
 
-        # Extract class names for deterministic coverage tracking.
-        # Once the model has looked up enough of these, we nudge it
-        # to produce JSON (but still via generate_with_tools, not
-        # the inferior client.generate path).
-        target_classes = set(
-            self._extract_class_names(reasoning, prior_outputs),
-        )
+        # Note: pre-calling lookup_class for resolution classes was tested
+        # (run 29) and HURT scores (39.0 vs 43.4) because it seeds the
+        # dedup cache, causing the model's organic calls to be flagged
+        # as duplicates → earlier stale exit → less research time.
+        # The model's organic research is more valuable than pre-filled info.
 
         prompt = (
             "You are writing implementation artifacts for a software plan.\n\n"
