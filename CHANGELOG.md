@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.5.0] - 2026-03-29
+
+### 🎉 Highlights
+
+**Decomposed Planning Pipeline** — Replaced the monolithic 3-stage pipeline with a decision-based architecture. The LLM decomposes the task into atomic decisions, resolves each with codebase evidence, then synthesizes a coherent plan. Scored 43.4/60 avg on Sonnet-as-Judge evaluation (up from 20/60 with the original pipeline).
+
+**Tool-Enriched Template Extraction** — Codebase lookup tools (lookup_method, lookup_class, read_method_source) gather verified class/method signatures during artifact generation. Tool results are injected into the template extraction context, producing grounded artifacts with correct method signatures. Best plans scored 46-48/60.
+
+**Sonnet-as-Judge Evaluation System** — 6-dimension scoring rubric (file identification, contract preservation, internal consistency, codebase alignment, implementability, scope calibration) evaluated by Claude Code subagents. 30 benchmark runs tracked with full score breakdowns. No Anthropic SDK needed.
+
+**llama-cpp Provider** — Native llama-server subprocess management with flash attention, q8_0 KV cache, WDDM GPU degradation detection, and tok/s baseline tracking. Replaces LM Studio for inference when configured.
+
+### 🚀 Added
+
+- Decomposed planning pipeline: decision decomposition → resolution with evidence → synthesis (`de51dbee`)
+- Per-decision resolution with full-signature codebase evidence (`53c4fe46`)
+- Tool-assisted artifact building: lookup_method, lookup_class, read_method_source (`37e70d4f`)
+- Tool-enriched template: tool results → "VERIFIED CODEBASE INFO" context for template extraction (`4ed3b16d`)
+- `_strip_module()` in codebase tools — handles fully-qualified names like `fitz_ai.sdk.fitz.Fitz` → `Fitz` (`e17c64e9`)
+- Pydantic field extraction in lookup_class — returns annotated fields for BaseModel subclasses (`707b13e8`)
+- Normalized dedup cache keys — module-path variants caught as duplicates (`4ed3b16d`)
+- Early stale exit — 2 consecutive all-duplicate tool rounds → template fallback (`4ed3b16d`)
+- Post-synthesis grounding validator: AST path checks fabricated methods, LLM path checks architectural gaps (`5711b23a`)
+- Template-constrained cheat sheet: auto-extracts instance attrs from `__init__` via AST (`af11d1e2`)
+- Sonnet-as-Judge plan evaluation with 6-dimension rubric (`5711b23a`)
+- `tool_choice` parameter on generate_with_tools for both llama_cpp and lm_studio clients (`4ed3b16d`)
+- llama-cpp provider with subprocess management, health checks, VRAM monitoring
+- GPU degradation detection + tok/s baseline tracking for consumer Blackwell cards
+- `inspect_files(paths)` tool in reasoning pipeline (`8dd1dfde`)
+- File manifest context delivery replaces inline seed source (`8dd1dfde`)
+- 40-query retrieval quality benchmark with ground truth (`12c9de50`)
+
+### 🔄 Changed
+
+- check_exists removed from tool list — model over-used it (15+ calls), causing degeneration (`e17c64e9`)
+- `_build_artifacts_with_tools` returns `(artifacts, tool_context)` tuple instead of just artifacts (`4ed3b16d`)
+- Template extraction receives cheat sheet + tool-verified signatures combined (`4ed3b16d`)
+- Default `max_seed_files` bumped from 30 to 50 (`8dd1dfde`)
+- Resolution prompt demands complete param lists, parallel methods must match originals (`53c4fe46`)
+
+### 🐛 Fixed
+
+- `health_check` no longer force-switches models (`e904b587`)
+- Clean error messages instead of full tracebacks (`664e48dc`)
+
+### 📊 Stats
+
+- 30 benchmark runs, 150+ scored plans
+- Best config: 43.4/60 avg (run 28), individual plans up to 48/60
+- Score progression: 20 → 35.6 → 37.8 → 39.2 → 41.4 → 43.4
+
+---
+
 ## [0.4.1] - 2026-03-24
 
 ### 🎉 Highlights
@@ -244,7 +297,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - 391 tests
 
-[Unreleased]: https://github.com/yafitzdev/fitz-graveyard/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/yafitzdev/fitz-graveyard/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/yafitzdev/fitz-graveyard/compare/v0.4.0...v0.5.0
 [0.4.1]: https://github.com/yafitzdev/fitz-graveyard/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/yafitzdev/fitz-graveyard/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/yafitzdev/fitz-graveyard/compare/v0.2.0...v0.3.0

@@ -39,6 +39,10 @@
 | 24a-e | 2026-03-29 | qwen3-coder-next-reap (40B) | Q5_K_S | 65K | `fb30fc93` | `81b5abf` | remove check_exists + max_rounds=5 (3 tools) | 10-14 | 280-346s | 7.2 | 8.0 | 5.2 | 5.2 | 5.4 | 7.2 | **38.2 avg (33-44)** | No check_exists spam. ALL 5 runs exhausted 5 rounds (never produces JSON voluntarily). Runs 1-2 (43-44) did useful research. Runs 3-5 (33-36) wasted calls on framework classes (APIRouter, FastAPI) or fully-qualified paths. Quality depends on WHICH classes model looks up, not whether it uses tools. |
 | 25a-e | 2026-03-29 | qwen3-coder-next-reap (40B) | Q5_K_S | 65K | `fb30fc93` | `81b5abf` | tool history pre-fill + module strip + forced exit after 2 rounds | 12-14 | 285-346s | 7.6 | 7.2 | 5.8 | 4.4 | 5.0 | 7.4 | **37.4 avg (35-41)** | Lowest stdev EVER (2.5). 100% tool success (all 5 forced after 2 rounds). Tools reliably call right methods now. BUT alignment stuck at 4-5 — model fabricates import paths, field names, helper methods in artifact BODY despite tools verifying class/method signatures. Tool reliability solved but doesn't fix code body fabrication. 5 runs: 35, 39, 41, 35, 37. |
 | 26a-e | 2026-03-29 | qwen3-coder-next-reap (40B) | Q5_K_S | 65K | `fb30fc93` | `81b5abf` | same as 25 but forced exit after 3 rounds (not 2) | 12-14 | 251-317s | 7.4 | 6.8 | 5.6 | 4.8 | 5.0 | 7.4 | **37.0 avg (33-41)** | Extra round didn't help. Model read_method_source in 3/5 runs but source code HURTS more than helps (run 2 scored 33 despite reading source). Alignment stuck at 3-7, avg 4.8. 0 AST violations in runs 2,5 but scored only 33,37. AST violations ≠ scorer scores. 5 runs: 40, 33, 34, 41, 37. |
+| 27 | 2026-03-29 | qwen3-coder-next-reap (40B) | Q5_K_S | 65K | `e17c64e9` | `81b5abf` | pre-fill + no forced exit + max_rounds=10 (silent dedup) | — | — | — | — | — | — | — | — | **DNF** | Removed snarky dedup message, kept pre-fill as tool history. Model went into infinite duplicate loop — called pre-filled classes forever since silent dedup gave no signal to stop. 0/4 diagnostic runs produced JSON. Confirmed: model NEVER produces JSON voluntarily in tool mode regardless of config. |
+| 28a-e | 2026-03-29 | qwen3-coder-next-reap (40B) | Q5_K_S | 65K | `e17c64e9` | `81b5abf` | tool-enriched template (tools gather → template extracts) | 12-14 | 294-332s | 7.6 | 8.4 | 6.6 | 6.0 | 6.8 | 8.0 | **43.4 avg (39-48)** | **NEW BEST (+2.0 vs run 21).** Tools gather verified class/method info (3-9 calls, ~3K chars), then template extraction uses enriched context. No forced exit — early stale detection → template fallback with tool results injected. Plans 4,5 scored 46,48 (highest ever). Alignment 6.0 (+1.2 vs 21), implementability 6.8 (+0.8). 5 runs: 43, 39, 41, 46, 48. |
+| 29a-d | 2026-03-29 | qwen3-coder-next-reap (40B) | Q5_K_S | 65K | `4ed3b16d` | `81b5abf` | run 28 + baseline pre-call (5/23 classes from resolutions) | 12-14 | 282-315s | 8.0 | 7.0 | 6.3 | 5.0 | 5.0 | 7.8 | **39.0 avg (31-45)** | REGRESSION. Baseline pre-call seeds dedup cache → model's organic lookups flagged as duplicates → earlier stale exit → less research. Pre-filling ALWAYS hurts (runs 23, 25, 27, 29). Run 5 DNF (Pydantic error). 4 runs: 39, 45, 31, 41. |
+| 30a-e | 2026-03-29 | qwen3-coder-next-reap (40B) | Q5_K_S | 65K | `707b13e8` | `81b5abf` | run 28 + disk grep pass 2 + Pydantic field extraction | 12-14 | 281-359s | 8.0 | 7.0 | 5.6 | 4.8 | 5.0 | 7.6 | **38.0 avg (35-41)** | REGRESSION. Added full-codebase grep for class defs + Pydantic field extraction in lookup_class. Model still doesn't call lookup_class for QueryRequest/ChatRequest so fields never enter context. Disk grep may have found wrong files (core/engine.py vs engines/.../engine.py). Reverted grep, kept field extraction. 5 runs: 35, 37, 41, 36, 41. |
 | # | Date | Model | Quant | Ctx | Pipeline SHA | Codebase SHA | Pipeline | Decisions | Time | Files | Contract | Consistency | Alignment | Implement | Scope | **Total** | Notes |
 
 ### Column Key
@@ -272,6 +276,10 @@ The model uses opaque special tokens for its cascade reasoning that are not mean
 37.2   → + pre-fill in prompt (run 23, REGRESSION — model skipped tools)
 38.2   → + remove check_exists + max5 (run 24, no degeneration but variable)
 37.4   → + tool history pre-fill + module strip + forced exit (run 25, lowest stdev 2.5)
+37.0   → + 3 rounds after pre-fill (run 26, extra source reading didn't help)
+43.4   → + tool-enriched template (run 28, NEW BEST — tools gather, template extracts)
+39.0   → + baseline pre-call (run 29, REGRESSION — pre-fill always hurts)
+38.0   → + disk grep + Pydantic fields (run 30, REGRESSION — wrong files found)
 ```
 
 **Tool reliability engineering — solved problem, wrong bottleneck:**
@@ -300,34 +308,41 @@ Run 21's best plans had the model voluntarily produce JSON after organically res
 
 **What to try next (ranked by expected impact):**
 
-1. **Post-hoc verification + correction loop** (HIGHEST PRIORITY) — after model writes artifacts, Python parses the code and checks EVERY class.method reference and import against the structural index and source files. Mismatches are shown to the model: "Fix these: request.query → request.question, from fitz_ai.api.models.query → from fitz_ai.api.models.schemas". Model rewrites artifacts with corrections. This is a "linter + fix" pass that directly attacks the remaining fabrication problem (wrong field names, wrong imports, fabricated helpers). The tools verify INTERFACES well but can't verify code BODIES — post-hoc verification fixes bodies.
+1. **Different benchmark task** — all 30 runs were on "add query result streaming." Need to validate whether 43.4 avg is task-specific or generalizes. A second task would also test the tool-enriched template approach on different codebase patterns.
 
-2. **Artifact schema change** — change the schema from "content: complete file content" to "content: method signatures with docstrings and integration comments." Model writes `def answer_stream(self, query: Query, *, progress) -> Iterator[str]: """Streaming version of answer(). Runs governance before streaming, then yields from chat_stream().""" ...` instead of full implementation. Reduces fabrication surface — model can't fabricate what it doesn't write. Might hurt implementability scores but should boost alignment.
+2. **10-run batch on current config** — run 28 was only 5 runs (43.4 avg, stdev 3.6, range 39-48). A 10-run batch would show the true distribution and whether the 48 was an outlier.
 
-3. **Targeted field name injection** — the cheat sheet has class/method info, but NOT Pydantic model field names. Add field names for key request/response models (QueryRequest.question, ChatRequest.message, etc.) to the cheat sheet. Most fabrication is wrong field names — this directly addresses it.
+3. **Post-hoc verification** — after template extracts artifacts, Python checks every class.method reference. Mismatches shown to model for correction. Directly attacks alignment (4-7) but adds another LLM call.
 
-4. **Different benchmark task** — all 26 runs were on "add query result streaming". The 45/60 target may not be achievable on this specific task with this model at this quantization. Need to validate whether the model scores better on tasks it understands more naturally.
+4. **Pydantic field injection into cheat sheet** — the template cheat sheet has class/method info but NOT Pydantic model field names. Most remaining fabrication is `request.query` instead of `request.question`. Adding field names to the cheat sheet (not tools) would be safe since the cheat sheet is already used.
 
 **What was tried and ruled out this session:**
 
 | Approach | Run | Result | Why it failed |
 |----------|-----|--------|---------------|
-| Pre-fill in prompt | 23 | 37.2 (-4.2 vs 21) | Model skipped tools entirely (0 rounds) |
+| Pre-fill in prompt | 23 | 37.2 | Model skipped tools entirely (0 rounds) |
 | Remove check_exists only | 24 | 38.2 | No degeneration but variable research quality |
-| Pre-fill as tool history + 2 rounds | 25 | 37.4 | Tools 100% reliable but artifacts still fabricate |
-| Pre-fill + 3 rounds + source reading | 26 | 37.0 | Extra source doesn't help, sometimes hurts |
+| Pre-fill as tool history + forced exit | 25 | 37.4 | Forced exit uses inferior client.generate() path |
+| Pre-fill + 3 rounds + source reading | 26 | 37.0 | Extra source doesn't help |
+| Pre-fill + no forced exit (silent dedup) | 27 | DNF | Model loops forever on pre-filled duplicates |
+| **Tool-enriched template** | **28** | **43.4** | **NEW BEST — tools gather, template extracts** |
+| Baseline pre-call (seed dedup cache) | 29 | 39.0 | Pre-fill seeds dedup → earlier stale exit |
+| Disk grep + Pydantic fields | 30 | 38.0 | Disk grep found wrong files |
 
-**Key engineering achievements this session:**
-1. `_strip_module()` in codebase_tools.py — handles fully-qualified names (fitz_ai.sdk.fitz.Fitz → Fitz)
-2. `_extract_class_names()` — CamelCase extraction from resolutions + reasoning
-3. `_build_tool_history()` — injects pre-called lookup_class as fake tool messages
-4. Forced exit after N rounds with pre-fill — deterministic tool completion
-5. check_exists removal — eliminated biggest degeneration source
-6. Tool reliability: 40% → 100% (solved)
-7. Variance reduction: stdev 4.8 → 2.5 (solved)
+**Key engineering in production (run 28 config, commit `4ed3b16d`):**
+1. `_strip_module()` — handles fully-qualified names (fitz_ai.sdk.fitz.Fitz → Fitz)
+2. `_find_source` disk fallback with filename matching (original, NOT grep pass 2)
+3. check_exists removed from tool list — eliminated degeneration
+4. Normalized dedup cache keys — module-path variants caught
+5. Early stale exit (2 consecutive duplicate rounds) → fall back to template
+6. Tool results formatted as "VERIFIED CODEBASE INFO" and injected into template context
+7. `_build_artifacts_with_tools` returns `(artifacts, tool_context)` tuple
+8. Template extraction receives cheat sheet + tool-verified signatures
+9. Pydantic field extraction in lookup_class (AnnAssign nodes)
+10. `tool_choice` parameter added to generate_with_tools (both clients)
 
-**The remaining gap is a MODEL CAPABILITY problem, not an engineering problem:**
-The 40B model at Q5_K_S can verify interfaces via tools but fabricates implementation details. Tools tell it WHAT EXISTS. They can't prevent it from INVENTING things when writing code bodies. The delta between interface-level plans (37-38 avg) and implementation-level plans (45 when lucky in run 21) is the fabrication gap. Post-hoc verification (option 1 above) is the most promising path because it CATCHES fabrication after the fact and asks the model to fix it, rather than trying to prevent it.
+**Key insight: the model NEVER produces JSON voluntarily in tool mode.**
+0/12 diagnostic runs produced JSON within generate_with_tools. The model always calls tools until exhaustion. Run 21's 2/5 "voluntary" JSON was likely extreme variance or different model/server state. The tool-enriched template approach (run 28) works around this by using tools ONLY for research, then extracting artifacts via the reliable template path.
 
 **Other work items:**
 1. **Fix the two config files problem** — `AppData\Local\fitz-graveyard\...` vs `AppData\Local\Packages\PythonSoftwareFoundation.Python.3.12_...\LocalCache\Local\fitz-graveyard\...`. Must update BOTH when changing models.
@@ -342,8 +357,8 @@ The 40B model at Q5_K_S can verify interfaces via tools but fabricates implement
 
 **Critical files to read first in new session:**
 - This file (streaming-task-tracker.md) — the run log tells the full story
-- `fitz_graveyard/planning/pipeline/stages/synthesis.py` — where all the action is. Key methods: `_build_artifacts_with_tools` (tool loop), `_extract_class_names` (pre-fill extraction), `_build_tool_history` (fake tool messages), `_build_artifact_source_context` (template cheat sheet).
-- `fitz_graveyard/planning/pipeline/tools/codebase_tools.py` — 3 tools (lookup_method, lookup_class, read_method_source) + `_strip_module` helper. check_exists removed from tool list in synthesis.py but still defined here.
+- `fitz_graveyard/planning/pipeline/stages/synthesis.py` — the core. Key methods: `_build_artifacts_with_tools` (tool loop → returns `(artifacts, tool_context)`), `_build_artifact_source_context` (template cheat sheet), `execute` (integration point where tool_context enriches template). Dead code: `_extract_class_names`, `_build_tool_history` (from pre-fill experiments, not wired in).
+- `fitz_graveyard/planning/pipeline/tools/codebase_tools.py` — 4 tools defined (lookup_method, lookup_class, check_exists, read_method_source) but only 3 exposed (check_exists filtered in synthesis.py). `_strip_module` normalizes fully-qualified names. `lookup_class` now extracts Pydantic fields (AnnAssign nodes).
+- `fitz_graveyard/llm/llama_cpp.py` + `lm_studio.py` — `generate_with_tools` has `tool_choice` parameter (unused currently but available).
 - `fitz_graveyard/planning/validation/grounding.py` — AST grounding validator + `StructuralIndexLookup` class
-- `fitz_graveyard/planning/prompts/decision_resolution.txt` — full-sig evidence rules + parallel param rule
-- `docs/findings/fabrication-analysis.md` — the full root cause analysis of why codebase alignment fails
+- `docs/findings/fabrication-analysis.md` — root cause analysis of codebase alignment failures
